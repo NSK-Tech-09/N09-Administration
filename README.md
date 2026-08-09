@@ -39,6 +39,10 @@ transactionnel, un journal d’audit append-only vérifiable, les groupes, les
 délégations bornées et les demandes d’accès par application. Il ne gère encore
 ni mots de passe, ni jetons, ni interface réseau.
 
+La première frontière d’API interne permet déjà d’évaluer un accès sans partager
+la base avec les applications. L’adaptateur réseau et la validation OIDC restent
+à brancher.
+
 Les objets de gouvernance sont conservés dans la même frontière transactionnelle
 que leur événement d’audit : une mutation sans preuve valide est annulée.
 
@@ -70,3 +74,4 @@ exécutable sera introduit. Aucun artefact de production n’est livré à ce st
 - [`docs/ADR-001-SEPARATION-RESPONSABILITES.md`](docs/ADR-001-SEPARATION-RESPONSABILITES.md)
 - [`docs/ADR-002-STOCKAGE-ET-AUDIT.md`](docs/ADR-002-STOCKAGE-ET-AUDIT.md)
 - [`docs/CONFORMITE-NSES.md`](docs/CONFORMITE-NSES.md)
+- [`docs/CONTRAT-API-INTERNE.md`](docs/CONTRAT-API-INTERNE.md)
