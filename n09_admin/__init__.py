@@ -4,6 +4,13 @@ from .access import AccessDecision, decide_access
 from .api import ApiResponse, AuthenticatedApplication, evaluate_access_request
 from .audit import AuditEvent
 from .domain import AccessAssignment, Application, Identity
+from .federated_identity import (
+    ExternalIdentity,
+    ExternalPrincipal,
+    LoginResolution,
+    LoginResult,
+    resolve_login,
+)
 from .persistence import SQLiteRepository
 from .governance import (
     AccessRequestLine,
@@ -23,6 +30,10 @@ __all__ = [
     "AccessAssignment",
     "AuditEvent",
     "Identity",
+    "ExternalIdentity",
+    "ExternalPrincipal",
+    "LoginResolution",
+    "LoginResult",
     "SQLiteRepository",
     "AccessRequestLine",
     "DecisionAction",
@@ -33,4 +44,5 @@ __all__ = [
     "submit_access_request",
     "decide_access",
     "evaluate_access_request",
+    "resolve_login",
 ]

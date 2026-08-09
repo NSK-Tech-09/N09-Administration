@@ -28,6 +28,7 @@ from .governance import (
     GroupStatus,
     RequestStatus,
 )
+from .federated_identity import ExternalIdentity, ExternalIdentityStatus
 
 
 SCHEMA = """
@@ -42,6 +43,20 @@ CREATE TABLE IF NOT EXISTS identities (
 
 CREATE UNIQUE INDEX IF NOT EXISTS identities_email_ci
 ON identities(lower(email));
+
+CREATE TABLE IF NOT EXISTS external_identities (
+    external_identity_id TEXT PRIMARY KEY,
+    identity_id TEXT NOT NULL REFERENCES identities(identity_id),
+    issuer TEXT NOT NULL,
+    subject TEXT NOT NULL,
+    provider_key TEXT NOT NULL,
+    status TEXT NOT NULL,
+    linked_at TEXT NOT NULL,
+    UNIQUE(issuer, subject)
+);
+
+CREATE INDEX IF NOT EXISTS external_identities_identity
+ON external_identities(identity_id);
 
 CREATE TABLE IF NOT EXISTS applications (
     application_id TEXT PRIMARY KEY,
@@ -232,6 +247,75 @@ class SQLiteRepository:
             row["display_name"],
             IdentityStatus(row["status"]),
         )
+
+    def link_external_identity(
+        self, external_identity: ExternalIdentity, audit_event: AuditEvent
+    ) -> None:
+        if audit_event.subject_id != external_identity.identity_id:
+            raise ValueError("audit subject must match NSK identity")
+        with self.transaction() as connection:
+            existing = connection.execute(
+                "SELECT * FROM external_identities WHERE issuer = ? AND subject = ?",
+                (external_identity.issuer, external_identity.subject),
+            ).fetchone()
+            if existing is not None:
+                if existing["identity_id"] != str(external_identity.identity_id):
+                    raise ValueError("external identity is already linked")
+                raise ValueError("external identity link already exists")
+            connection.execute(
+                """INSERT INTO external_identities(
+                     external_identity_id, identity_id, issuer, subject,
+                     provider_key, status, linked_at
+                   ) VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    str(external_identity.external_identity_id),
+                    str(external_identity.identity_id),
+                    external_identity.issuer,
+                    external_identity.subject,
+                    external_identity.provider_key,
+                    external_identity.status.value,
+                    _iso(external_identity.linked_at),
+                ),
+            )
+            self._append_audit(connection, audit_event, None)
+
+    def find_external_identity(
+        self, issuer: str, subject: str
+    ) -> ExternalIdentity | None:
+        row = self.connection.execute(
+            "SELECT * FROM external_identities WHERE issuer = ? AND subject = ?",
+            (issuer, subject),
+        ).fetchone()
+        if row is None:
+            return None
+        return ExternalIdentity(
+            external_identity_id=UUID(row["external_identity_id"]),
+            identity_id=UUID(row["identity_id"]),
+            issuer=row["issuer"],
+            subject=row["subject"],
+            provider_key=row["provider_key"],
+            status=ExternalIdentityStatus(row["status"]),
+            linked_at=_datetime(row["linked_at"]),
+        )
+
+    def list_external_identities(self, identity_id: UUID) -> list[ExternalIdentity]:
+        rows = self.connection.execute(
+            """SELECT * FROM external_identities
+               WHERE identity_id = ? ORDER BY provider_key, external_identity_id""",
+            (str(identity_id),),
+        ).fetchall()
+        return [
+            ExternalIdentity(
+                external_identity_id=UUID(row["external_identity_id"]),
+                identity_id=UUID(row["identity_id"]),
+                issuer=row["issuer"],
+                subject=row["subject"],
+                provider_key=row["provider_key"],
+                status=ExternalIdentityStatus(row["status"]),
+                linked_at=_datetime(row["linked_at"]),
+            )
+            for row in rows
+        ]
 
     def save_application(self, application: Application, audit_event: AuditEvent) -> None:
         if audit_event.application_id != application.application_id:
