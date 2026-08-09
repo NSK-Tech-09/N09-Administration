@@ -17,6 +17,13 @@ from .federated_identity import (
     resolve_login,
 )
 from .persistence import SQLiteRepository
+from .oidc import (
+    OidcProviderConfig,
+    OidcSession,
+    create_authorization_session,
+    principal_from_verified_claims,
+    validate_callback_state,
+)
 from .governance import (
     AccessRequestLine,
     DecisionAction,
@@ -44,6 +51,8 @@ __all__ = [
     "PROVIDER_POLICIES",
     "ProviderPolicy",
     "SQLiteRepository",
+    "OidcProviderConfig",
+    "OidcSession",
     "AccessRequestLine",
     "DecisionAction",
     "Delegation",
@@ -53,6 +62,9 @@ __all__ = [
     "submit_access_request",
     "decide_access",
     "evaluate_access_request",
+    "create_authorization_session",
+    "principal_from_verified_claims",
+    "validate_callback_state",
     "resolve_login",
     "requires_step_up",
 ]
