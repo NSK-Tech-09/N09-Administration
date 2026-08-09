@@ -1,0 +1,13 @@
+[project]
+name = "n09-administration"
+version = "0.2.0"
+description = "Noyau central des identités et accès NSK Tech 09"
+requires-python = ">=3.11"
+dependencies = []
+
+[tool.ruff]
+line-length = 88
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP"]

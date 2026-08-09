@@ -1,0 +1,28 @@
+name: Vérification du noyau
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Récupérer le code
+        uses: actions/checkout@v4
+
+      - name: Installer Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Vérifier la syntaxe
+        run: python -m compileall -q n09_admin tests
+
+      - name: Exécuter les tests
+        run: python -m unittest discover -s tests -v

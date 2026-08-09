@@ -20,6 +20,10 @@ Le paquet normatif `IDENTITE-ACCES` chargé pour le noyau actuel contient
 - politiques fermée, sur invitation ou soumise à validation (`ARC-007`) ;
 - catalogue applicatif versionné (`ARC-011`) ;
 - périodes, suspension et révocation testables (`ARC-010`, `TST-001`).
+- journal append-only, données minimisées et écritures atomiques (`ARC-013`,
+  `ARC-014`, `TST-003`) ;
+- structure, configuration factice et absence de dépendance superflue
+  (`DEV-001` à `DEV-003`).
 
 ## Obligations des incréments suivants
 
@@ -27,8 +31,8 @@ Le paquet normatif `IDENTITE-ACCES` chargé pour le noyau actuel contient
   révocables (`ARC-008` à `ARC-010`) ;
 - groupes, délégations bornées et demandes par application (`ARC-005`,
   `ARC-007`, `ERG-002`) ;
-- audit immuable, données minimales, notifications centrales et restauration
-  éprouvée (`ARC-013` à `ARC-016`) ;
+- archivage externe du journal, notifications centrales et restauration
+  éprouvée (`ARC-013`, `ARC-015`, `ARC-016`) ;
 - interface expliquant droits directs, hérités et effectifs (`ERG-001`).
 
 Les paquets d’interface et de profil Web seront chargés au début de l’incrément
