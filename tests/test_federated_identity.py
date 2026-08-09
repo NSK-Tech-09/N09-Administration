@@ -1,5 +1,5 @@
 import unittest
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
 from n09_admin.audit import AuditEvent
@@ -7,7 +7,9 @@ from n09_admin.domain import Identity, IdentityStatus
 from n09_admin.federated_identity import (
     AssuranceLevel,
     ExternalIdentity,
+    ExternalIdentityLinkRequest,
     ExternalPrincipal,
+    LinkRequestStatus,
     LoginResult,
     PROVIDER_POLICIES,
     requires_step_up,
@@ -189,6 +191,174 @@ class FederatedIdentityTests(unittest.TestCase):
 
         self.assertEqual(LoginResult.DENIED, resolution.result)
         self.assertEqual("provider mismatch", resolution.reason)
+
+    def test_unknown_principal_creates_only_a_pending_link_request(self):
+        now = datetime.now(UTC)
+        request = ExternalIdentityLinkRequest(
+            issuer=ISSUER_INFOMANIAK, subject="external-user-2965",
+            provider_key="infomaniak", email_hint=self.identity.email,
+            display_name_hint=self.identity.display_name, requested_at=now,
+            expires_at=now + timedelta(minutes=15),
+        )
+        self.repository.save_link_request(
+            request,
+            AuditEvent(
+                correlation_id=uuid4(), occurred_at=now,
+                action="external_identity.link_requested", result="pending",
+                source="infomaniak-callback",
+                new_value={"request_id": str(request.request_id)},
+            ),
+        )
+
+        stored = self.repository.get_link_request(request.request_id)
+        self.assertEqual(LinkRequestStatus.PENDING, stored.status)
+        self.assertIsNone(
+            self.repository.find_external_identity(
+                ISSUER_INFOMANIAK, "external-user-2965"
+            )
+        )
+        self.assertEqual(
+            [], self.repository.list_assignments(self.identity.identity_id, "tasks")
+        )
+
+    def test_explicit_approval_links_identity_without_granting_access(self):
+        now = datetime.now(UTC)
+        request = ExternalIdentityLinkRequest(
+            issuer=ISSUER_INFOMANIAK, subject="external-user-2965",
+            provider_key="infomaniak", requested_at=now,
+            expires_at=now + timedelta(minutes=15),
+        )
+        self.repository.save_link_request(
+            request,
+            AuditEvent(
+                correlation_id=uuid4(), occurred_at=now,
+                action="external_identity.link_requested", result="pending",
+                source="infomaniak-callback",
+            ),
+        )
+        link = self.repository.approve_link_request(
+            request.request_id, self.identity.identity_id,
+            self.identity.identity_id, "Identite controlee par l'administrateur",
+            AuditEvent(
+                correlation_id=uuid4(), occurred_at=now,
+                actor_id=self.identity.identity_id,
+                subject_id=self.identity.identity_id,
+                action="external_identity.link_approved", result="success",
+                source="n09-administration",
+                previous_value={"status": "pending"},
+                new_value={"status": "approved"},
+                justification="Identite controlee par l'administrateur",
+            ),
+            now=now + timedelta(seconds=5),
+        )
+
+        stored = self.repository.get_link_request(request.request_id)
+        self.assertEqual(LinkRequestStatus.APPROVED, stored.status)
+        self.assertEqual(self.identity.identity_id, link.identity_id)
+        self.assertEqual(
+            [], self.repository.list_assignments(self.identity.identity_id, "tasks")
+        )
+        self.assertTrue(self.repository.verify_audit_chain())
+
+    def test_expired_link_request_cannot_be_approved(self):
+        now = datetime.now(UTC)
+        request = ExternalIdentityLinkRequest(
+            issuer=ISSUER_INFOMANIAK, subject="expired-subject",
+            provider_key="infomaniak", requested_at=now - timedelta(minutes=20),
+            expires_at=now - timedelta(minutes=5),
+        )
+        self.repository.save_link_request(
+            request,
+            AuditEvent(
+                correlation_id=uuid4(), occurred_at=now,
+                action="external_identity.link_requested", result="pending",
+                source="tests",
+            ),
+        )
+
+        with self.assertRaisesRegex(ValueError, "expired"):
+            self.repository.approve_link_request(
+                request.request_id, self.identity.identity_id,
+                self.identity.identity_id, "Too late",
+                AuditEvent(
+                    correlation_id=uuid4(), occurred_at=now,
+                    actor_id=self.identity.identity_id,
+                    subject_id=self.identity.identity_id,
+                    action="external_identity.link_approved", result="denied",
+                    source="tests", previous_value={"status": "pending"},
+                    justification="Too late",
+                ),
+                now=now,
+            )
+
+    def test_expired_request_does_not_block_a_new_request(self):
+        now = datetime.now(UTC)
+        expired = ExternalIdentityLinkRequest(
+            issuer=ISSUER_INFOMANIAK,
+            subject="returning-user",
+            provider_key="infomaniak",
+            requested_at=now - timedelta(minutes=20),
+            expires_at=now - timedelta(minutes=5),
+        )
+        replacement = ExternalIdentityLinkRequest(
+            issuer=ISSUER_INFOMANIAK,
+            subject="returning-user",
+            provider_key="infomaniak",
+            requested_at=now,
+            expires_at=now + timedelta(minutes=15),
+        )
+        for request in (expired, replacement):
+            self.repository.save_link_request(
+                request,
+                AuditEvent(
+                    correlation_id=uuid4(),
+                    occurred_at=now,
+                    action="external_identity.link_requested",
+                    result="pending",
+                    source="tests",
+                ),
+            )
+
+        self.assertTrue(expired.is_expired(now))
+        self.assertFalse(replacement.is_expired(now))
+
+    def test_rejection_closes_request_without_creating_identity_link(self):
+        now = datetime.now(UTC)
+        request = ExternalIdentityLinkRequest(
+            issuer=ISSUER_INFOMANIAK, subject="rejected-subject",
+            provider_key="infomaniak", requested_at=now,
+            expires_at=now + timedelta(minutes=15),
+        )
+        self.repository.save_link_request(
+            request,
+            AuditEvent(
+                correlation_id=uuid4(), occurred_at=now,
+                action="external_identity.link_requested", result="pending",
+                source="tests",
+            ),
+        )
+        self.repository.reject_link_request(
+            request.request_id, self.identity.identity_id,
+            "Compte externe non reconnu",
+            AuditEvent(
+                correlation_id=uuid4(), occurred_at=now,
+                actor_id=self.identity.identity_id,
+                action="external_identity.link_rejected", result="success",
+                source="n09-administration",
+                previous_value={"status": "pending"},
+                new_value={"status": "rejected"},
+                justification="Compte externe non reconnu",
+            ),
+        )
+
+        stored = self.repository.get_link_request(request.request_id)
+        self.assertEqual(LinkRequestStatus.REJECTED, stored.status)
+        self.assertIsNone(
+            self.repository.find_external_identity(
+                ISSUER_INFOMANIAK, "rejected-subject"
+            )
+        )
+        self.assertTrue(self.repository.verify_audit_chain())
 
 
 if __name__ == "__main__":

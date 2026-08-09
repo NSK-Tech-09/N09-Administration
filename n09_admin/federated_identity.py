@@ -15,6 +15,13 @@ class ExternalIdentityStatus(StrEnum):
     REVOKED = "revoked"
 
 
+class LinkRequestStatus(StrEnum):
+    PENDING = "pending"
+    APPROVED = "approved"
+    REJECTED = "rejected"
+    EXPIRED = "expired"
+
+
 class LoginResult(StrEnum):
     AUTHENTICATED = "authenticated"
     LINK_REQUIRED = "link_required"
@@ -113,6 +120,35 @@ class ExternalIdentity:
     status: ExternalIdentityStatus = ExternalIdentityStatus.ACTIVE
     linked_at: datetime = field(default_factory=lambda: datetime.now(UTC))
     external_identity_id: UUID = field(default_factory=uuid4)
+
+
+@dataclass(frozen=True, slots=True)
+class ExternalIdentityLinkRequest:
+    """Demande temporaire sans droit, issue d'une connexion externe inconnue."""
+
+    issuer: str
+    subject: str
+    provider_key: str
+    requested_at: datetime
+    expires_at: datetime
+    email_hint: str | None = None
+    display_name_hint: str | None = None
+    status: LinkRequestStatus = LinkRequestStatus.PENDING
+    target_identity_id: UUID | None = None
+    decided_by: UUID | None = None
+    decision_justification: str = ""
+    request_id: UUID = field(default_factory=uuid4)
+
+    def __post_init__(self) -> None:
+        ExternalPrincipal(self.issuer, self.subject, self.provider_key)
+        if self.requested_at.tzinfo is None or self.expires_at.tzinfo is None:
+            raise ValueError("link request dates must be timezone-aware")
+        if self.expires_at <= self.requested_at:
+            raise ValueError("link request must expire after it is created")
+
+    def is_expired(self, now: datetime | None = None) -> bool:
+        current = now or datetime.now(UTC)
+        return current >= self.expires_at
 
 
 @dataclass(frozen=True, slots=True)

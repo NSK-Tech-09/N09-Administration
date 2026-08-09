@@ -22,6 +22,8 @@ Le paquet normatif `IDENTITE-ACCES` chargé pour le noyau actuel contient
 - politiques fermée, sur invitation ou soumise à validation (`ARC-007`) ;
 - catalogue applicatif versionné (`ARC-011`) ;
 - périodes, suspension et révocation testables (`ARC-010`, `TST-001`).
+- rattachements externes séparés de l'identité NSK, temporaires, refusés par
+  défaut et sans affectation implicite (`ARC-001`, `ARC-002`, `ARC-010`) ;
 - journal append-only, données minimisées et écritures atomiques (`ARC-013`,
   `ARC-014`, `TST-003`) ;
 - structure, configuration factice et absence de dépendance superflue
