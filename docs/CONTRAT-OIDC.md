@@ -30,9 +30,15 @@ hors du dépôt, hors des journaux et hors de la base métier. Les endpoints son
 chargés depuis le document de découverte, dont l'émetteur doit correspondre
 exactement à l'émetteur attendu.
 
-## Limite actuelle
+## État de l'adaptateur
 
-Le noyau ne télécharge pas encore le document de découverte, n'échange pas de
-code et ne vérifie pas lui-même une signature JWT. Ces responsabilités seront
-confiées à une bibliothèque de sécurité maintenue et testée, jamais à une
-implémentation cryptographique artisanale.
+Le noyau reste volontairement indépendant du transport et de la cryptographie.
+Le démonstrateur TypeScript réalise désormais le flux Authorization Code avec
+PKCE et valide la signature RS256 avec le JWKS du fournisseur avant de vérifier
+`iss`, `aud`, `sub`, `exp` et `nonce`.
+
+La passerelle PHP isolée a uniquement servi à éprouver le retour HTTPS et la
+consultation en lecture seule du registre sur l'hébergement existant. Comme
+elle interroge `userinfo` sans valider la signature du jeton d'identité, elle ne
+peut créer ni session NSK, ni compte, ni rattachement, ni droit. Elle n'est pas
+l'adaptateur OIDC de référence.

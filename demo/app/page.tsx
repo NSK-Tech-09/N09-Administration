@@ -22,14 +22,14 @@ const initialProviders: Provider[] = [
     key: "infomaniak",
     name: "Infomaniak",
     mark: "ik",
-    detail: "Compte vérifié · fred.travers@laposte.net",
+    detail: "Compte vérifié · camille@example.invalid",
     status: "linked",
   },
   {
     key: "email",
     name: "Lien par e-mail",
     mark: "@",
-    detail: "fred.travers@laposte.net",
+    detail: "camille@example.invalid",
     status: "available",
   },
   {
@@ -119,6 +119,11 @@ export default function Home() {
   }
 
   function simulateLogin(provider: Provider) {
+    if (provider.key === "infomaniak") {
+      window.location.assign("/auth/infomaniak/start");
+      return;
+    }
+
     if (scenario === "unknown") {
       setPendingProvider(provider);
       setNotice(
@@ -266,7 +271,7 @@ export default function Home() {
         <header className="topbar">
           <div>
             <p className="eyebrow">IDENTITÉS / NSK-0001</p>
-            <h1>Frédéric Travers</h1>
+            <h1>Camille Martin</h1>
           </div>
           <div className="top-actions">
             <span className={`status ${active ? "status-active" : "status-paused"}`}>
@@ -295,7 +300,7 @@ export default function Home() {
               </div>
               <div>
                 <dt>Contact facultatif</dt>
-                <dd>fred.travers@laposte.net</dd>
+                <dd>camille@example.invalid</dd>
               </div>
               <div>
                 <dt>Moyens rattachés</dt>
@@ -320,7 +325,7 @@ export default function Home() {
                 <p className="eyebrow">BAC À SABLE</p>
                 <h2>Simuler une connexion</h2>
               </div>
-              <span className="simulation-tag">SIMULATION</span>
+              <span className="simulation-tag">1 CONNEXION RÉELLE</span>
             </div>
 
             <div className="scenario-switch" role="group" aria-label="Scénario">
@@ -331,7 +336,7 @@ export default function Home() {
                   setPendingProvider(null);
                 }}
               >
-                Frédéric connu
+                Camille connue
               </button>
               <button
                 className={scenario === "unknown" ? "selected" : ""}
@@ -361,6 +366,9 @@ export default function Home() {
                     {provider.mark}
                   </span>
                   Continuer avec {provider.name}
+                  {provider.key === "infomaniak" && (
+                    <small className="real-badge">RÉEL</small>
+                  )}
                   <span>→</span>
                 </button>
                 ))}

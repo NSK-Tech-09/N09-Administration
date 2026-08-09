@@ -18,6 +18,12 @@ from .domain import (
     IdentityStatus,
     RegistrationPolicy,
 )
+from .federated_identity import (
+    ExternalIdentity,
+    ExternalIdentityLinkRequest,
+    ExternalIdentityStatus,
+    LinkRequestStatus,
+)
 from .governance import (
     AccessRequestLine,
     DecisionAction,
@@ -28,7 +34,6 @@ from .governance import (
     GroupStatus,
     RequestStatus,
 )
-from .federated_identity import ExternalIdentity, ExternalIdentityStatus
 
 
 SCHEMA = """
@@ -57,6 +62,21 @@ CREATE TABLE IF NOT EXISTS external_identities (
 
 CREATE INDEX IF NOT EXISTS external_identities_identity
 ON external_identities(identity_id);
+
+CREATE TABLE IF NOT EXISTS external_identity_link_requests (
+    request_id TEXT PRIMARY KEY,
+    issuer TEXT NOT NULL,
+    subject TEXT NOT NULL,
+    provider_key TEXT NOT NULL,
+    email_hint TEXT,
+    display_name_hint TEXT,
+    requested_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL,
+    status TEXT NOT NULL,
+    target_identity_id TEXT REFERENCES identities(identity_id),
+    decided_by TEXT REFERENCES identities(identity_id),
+    decision_justification TEXT NOT NULL
+);
 
 CREATE TABLE IF NOT EXISTS applications (
     application_id TEXT PRIMARY KEY,
@@ -316,6 +336,157 @@ class SQLiteRepository:
             )
             for row in rows
         ]
+
+    def save_link_request(
+        self, request: ExternalIdentityLinkRequest, audit_event: AuditEvent
+    ) -> None:
+        if request.status is not LinkRequestStatus.PENDING:
+            raise ValueError("a new link request must be pending")
+        if audit_event.action != "external_identity.link_requested":
+            raise ValueError("invalid audit action for link request")
+        with self.transaction() as connection:
+            if connection.execute(
+                "SELECT 1 FROM external_identities WHERE issuer = ? AND subject = ?",
+                (request.issuer, request.subject),
+            ).fetchone():
+                raise ValueError("external identity is already linked")
+            pending = connection.execute(
+                """SELECT 1 FROM external_identity_link_requests
+                   WHERE issuer = ? AND subject = ? AND status = ?
+                     AND expires_at > ?""",
+                (
+                    request.issuer,
+                    request.subject,
+                    LinkRequestStatus.PENDING.value,
+                    _iso(request.requested_at),
+                ),
+            ).fetchone()
+            if pending is not None:
+                raise ValueError("an active link request already exists")
+            connection.execute(
+                """INSERT INTO external_identity_link_requests(
+                     request_id, issuer, subject, provider_key, email_hint,
+                     display_name_hint, requested_at, expires_at, status,
+                     target_identity_id, decided_by, decision_justification
+                   ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    str(request.request_id), request.issuer, request.subject,
+                    request.provider_key, request.email_hint,
+                    request.display_name_hint, _iso(request.requested_at),
+                    _iso(request.expires_at), request.status.value, None, None, "",
+                ),
+            )
+            self._append_audit(connection, audit_event, None)
+
+    def get_link_request(
+        self, request_id: UUID
+    ) -> ExternalIdentityLinkRequest | None:
+        row = self.connection.execute(
+            "SELECT * FROM external_identity_link_requests WHERE request_id = ?",
+            (str(request_id),),
+        ).fetchone()
+        if row is None:
+            return None
+        return ExternalIdentityLinkRequest(
+            request_id=UUID(row["request_id"]), issuer=row["issuer"],
+            subject=row["subject"], provider_key=row["provider_key"],
+            email_hint=row["email_hint"],
+            display_name_hint=row["display_name_hint"],
+            requested_at=_datetime(row["requested_at"]),
+            expires_at=_datetime(row["expires_at"]),
+            status=LinkRequestStatus(row["status"]),
+            target_identity_id=UUID(row["target_identity_id"])
+            if row["target_identity_id"] else None,
+            decided_by=UUID(row["decided_by"]) if row["decided_by"] else None,
+            decision_justification=row["decision_justification"],
+        )
+
+    def approve_link_request(
+        self,
+        request_id: UUID,
+        identity_id: UUID,
+        decided_by: UUID,
+        justification: str,
+        audit_event: AuditEvent,
+        *,
+        now: datetime,
+    ) -> ExternalIdentity:
+        if not justification.strip():
+            raise ValueError("approval justification is required")
+        if audit_event.action != "external_identity.link_approved":
+            raise ValueError("invalid audit action for link approval")
+        if audit_event.actor_id != decided_by or audit_event.subject_id != identity_id:
+            raise ValueError("audit identities must match approval")
+        with self.transaction() as connection:
+            row = connection.execute(
+                "SELECT * FROM external_identity_link_requests WHERE request_id = ?",
+                (str(request_id),),
+            ).fetchone()
+            if row is None:
+                raise ValueError("link request not found")
+            if row["status"] != LinkRequestStatus.PENDING.value:
+                raise ValueError("link request is not pending")
+            if now.tzinfo is None:
+                raise ValueError("approval date must be timezone-aware")
+            if now >= _datetime(row["expires_at"]):
+                raise ValueError("link request has expired")
+            if connection.execute(
+                "SELECT 1 FROM identities WHERE identity_id = ?",
+                (str(identity_id),),
+            ).fetchone() is None:
+                raise ValueError("NSK identity not found")
+            link = ExternalIdentity(
+                identity_id=identity_id, issuer=row["issuer"], subject=row["subject"],
+                provider_key=row["provider_key"], linked_at=now,
+            )
+            connection.execute(
+                """INSERT INTO external_identities(
+                     external_identity_id, identity_id, issuer, subject,
+                     provider_key, status, linked_at
+                   ) VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                (str(link.external_identity_id), str(identity_id), link.issuer,
+                 link.subject, link.provider_key, link.status.value, _iso(link.linked_at)),
+            )
+            connection.execute(
+                """UPDATE external_identity_link_requests
+                   SET status = ?, target_identity_id = ?, decided_by = ?,
+                       decision_justification = ? WHERE request_id = ?""",
+                (LinkRequestStatus.APPROVED.value, str(identity_id), str(decided_by),
+                 justification.strip(), str(request_id)),
+            )
+            self._append_audit(connection, audit_event, row)
+            return link
+
+    def reject_link_request(
+        self,
+        request_id: UUID,
+        decided_by: UUID,
+        justification: str,
+        audit_event: AuditEvent,
+    ) -> None:
+        if not justification.strip():
+            raise ValueError("rejection justification is required")
+        if audit_event.action != "external_identity.link_rejected":
+            raise ValueError("invalid audit action for link rejection")
+        if audit_event.actor_id != decided_by:
+            raise ValueError("audit actor must match decision maker")
+        with self.transaction() as connection:
+            row = connection.execute(
+                "SELECT * FROM external_identity_link_requests WHERE request_id = ?",
+                (str(request_id),),
+            ).fetchone()
+            if row is None:
+                raise ValueError("link request not found")
+            if row["status"] != LinkRequestStatus.PENDING.value:
+                raise ValueError("link request is not pending")
+            connection.execute(
+                """UPDATE external_identity_link_requests
+                   SET status = ?, decided_by = ?, decision_justification = ?
+                   WHERE request_id = ?""",
+                (LinkRequestStatus.REJECTED.value, str(decided_by),
+                 justification.strip(), str(request_id)),
+            )
+            self._append_audit(connection, audit_event, row)
 
     def save_application(self, application: Application, audit_event: AuditEvent) -> None:
         if audit_event.application_id != application.application_id:

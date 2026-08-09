@@ -41,6 +41,11 @@ une approbation administrative ou la preuve d'une session NSK existante.
 Cette étape sera conçue avec une protection contre la substitution de compte,
 une durée courte et un événement d'audit obligatoire.
 
+Le registre conserve donc une demande de rattachement temporaire distincte du
+lien d'identité. Elle expire, ne porte aucune affectation et ne devient un lien
+actif qu'après une décision explicite identifiant le décideur, la cible NSK et
+la justification. L'approbation du lien ne crée toujours aucun droit applicatif.
+
 ## Conséquences
 
 - un utilisateur peut changer de fournisseur sans perdre ses droits ;

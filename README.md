@@ -36,7 +36,10 @@ serveur de ses règles métier.
 
 Le noyau contient le modèle de domaine, la décision d’accès, un stockage SQLite
 transactionnel, un journal d’audit append-only vérifiable, les groupes, les
-délégations bornées et les demandes d’accès par application. Il ne gère encore
+délégations bornées, les demandes d’accès par application et le cycle audité de
+rattachement d’une identité externe. Une connexion inconnue crée uniquement une
+demande temporaire : son approbation explicite établit le lien d’identité sans
+créer aucun droit applicatif. Il ne gère encore
 ni mots de passe, ni jetons, ni interface réseau.
 
 La première frontière d’API interne permet déjà d’évaluer un accès sans partager

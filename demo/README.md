@@ -5,6 +5,9 @@ gestion des identités avant tout raccordement à un fournisseur réel.
 
 Le démonstrateur permet de :
 
+> Les profils affichés sont entièrement fictifs. Le dépôt ne contient ni base
+> d'identités réelle, ni secret, ni donnée personnelle issue d'un fournisseur.
+
 - simuler une connexion Infomaniak, Google, Microsoft ou GitHub ;
 - rattacher plusieurs portes d'entrée à une identité NSK stable ;
 - constater qu'un nouvel utilisateur ne reçoit aucun droit automatiquement ;
