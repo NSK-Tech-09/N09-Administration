@@ -35,7 +35,8 @@ serveur de ses règles métier.
 ## État
 
 Le noyau contient le modèle de domaine, la décision d’accès, un stockage SQLite
-transactionnel et un journal d’audit append-only vérifiable. Il ne gère encore
+transactionnel, un journal d’audit append-only vérifiable, les groupes, les
+délégations bornées et les demandes d’accès par application. Il ne gère encore
 ni mots de passe, ni jetons, ni interface réseau.
 
 ## Prérequis et démarrage local
