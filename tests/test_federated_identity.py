@@ -5,9 +5,12 @@ from uuid import uuid4
 from n09_admin.audit import AuditEvent
 from n09_admin.domain import Identity, IdentityStatus
 from n09_admin.federated_identity import (
+    AssuranceLevel,
     ExternalIdentity,
     ExternalPrincipal,
     LoginResult,
+    PROVIDER_POLICIES,
+    requires_step_up,
     resolve_login,
 )
 from n09_admin.persistence import SQLiteRepository
@@ -41,12 +44,18 @@ class FederatedIdentityTests(unittest.TestCase):
     def tearDown(self):
         self.repository.close()
 
-    def link(self, issuer=ISSUER_INFOMANIAK, subject="infomaniak-42"):
+    def link(
+        self,
+        issuer=ISSUER_INFOMANIAK,
+        subject="infomaniak-42",
+        provider_key=None,
+    ):
         link = ExternalIdentity(
             identity_id=self.identity.identity_id,
             issuer=issuer,
             subject=subject,
-            provider_key="infomaniak" if issuer == ISSUER_INFOMANIAK else "example",
+            provider_key=provider_key
+            or ("infomaniak" if issuer == ISSUER_INFOMANIAK else "example"),
         )
         self.repository.link_external_identity(
             link, audit_for(self.identity.identity_id)
@@ -66,13 +75,14 @@ class FederatedIdentityTests(unittest.TestCase):
 
         self.assertEqual(LoginResult.AUTHENTICATED, resolution.result)
         self.assertEqual(self.identity.identity_id, resolution.identity.identity_id)
+        self.assertEqual(AssuranceLevel.STANDARD, resolution.assurance)
 
     def test_email_never_links_an_unknown_principal(self):
         self.link()
         principal = ExternalPrincipal(
             ISSUER_EXAMPLE,
             "other-subject",
-            "example",
+            "google",
             email=self.identity.email,
         )
 
@@ -146,6 +156,39 @@ class FederatedIdentityTests(unittest.TestCase):
 
         self.assertEqual(before + 1, self.repository.audit_count())
         self.assertTrue(self.repository.verify_audit_chain())
+
+    def test_universal_provider_catalog_has_expected_entry_points(self):
+        self.assertEqual(
+            {"infomaniak", "google", "microsoft", "github", "passkey", "email", "phone"},
+            set(PROVIDER_POLICIES),
+        )
+        self.assertEqual(AssuranceLevel.STRONG, PROVIDER_POLICIES["passkey"].assurance)
+        self.assertEqual(AssuranceLevel.LIMITED, PROVIDER_POLICIES["phone"].assurance)
+
+    def test_phone_login_requires_step_up_for_sensitive_action(self):
+        self.link("https://phone.nsktech.fr", "+33600000000", "phone")
+
+        resolution = resolve_login(
+            ExternalPrincipal(
+                "https://phone.nsktech.fr", "+33600000000", "phone"
+            ),
+            self.repository,
+        )
+
+        self.assertEqual(LoginResult.AUTHENTICATED, resolution.result)
+        self.assertEqual(AssuranceLevel.LIMITED, resolution.assurance)
+        self.assertTrue(requires_step_up(resolution))
+
+    def test_provider_mismatch_is_denied(self):
+        self.link()
+
+        resolution = resolve_login(
+            ExternalPrincipal(ISSUER_INFOMANIAK, "infomaniak-42", "google"),
+            self.repository,
+        )
+
+        self.assertEqual(LoginResult.DENIED, resolution.result)
+        self.assertEqual("provider mismatch", resolution.reason)
 
 
 if __name__ == "__main__":

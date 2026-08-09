@@ -15,8 +15,10 @@ sont jamais utilisés pour rattacher automatiquement deux comptes.
 Une même personne peut utiliser, selon les options activées :
 
 - son compte Infomaniak ;
+- son compte Google, Microsoft ou GitHub ;
 - un lien de connexion reçu par courrier électronique ;
 - une passkey ;
+- un numéro de téléphone comme solution de secours ;
 - un autre fournisseur compatible OIDC.
 
 Après authentification, toutes ces méthodes aboutissent au même compte NSK et
@@ -46,3 +48,12 @@ une durée courte et un événement d'audit obligatoire.
 - le départ d'un fournisseur n'impose pas de migration des données métier ;
 - N09 – Administration ne stocke aucun mot de passe externe ;
 - l'exploitation doit permettre la révocation séparée de chaque rattachement.
+
+## Niveau de confiance
+
+Les fournisseurs OIDC et OAuth apportent un niveau standard. Une passkey
+apporte un niveau fort et résistant à l'hameçonnage. Le courrier électronique et
+le téléphone restent des moyens limités : ils sont pratiques pour l'accueil ou
+la récupération, mais une opération sensible impose une nouvelle preuve plus
+forte. Le numéro n'est jamais une identité durable, car il peut être transféré
+ou réattribué.
