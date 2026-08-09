@@ -31,7 +31,8 @@ Le paquet normatif `IDENTITE-ACCES` chargé pour le noyau actuel contient
 
 - authentification standard, MFA privilégiée, récupération forte et sessions
   révocables (`ARC-008` à `ARC-010`) ;
-- persistance des groupes, délégations et demandes dans le stockage central ;
+- groupes, délégations et demandes conservés avec leur audit dans une transaction
+  centrale indivisible (`ARC-005`, `ARC-007`, `ARC-013`) ;
 - archivage externe du journal, notifications centrales et restauration
   éprouvée (`ARC-013`, `ARC-015`, `ARC-016`) ;
 - interface expliquant droits directs, hérités et effectifs (`ERG-001`).

@@ -11,8 +11,18 @@ from n09_admin.domain import (
     AssignmentStatus,
     Identity,
     IdentityStatus,
+    RegistrationPolicy,
 )
 from n09_admin.persistence import SQLiteRepository
+from n09_admin.governance import (
+    DecisionAction,
+    Delegation,
+    Group,
+    GroupMembership,
+    RequestStatus,
+    decide_request_line,
+    submit_access_request,
+)
 
 
 class PersistenceTests(unittest.TestCase):
@@ -238,6 +248,143 @@ class PersistenceTests(unittest.TestCase):
                 ),
             )
         self.assertEqual("Collègue", self.repository.get_identity(self.identity.identity_id).display_name)
+
+    def test_persists_group_membership_and_delegation_with_audit(self):
+        self.save_prerequisites()
+        group = Group(
+            name="Responsables site 09",
+            purpose="Administrer les accès du site 09",
+            owner_id=self.identity.identity_id,
+            review_due_at=datetime(2027, 2, 9, tzinfo=timezone.utc),
+        )
+        self.repository.save_group(
+            group,
+            self.audit("group.created", new_value={"name": group.name}),
+        )
+        membership = GroupMembership(group.group_id, self.identity.identity_id)
+        self.repository.save_group_membership(
+            membership,
+            self.audit(
+                "group.membership.created",
+                subject_id=self.identity.identity_id,
+                new_value={"group_id": str(group.group_id)},
+            ),
+        )
+        delegation = Delegation(
+            administrator_id=self.identity.identity_id,
+            application_id="tasks",
+            manageable_role_ids=frozenset({"reader"}),
+            scope_type="site",
+            manageable_scope_ids=frozenset({"site-09"}),
+            allowed_actions=frozenset({DecisionAction.APPROVE}),
+            justification="Responsable désigné",
+            valid_from=datetime(2026, 8, 9, tzinfo=timezone.utc),
+            valid_until=datetime(2027, 2, 9, tzinfo=timezone.utc),
+        )
+        self.repository.save_delegation(
+            delegation,
+            self.audit(
+                "delegation.created",
+                subject_id=self.identity.identity_id,
+                application_id="tasks",
+                new_value={"scope_ids": ["site-09"]},
+            ),
+        )
+        self.assertEqual(5, self.repository.audit_count())
+        self.assertTrue(self.repository.verify_audit_chain())
+
+    def test_persists_independent_request_lines_and_decision(self):
+        self.save_prerequisites()
+        request_id = uuid4()
+        line = submit_access_request(
+            application=replace(
+                self.application,
+                registration_policy=RegistrationPolicy.APPROVAL,
+            ),
+            subject_id=self.identity.identity_id,
+            requested_role_id="reader",
+            scope_type="site",
+            scope_id="site-09",
+            reason="Participer",
+            request_id=request_id,
+        )
+        self.repository.save_request_line(
+            line,
+            self.audit(
+                "access_request.submitted",
+                subject_id=self.identity.identity_id,
+                application_id="tasks",
+                new_value={"status": "pending"},
+            ),
+        )
+        delegation = Delegation(
+            administrator_id=self.actor_id,
+            application_id="tasks",
+            manageable_role_ids=frozenset({"reader"}),
+            scope_type="site",
+            manageable_scope_ids=frozenset({"site-09"}),
+            allowed_actions=frozenset({DecisionAction.APPROVE}),
+            justification="Délégation test",
+            valid_from=datetime(2026, 8, 8, tzinfo=timezone.utc),
+            valid_until=datetime(2026, 9, 9, tzinfo=timezone.utc),
+        )
+        approved = decide_request_line(
+            line=line,
+            delegation=delegation,
+            action=DecisionAction.APPROVE,
+            decided_by=self.actor_id,
+            justification="Validé",
+            now=datetime(2026, 8, 9, tzinfo=timezone.utc),
+        ).line
+        self.repository.save_request_line(
+            approved,
+            self.audit(
+                "access_request.approved",
+                subject_id=self.identity.identity_id,
+                application_id="tasks",
+                previous_value={"status": "pending"},
+                new_value={"status": "approved"},
+            ),
+        )
+        loaded = self.repository.list_request_lines(request_id)
+        self.assertEqual(1, len(loaded))
+        self.assertEqual(RequestStatus.APPROVED, loaded[0].status)
+        self.assertEqual("reader", loaded[0].granted_role_id)
+
+    def test_request_write_rolls_back_when_audit_is_incomplete(self):
+        self.save_prerequisites()
+        line = submit_access_request(
+            application=replace(
+                self.application,
+                registration_policy=RegistrationPolicy.APPROVAL,
+            ),
+            subject_id=self.identity.identity_id,
+            requested_role_id="reader",
+            scope_type="site",
+            scope_id="site-09",
+            reason="Participer",
+        )
+        self.repository.save_request_line(
+            line,
+            self.audit(
+                "access_request.submitted",
+                subject_id=self.identity.identity_id,
+                application_id="tasks",
+                new_value={"status": "pending"},
+            ),
+        )
+        changed = replace(line, status=RequestStatus.CANCELLED)
+        with self.assertRaises(ValueError):
+            self.repository.save_request_line(
+                changed,
+                self.audit(
+                    "access_request.cancelled",
+                    subject_id=self.identity.identity_id,
+                    application_id="tasks",
+                    new_value={"status": "cancelled"},
+                ),
+            )
+        self.assertEqual(RequestStatus.PENDING, self.repository.list_request_lines(line.request_id)[0].status)
 
 
 if __name__ == "__main__":

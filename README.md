@@ -39,6 +39,9 @@ transactionnel, un journal d’audit append-only vérifiable, les groupes, les
 délégations bornées et les demandes d’accès par application. Il ne gère encore
 ni mots de passe, ni jetons, ni interface réseau.
 
+Les objets de gouvernance sont conservés dans la même frontière transactionnelle
+que leur événement d’audit : une mutation sans preuve valide est annulée.
+
 ## Prérequis et démarrage local
 
 - Python 3.11 ou supérieur ;
