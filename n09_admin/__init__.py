@@ -1,6 +1,7 @@
 """Noyau de domaine de N09 – Administration."""
 
 from .access import AccessDecision, decide_access
+from .api import ApiResponse, AuthenticatedApplication, evaluate_access_request
 from .audit import AuditEvent
 from .domain import AccessAssignment, Application, Identity
 from .persistence import SQLiteRepository
@@ -16,6 +17,8 @@ from .governance import (
 
 __all__ = [
     "AccessDecision",
+    "ApiResponse",
+    "AuthenticatedApplication",
     "Application",
     "AccessAssignment",
     "AuditEvent",
@@ -29,4 +32,5 @@ __all__ = [
     "decide_request_line",
     "submit_access_request",
     "decide_access",
+    "evaluate_access_request",
 ]
