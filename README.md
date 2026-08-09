@@ -34,9 +34,17 @@ serveur de ses règles métier.
 
 ## État
 
-Socle fondateur local. Le premier incrément contient le modèle de domaine et le
-moteur déterministe de décision d’accès. Il ne gère encore ni mots de passe, ni
-jetons, ni persistance, ni interface réseau.
+Le noyau contient le modèle de domaine, la décision d’accès, un stockage SQLite
+transactionnel et un journal d’audit append-only vérifiable. Il ne gère encore
+ni mots de passe, ni jetons, ni interface réseau.
+
+## Prérequis et démarrage local
+
+- Python 3.11 ou supérieur ;
+- aucune dépendance applicative externe pour le noyau actuel.
+
+Le stockage de test fonctionne en mémoire. Pour un stockage local persistant,
+utiliser un chemin propre à l’environnement sur le modèle de `.env.example`.
 
 ## Vérification
 
@@ -44,10 +52,17 @@ jetons, ni persistance, ni interface réseau.
 python -m unittest discover -s tests -v
 ```
 
+La même vérification est exécutée automatiquement à chaque PR et mise à jour de
+`main`. Le dépôt public utilise les minutes Actions non facturées par GitHub.
+
+La commande de construction du paquet sera ajoutée lorsque le premier service
+exécutable sera introduit. Aucun artefact de production n’est livré à ce stade.
+
 ## Documents
 
 - [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)
 - [`docs/CONTRAT-IDENTITE-ACCES.md`](docs/CONTRAT-IDENTITE-ACCES.md)
 - [`docs/PLAN-MIGRATION-SUIVI-TACHES.md`](docs/PLAN-MIGRATION-SUIVI-TACHES.md)
 - [`docs/ADR-001-SEPARATION-RESPONSABILITES.md`](docs/ADR-001-SEPARATION-RESPONSABILITES.md)
+- [`docs/ADR-002-STOCKAGE-ET-AUDIT.md`](docs/ADR-002-STOCKAGE-ET-AUDIT.md)
 - [`docs/CONFORMITE-NSES.md`](docs/CONFORMITE-NSES.md)

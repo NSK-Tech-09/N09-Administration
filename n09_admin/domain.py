@@ -1,7 +1,7 @@
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import StrEnum
-from uuid import UUID
+from uuid import UUID, uuid4
 
 
 class IdentityStatus(StrEnum):
@@ -64,3 +64,4 @@ class AccessAssignment:
     decided_by: UUID | None = None
     inherited_from_group: UUID | None = None
     version: int = 1
+    assignment_id: UUID = field(default_factory=uuid4)
