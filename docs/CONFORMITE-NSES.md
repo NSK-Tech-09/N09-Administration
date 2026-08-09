@@ -15,6 +15,8 @@ Le paquet normatif `IDENTITE-ACCES` chargé pour le noyau actuel contient
   défaut et contrôle serveur (`ARC-002`, `ARC-012`) ;
 - aucun passe-droit métier pour le super-administrateur (`ARC-003`) ;
 - affectations directes ou héritées d’un groupe (`ARC-005`) ;
+- groupes nommés, délégations bornées et décisions applicatives indépendantes
+  (`ARC-005`, `ARC-007`, `ERG-002`) ;
 - séparation du service d’identité, de la console et des applications métier
   (`ARC-006`) ;
 - politiques fermée, sur invitation ou soumise à validation (`ARC-007`) ;
@@ -29,8 +31,7 @@ Le paquet normatif `IDENTITE-ACCES` chargé pour le noyau actuel contient
 
 - authentification standard, MFA privilégiée, récupération forte et sessions
   révocables (`ARC-008` à `ARC-010`) ;
-- groupes, délégations bornées et demandes par application (`ARC-005`,
-  `ARC-007`, `ERG-002`) ;
+- persistance des groupes, délégations et demandes dans le stockage central ;
 - archivage externe du journal, notifications centrales et restauration
   éprouvée (`ARC-013`, `ARC-015`, `ARC-016`) ;
 - interface expliquant droits directs, hérités et effectifs (`ERG-001`).
