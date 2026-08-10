@@ -220,11 +220,42 @@ La preuve interservices réelle confirme :
 - `GET /health` : `200` après redémarrage explicite ;
 - secret absent des journaux et des réponses.
 
+## Révocation centrale auditée validée
+
+La PR **#32** de N09 – Administration a été validée par GitHub Actions puis
+fusionnée dans `main` le **10 août 2026** avec le commit
+`e89d95ee0dada37bc3f8b4e368a470ae1c69aae5`. La release active est isolée dans
+`releases/e89d95ee` et la release `98324ab4` reste intacte pour un retour
+arrière immédiat.
+
+Les dépendances ont été installées avec le lockfile vérifié et les **103 tests
+Node** réussissent sur Infomaniak. La commande d'exécution cible la nouvelle
+release, le processus a été redémarré explicitement sur le port interne `3000`
+et `GET /health` répond `200` avec `{"status":"ok"}`.
+
+L'amorçage idempotent, limité à la base `6p7h3x_n09_admin_preprod`, a créé une
+seule affectation supplémentaire pour l'identité NSK active de Fred TRAVERS.
+Elle porte uniquement `administration:access:decide`. La chaîne d'audit est
+valide ; la corrélation de l'opération est
+`8f0f4e94-59d7-42a1-92ff-5745a48b7a3b`.
+
+Le parcours réel authentifié confirme :
+
+- présence de l'entrée « Décider les révocations » uniquement pour Fred ;
+- pouvoir `administration:access:decide` visible mais non révocable depuis
+  l'écran général ;
+- justification obligatoire pour les autres affectations actives ;
+- une identité active, deux applications actives et quatre affectations
+  actives après l'amorçage ;
+- aucune révocation réelle et aucun octroi arbitraire pendant la validation.
+
 ## Prochain jalon
 
-Le prochain jalon est l'autorisation distincte d'une première application
-pilote, puis la migration progressive de la gestion des utilisateurs de
-N09 – Suivi des tâches vers ce registre central. Le rattachement d'identité
-reste strictement séparé du droit d'accès.
+Le prochain jalon est la publication par chaque application de son catalogue de
+rôles et de ses prérequis de provisionnement. Les octrois centraux resteront
+fermés tant que ces contrats ne permettront pas de créer un profil applicatif
+cohérent. La migration des utilisateurs de N09 – Suivi des tâches pourra alors
+être préparée sans déplacer ses rôles métier, ses périmètres locaux ni ses
+préférences de notification.
 
 La production et les applications existantes restent inchangées.

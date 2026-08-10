@@ -1,6 +1,6 @@
 # ADR-013 – Révocation centrale des accès
 
-Statut : **proposée pour la préproduction**
+Statut : **acceptée et validée en préproduction**
 
 ## Contexte
 
@@ -17,7 +17,7 @@ droit inutilisable ou incohérent.
 
 ## Décision
 
-La première mutation proposée par N09 – Administration est uniquement la
+La première mutation retenue par N09 – Administration est uniquement la
 révocation d'une affectation centrale active.
 
 Elle exige :
@@ -46,6 +46,22 @@ Les secrets SMTP, Telegram ou VAPID ne sont ni des droits utilisateurs ni des
 données à copier dans ce registre. Ils relèvent d'un futur service de
 notifications ; les préférences d'un utilisateur restent dans l'application
 qui sait les interpréter.
+
+## Validation en préproduction
+
+La PR **#32** a été validée puis fusionnée dans `main`. La release immuable
+`e89d95ee` a été installée et explicitement redémarrée sur Infomaniak ; la
+release `98324ab4` reste disponible pour un retour arrière immédiat. Les
+**103 tests Node** réussissent sur cet environnement et `GET /health` répond
+`200` avec `{"status":"ok"}`.
+
+L'amorçage borné à la base `_preprod` a attribué uniquement
+`administration:access:decide` à l'identité NSK active de Fred TRAVERS. La
+chaîne d'audit est valide, avec la corrélation
+`8f0f4e94-59d7-42a1-92ff-5745a48b7a3b`. L'interface confirme que ce pouvoir
+est protégé par la gouvernance dédiée et ne présente aucun bouton permettant
+de le révoquer. Aucune révocation réelle et aucun octroi arbitraire n'ont été
+exécutés pendant cette validation.
 
 ## Conséquences
 
