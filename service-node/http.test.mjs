@@ -95,7 +95,14 @@ test("valide le retour Infomaniak et crée seulement une session à rattacher", 
     const signature = sign("RSA-SHA256", Buffer.from(`${header}.${claims}`), privateKey).toString("base64url");
     return new Response(JSON.stringify({ id_token: `${header}.${claims}.${signature}` }), { status: 200 });
   };
-  await withServer({ oidcConfig, fetchImpl }, async (baseUrl) => {
+  const savedRequests = [];
+  const linkRepository = {
+    ...repository,
+    findExternalIdentity: async () => null,
+    findActiveLinkRequest: async () => null,
+    saveLinkRequest: async (request) => savedRequests.push(request),
+  };
+  await withServer({ repository: linkRepository, oidcConfig, fetchImpl }, async (baseUrl) => {
     const start = await fetch(`${baseUrl}/auth/infomaniak/start`, { redirect: "manual" });
     const authorization = new URL(start.headers.get("location"));
     expectedNonce = authorization.searchParams.get("nonce");
@@ -109,6 +116,9 @@ test("valide le retour Infomaniak et crée seulement une session à rattacher", 
     assert.match(setCookie, /n09_oidc_transaction=;/);
     assert.match(setCookie, /n09_oidc_session=/);
     assert.doesNotMatch(setCookie, /external-42|Personne de test/);
+    assert.equal(savedRequests.length, 1);
+    assert.equal(savedRequests[0].status, "pending");
+    assert.equal(savedRequests[0].subject, "external-42");
   });
 });
 
