@@ -102,10 +102,10 @@ utilisateur réelle n'a été introduite.
 ## Adaptateur OIDC déployé
 
 Les PR **#18**, **#20** et **#21** ont été validées par GitHub Actions puis
-fusionnées. La version active porte le commit
-`a25efe4f7a13f56d54437dfdf0faf6182bd6a4bc` et reste isolée dans
+fusionnées. Cette étape portait le commit
+`a25efe4f7a13f56d54437dfdf0faf6182bd6a4bc`, isolé dans
 `releases/a25efe4f`. Les versions `72de3040`, `91c67d0` et `7720a1da` sont
-conservées pour le retour arrière jusqu'à la clôture du jalon suivant.
+conservées pour le retour arrière.
 
 L'application OAuth **N09 Administration – Préproduction** est enregistrée
 chez Infomaniak avec l'unique retour
@@ -137,11 +137,36 @@ secret, un jeton, le code OAuth ou une donnée personnelle. Il a été remis à
 `false` puis le service a été redémarré. Le comportement nominal ne présente
 donc plus aucun détail d'échec.
 
+## Rattachement réel validé
+
+La PR **#23** a été validée par GitHub Actions puis fusionnée. La version active
+porte le commit `5ab7a261b46652a4abce3364bca843c7ba888581` et est isolée dans
+`releases/5ab7a261`. La version `a25efe4f` reste disponible pour un retour
+arrière.
+
+La migration MariaDB a ajouté les tables `external_identities` et
+`external_identity_link_requests`. Le compte applicatif a correctement refusé
+la création de tables ; la migration a donc été appliquée avec la session
+administrative prévue, puis les droits de lecture applicatifs ont été vérifiés.
+
+Les **60 tests Node** réussissent sur Infomaniak. Le parcours réel confirme :
+
+- création d'une demande temporaire après consentement et preuve OIDC valides ;
+- persistance de la demande et de son événement d'audit dans la même
+  transaction ;
+- décision explicite du titulaire, avec identité NSK cible et justification ;
+- création du lien externe sans rôle, affectation ou droit applicatif ;
+- chaîne d'audit valide après la décision ;
+- nouvelle authentification reconnue avec l'état `authenticated` et l'identité
+  NSK rattachée ;
+- zéro affectation pour l'application pilote tant qu'une autorisation séparée
+  n'a pas été décidée.
+
 ## Prochain jalon autorisé
 
-Le prochain jalon est le stockage audité des demandes de rattachement et leur
-décision explicite, puis l'autorisation distincte d'une première application
-pilote. La preuve Infomaniak validée ne doit pas être reliée à une identité NSK
-avant cette frontière transactionnelle.
+Le prochain jalon est l'interface administrative authentifiée pour consulter
+et décider les demandes futures, puis l'autorisation distincte d'une première
+application pilote. Le rattachement d'identité ne doit jamais valoir droit
+d'accès.
 
 La production et les applications existantes restent inchangées.
