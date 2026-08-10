@@ -54,6 +54,12 @@ exige la permission centrale exacte `administration:identity-links:decide`, une
 preuve CSRF et une justification auditée. L'approbation relie une preuve externe
 à une identité NSK active, sans créer de rôle ni de droit applicatif.
 
+Un tableau de bord distinct présente en lecture seule les identités,
+applications et affectations centrales. Il exige la permission exacte
+`administration:access:read` et n'expose aucune action de création, modification
+ou révocation. Le pouvoir de consulter le registre ne se confond donc jamais
+avec celui de décider un rattachement ou un droit.
+
 Les objets de gouvernance sont conservés dans la même frontière transactionnelle
 que leur événement d’audit : une mutation sans preuve valide est annulée.
 
@@ -93,6 +99,7 @@ ne contient aucun secret réel. La production reste inchangée.
 - [`docs/ADR-008-ADMINISTRATION-RATTACHEMENTS.md`](docs/ADR-008-ADMINISTRATION-RATTACHEMENTS.md)
 - [`docs/ADR-009-APPLICATION-PILOTE-SUIVI-TACHES.md`](docs/ADR-009-APPLICATION-PILOTE-SUIVI-TACHES.md)
 - [`docs/ADR-010-COURTAGE-CONNEXION-APPLICATIVE.md`](docs/ADR-010-COURTAGE-CONNEXION-APPLICATIVE.md)
+- [`docs/ADR-011-CONSULTATION-CENTRALE-ACCES.md`](docs/ADR-011-CONSULTATION-CENTRALE-ACCES.md)
 - [`docs/ETAT-PREPROD-INFOMANIAK.md`](docs/ETAT-PREPROD-INFOMANIAK.md)
 - [`docs/CONFORMITE-NSES.md`](docs/CONFORMITE-NSES.md)
 - [`docs/CONTRAT-API-INTERNE.md`](docs/CONTRAT-API-INTERNE.md)

@@ -324,6 +324,16 @@ export class MariaDbRepository {
     return row ? { applicationId: row.application_id, displayName: row.display_name, status: row.status, registrationPolicy: row.registration_policy } : null;
   }
 
+  async listApplications() {
+    const [rows] = await this.pool.execute(
+      "SELECT application_id, display_name, status, registration_policy FROM applications ORDER BY display_name, application_id",
+    );
+    return rows.map((row) => ({
+      applicationId: row.application_id, displayName: row.display_name,
+      status: row.status, registrationPolicy: row.registration_policy,
+    }));
+  }
+
   async saveApplicationRedirectUri(applicationId, redirectUri, auditEvent) {
     const redirectHash = createHash("sha256").update(redirectUri, "utf8").digest("hex");
     return this.#transaction(async (connection) => {
@@ -417,6 +427,20 @@ export class MariaDbRepository {
     const [rows] = await this.pool.execute(
       `SELECT * FROM access_assignments WHERE subject_id = ? AND application_id = ?
        ORDER BY assignment_id`, [identityId, applicationId],
+    );
+    return rows.map((row) => ({
+      assignmentId: row.assignment_id, subjectId: row.subject_id, applicationId: row.application_id,
+      roleId: row.role_id, permissions: parseJson(row.permissions_json), scopeType: row.scope_type,
+      scopeId: row.scope_id, conditions: parseJson(row.conditions_json), status: row.status,
+      validFrom: row.valid_from, validUntil: row.valid_until, reason: row.reason,
+      decidedBy: row.decided_by, inheritedFromGroup: row.inherited_from_group, version: row.version,
+    }));
+  }
+
+  async listAllAssignments() {
+    const [rows] = await this.pool.execute(
+      `SELECT * FROM access_assignments
+       ORDER BY subject_id, application_id, role_id, assignment_id`,
     );
     return rows.map((row) => ({
       assignmentId: row.assignment_id, subjectId: row.subject_id, applicationId: row.application_id,

@@ -2,6 +2,7 @@ import { randomUUID, timingSafeEqual } from "node:crypto";
 import { evaluateAccessRequestAsync } from "./api.mjs";
 import { createAuditEvent } from "./audit.mjs";
 import { createLinkRequest } from "./federated-identity.mjs";
+import { authorizeAccessAdministration } from "./access-admin.mjs";
 import { authorizeIdentityLinkAdministration } from "./identity-link-admin.mjs";
 import {
   exchangeApplicationLoginCode, issueApplicationLoginCode, validateAuthorizationRequest,
@@ -44,7 +45,7 @@ function writeHtml(response, status, title, content, setCookies = []) {
   response.setHeader("referrer-policy", "no-referrer");
   response.setHeader("x-content-type-options", "nosniff");
   if (setCookies.length) response.setHeader("set-cookie", setCookies);
-  response.end(`<!doctype html><html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>${escapeHtml(title)} · N09 Administration</title><style>*{box-sizing:border-box}body{margin:0;background:#f3f6f4;color:#18221e;font:16px system-ui,sans-serif;display:grid;place-items:center;min-height:100vh;padding:28px 0}.card{width:min(920px,calc(100% - 36px));background:#fff;border:1px solid #dfe6e2;border-radius:18px;padding:34px;box-shadow:0 12px 40px #19392d14}.brand{color:#21825e;font-size:12px;font-weight:800;letter-spacing:1px}h1{font:600 31px Georgia,serif;margin:22px 0 12px}h2{font:600 21px Georgia,serif}p{color:#5d6c65;line-height:1.6}.facts,.request{padding:16px;border-radius:10px;background:#f3f7f5;margin:20px 0}.facts strong,.request strong{color:#173e32}.button,button{display:inline-block;border:0;padding:12px 17px;border-radius:9px;background:#173e32;color:#fff;text-decoration:none;font-weight:bold;cursor:pointer}.button.secondary,button.secondary{background:#68756f}.actions{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:15px}.actions form{display:grid;gap:9px}.actions label{font-size:13px;font-weight:700}.actions select,.actions input{width:100%;padding:10px;border:1px solid #bdcac4;border-radius:8px;background:#fff}.note{font-size:13px}.expired{color:#9b391f;font-weight:700}nav{display:flex;gap:10px;align-items:center;margin-top:22px}@media(max-width:700px){.actions{grid-template-columns:1fr}.card{padding:24px}}</style></head><body><main class="card"><div class="brand">N09 · ADMINISTRATION · NSK TECH 09</div>${content}</main></body></html>`);
+  response.end(`<!doctype html><html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>${escapeHtml(title)} · N09 Administration</title><style>*{box-sizing:border-box}body{margin:0;background:#f3f6f4;color:#18221e;font:16px system-ui,sans-serif;display:grid;place-items:center;min-height:100vh;padding:28px 0}.card{width:min(1100px,calc(100% - 36px));background:#fff;border:1px solid #dfe6e2;border-radius:18px;padding:34px;box-shadow:0 12px 40px #19392d14}.brand{color:#21825e;font-size:12px;font-weight:800;letter-spacing:1px}h1{font:600 31px Georgia,serif;margin:22px 0 12px}h2{font:600 21px Georgia,serif;margin:30px 0 12px}h3{margin:0 0 8px;font-size:17px}p{color:#5d6c65;line-height:1.6}.facts,.request{padding:16px;border-radius:10px;background:#f3f7f5;margin:20px 0}.facts strong,.request strong{color:#173e32}.button,button{display:inline-block;border:0;padding:12px 17px;border-radius:9px;background:#173e32;color:#fff;text-decoration:none;font-weight:bold;cursor:pointer}.button.secondary,button.secondary{background:#68756f}.actions{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:15px}.actions form{display:grid;gap:9px}.actions label{font-size:13px;font-weight:700}.actions select,.actions input{width:100%;padding:10px;border:1px solid #bdcac4;border-radius:8px;background:#fff}.note,.muted{font-size:13px;color:#6c7a74}.expired{color:#9b391f;font-weight:700}nav{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:22px}.summary{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin:24px 0}.metric{padding:18px;border:1px solid #dce6e1;border-radius:12px;background:#f8faf9}.metric strong{display:block;font-size:28px;color:#173e32}.directory{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}.entry{padding:17px;border:1px solid #dce6e1;border-radius:12px}.entry p{margin:7px 0}.pill{display:inline-block;padding:4px 8px;border-radius:999px;background:#e4f3ec;color:#176044;font-size:12px;font-weight:800}.pill.inactive{background:#f2e8e4;color:#8a3b28}.permissions{margin:8px 0 0;padding-left:19px;color:#45564f}.permissions code,code{font-size:12px;word-break:break-word}.assignment{border-left:4px solid #21825e} @media(max-width:700px){.actions,.directory,.summary{grid-template-columns:1fr}.card{padding:24px}}</style></head><body><main class="card"><div class="brand">N09 · ADMINISTRATION · NSK TECH 09</div>${content}</main></body></html>`);
 }
 
 async function readBody(request, maxBodyBytes) {
@@ -118,6 +119,27 @@ function renderLinkRequestAdministration(requests, identities, csrf, now = new D
   return `<h1>Demandes de rattachement</h1><p>Chaque décision est nominative, justifiée et inscrite dans le journal d’audit. Aucun rôle ni droit applicatif n’est accordé par un rattachement.</p>${cards || '<div class="facts"><p>Aucune demande en attente.</p></div>'}<nav><a class="button secondary" href="/">Retour à l’accueil</a><form method="post" action="/auth/logout"><button class="secondary" type="submit">Fermer la session</button></form></nav>`;
 }
 
+function renderAccessAdministration(identities, applications, assignments) {
+  const identityById = new Map(identities.map((identity) => [identity.identityId, identity]));
+  const applicationById = new Map(applications.map((application) => [application.applicationId, application]));
+  const activeAssignments = assignments.filter((assignment) => assignment.status === "active").length;
+  const statusPill = (status) => `<span class="pill${status === "active" ? "" : " inactive"}">${escapeHtml(status)}</span>`;
+  const identityCards = identities.map((identity) =>
+    `<article class="entry"><h3>${escapeHtml(identity.displayName)}</h3><p>${escapeHtml(identity.email)}</p><p>${statusPill(identity.status)}</p><p class="muted">Identité : <code>${escapeHtml(identity.identityId)}</code></p></article>`
+  ).join("");
+  const applicationCards = applications.map((application) =>
+    `<article class="entry"><h3>${escapeHtml(application.displayName)}</h3><p>${statusPill(application.status)} · inscription ${escapeHtml(application.registrationPolicy)}</p><p class="muted">Application : <code>${escapeHtml(application.applicationId)}</code></p></article>`
+  ).join("");
+  const assignmentCards = assignments.map((assignment) => {
+    const identity = identityById.get(assignment.subjectId);
+    const application = applicationById.get(assignment.applicationId);
+    const scope = assignment.scopeType ? `${assignment.scopeType} : ${assignment.scopeId || "non défini"}` : "global";
+    const permissions = assignment.permissions.map((permission) => `<li><code>${escapeHtml(permission)}</code></li>`).join("");
+    return `<article class="entry assignment"><h3>${escapeHtml(identity?.displayName || assignment.subjectId)} → ${escapeHtml(application?.displayName || assignment.applicationId)}</h3><p><strong>${escapeHtml(assignment.roleId)}</strong> · ${statusPill(assignment.status)} · périmètre ${escapeHtml(scope)}</p><ul class="permissions">${permissions || "<li>Aucune permission</li>"}</ul><p class="muted">Motif : ${escapeHtml(assignment.reason || "non renseigné")} · version ${escapeHtml(assignment.version)}</p></article>`;
+  }).join("");
+  return `<h1>Utilisateurs et accès</h1><p>Vue centrale en lecture seule des identités, applications et affectations. Cette page n’accorde, ne modifie et ne révoque aucun droit.</p><div class="summary"><div class="metric"><strong>${identities.length}</strong>identités</div><div class="metric"><strong>${applications.length}</strong>applications</div><div class="metric"><strong>${activeAssignments}</strong>affectations actives</div></div><h2>Identités</h2><div class="directory">${identityCards || '<div class="facts"><p>Aucune identité enregistrée.</p></div>'}</div><h2>Applications</h2><div class="directory">${applicationCards || '<div class="facts"><p>Aucune application enregistrée.</p></div>'}</div><h2>Affectations</h2><div class="directory">${assignmentCards || '<div class="facts"><p>Aucune affectation enregistrée.</p></div>'}</div><nav><a class="button secondary" href="/">Retour à l’accueil</a><a class="button secondary" href="/admin/link-requests">Rattachements</a><form method="post" action="/auth/logout"><button class="secondary" type="submit">Fermer la session</button></form></nav>`;
+}
+
 export function createHttpHandler({ repository, authenticate = async () => null, oidcConfig = null, fetchImpl = fetch, maxBodyBytes = DEFAULT_MAX_BODY_BYTES }) {
   if (!repository) throw new Error("repository is required");
   if (typeof authenticate !== "function") throw new Error("authenticate must be a function");
@@ -176,15 +198,19 @@ export function createHttpHandler({ repository, authenticate = async () => null,
       }
       const requestReference = session?.requestId
         ? `<p>Demande enregistrée : <strong>${escapeHtml(session.requestId)}</strong></p>` : "";
-      let administrationLink = "";
+      const administrationLinks = [];
       if (session?.status === "authenticated" && session.csrf) {
         try {
           const decision = await authorizeIdentityLinkAdministration(repository, session.identityId);
-          if (decision.allowed) administrationLink = '<a class="button" href="/admin/link-requests">Administrer les rattachements</a>';
+          if (decision.allowed) administrationLinks.push('<a class="button" href="/admin/link-requests">Administrer les rattachements</a>');
+        } catch { /* no administrative affordance on repository failure */ }
+        try {
+          const decision = await authorizeAccessAdministration(repository, session.identityId);
+          if (decision.allowed) administrationLinks.push('<a class="button" href="/admin/access">Consulter les utilisateurs et accès</a>');
         } catch { /* no administrative affordance on repository failure */ }
       }
       const content = session
-        ? `<h1>Identité Infomaniak vérifiée</h1><p>Bienvenue <strong>${escapeHtml(session.displayName)}</strong>. La preuve cryptographique est valide.</p><div class="facts"><p>État NSK : <strong>${session.status === "authenticated" ? "rattachée" : "rattachement requis"}</strong></p>${requestReference}<p>${session.status === "authenticated" ? "Le compte NSK est reconnu ; les droits restent contrôlés séparément." : "Aucun compte, rôle ou droit n’a été créé automatiquement. Une décision humaine reste obligatoire."}</p></div><nav>${administrationLink}<form method="post" action="/auth/logout"><button class="secondary" type="submit">Fermer la session</button></form></nav>`
+        ? `<h1>Identité Infomaniak vérifiée</h1><p>Bienvenue <strong>${escapeHtml(session.displayName)}</strong>. La preuve cryptographique est valide.</p><div class="facts"><p>État NSK : <strong>${session.status === "authenticated" ? "rattachée" : "rattachement requis"}</strong></p>${requestReference}<p>${session.status === "authenticated" ? "Le compte NSK est reconnu ; les droits restent contrôlés séparément." : "Aucun compte, rôle ou droit n’a été créé automatiquement. Une décision humaine reste obligatoire."}</p></div><nav>${administrationLinks.join("")}<form method="post" action="/auth/logout"><button class="secondary" type="submit">Fermer la session</button></form></nav>`
         : `<h1>Le cœur d’identité est prêt</h1><p>Connecte-toi avec Infomaniak pour présenter une preuve d’identité au registre central NSK.</p><div class="facts"><p><strong>Connexion réelle :</strong> Authorization Code + PKCE S256.</p><p><strong>Zéro privilège implicite :</strong> une identité inconnue reste sans droit.</p></div>${oidcConfig ? '<a class="button" href="/auth/infomaniak/start">Continuer avec Infomaniak</a>' : '<p>Le fournisseur OIDC n’est pas encore configuré.</p>'}`;
       writeHtml(response, 200, "Accueil", content);
       return;
@@ -281,6 +307,47 @@ export function createHttpHandler({ repository, authenticate = async () => null,
       response.setHeader("location", "/");
       response.setHeader("set-cookie", cookie(OIDC_SESSION_COOKIE, "", { maxAge: 0 }));
       response.end();
+      return;
+    }
+    if (url.pathname === "/admin/access") {
+      if (request.method !== "GET") {
+        response.setHeader("allow", "GET");
+        writeJson(response, 405, { error: "method_not_allowed" });
+        return;
+      }
+      let session;
+      try {
+        if (!oidcConfig) throw new Error("oidc_not_configured");
+        session = open(parseCookies(request.headers.cookie).get(OIDC_SESSION_COOKIE), oidcConfig.sessionSecret, "oidc-session");
+      } catch {
+        writeHtml(response, 401, "Connexion requise", '<h1>Connexion requise</h1><p>Une session NSK valide est nécessaire.</p><a class="button" href="/">Se connecter</a>');
+        return;
+      }
+      if (session.status !== "authenticated" || !session.identityId || !session.csrf) {
+        writeHtml(response, 401, "Nouvelle connexion requise", '<h1>Nouvelle connexion requise</h1><p>Ferme puis renouvelle ta session afin d’accéder à l’administration sécurisée.</p><a class="button" href="/">Retour</a>');
+        return;
+      }
+      let access;
+      try {
+        access = await authorizeAccessAdministration(repository, session.identityId);
+      } catch {
+        console.error(JSON.stringify({ event: "access_administration_unavailable", reason: "authorization_repository_failure" }));
+        writeHtml(response, 503, "Administration indisponible", '<h1>Administration momentanément indisponible</h1><p>Aucune donnée d’accès ne peut être vérifiée pour le moment.</p><a class="button" href="/">Retour</a>');
+        return;
+      }
+      if (!access.allowed) {
+        writeHtml(response, 403, "Accès refusé", '<h1>Accès refusé</h1><p>Cette identité ne possède pas la permission dédiée à la consultation des accès. Aucun droit implicite n’est accordé.</p><a class="button" href="/">Retour</a>');
+        return;
+      }
+      try {
+        const [identities, applications, assignments] = await Promise.all([
+          repository.listIdentities(), repository.listApplications(), repository.listAllAssignments(),
+        ]);
+        writeHtml(response, 200, "Utilisateurs et accès", renderAccessAdministration(identities, applications, assignments));
+      } catch {
+        console.error(JSON.stringify({ event: "access_administration_unavailable", reason: "listing_repository_failure" }));
+        writeHtml(response, 503, "Administration indisponible", '<h1>Administration momentanément indisponible</h1><p>Le registre n’a pas pu être consulté. Aucun accès n’a été modifié.</p><a class="button" href="/">Retour</a>');
+      }
       return;
     }
     const adminRoute = url.pathname.match(/^\/admin\/link-requests(?:\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\/(approve|reject))?$/i);
