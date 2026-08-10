@@ -62,7 +62,8 @@ async function readJson(request, maxBodyBytes) {
   }
 
   try {
-    return JSON.parse(await readBody(request, maxBodyBytes));
+    const rawBody = await readBody(request, maxBodyBytes);
+    return { payload: JSON.parse(rawBody), rawBody };
   } catch (error) {
     if (error instanceof HttpInputError) throw error;
     throw new HttpInputError(400, "invalid_json");
@@ -324,8 +325,8 @@ export function createHttpHandler({ repository, authenticate = async () => null,
 
     let correlationId = randomUUID();
     try {
-      const payload = await readJson(request, maxBodyBytes);
-      const principal = await authenticate(request);
+      const { payload, rawBody } = await readJson(request, maxBodyBytes);
+      const principal = await authenticate(request, { rawBody });
       correlationId = principal?.correlationId || correlationId;
       const result = await evaluateAccessRequestAsync({ repository, principal, payload });
       writeJson(response, result.status, result.body, result.correlationId);
