@@ -195,6 +195,31 @@ Après renouvellement de la session OIDC, le parcours réel confirme :
 - aucun rôle ni droit applicatif créé par ce pouvoir administratif ou par un
   rattachement.
 
+## Première application pilote raccordée
+
+Les PR **#27** de N09 – Administration et **#7** de N09 – Suivi des tâches ont
+été fusionnées le **10 août 2026**. La release Administration active porte le
+commit `1ed7c308322c056d6441f06937594a31ce59e0fb` et la release précédente
+`9ea0c8a2` reste disponible pour un retour arrière immédiat.
+
+Les **78 tests Node** Administration et les **20 tests Node** Suivi des tâches
+réussissent sur Infomaniak. Le client technique `tasks-preprod` possède un
+secret aléatoire propre à la préproduction, stocké uniquement dans les deux
+fichiers d'environnement en permissions `600`. Aucun cookie ou secret humain
+n'est partagé entre les sous-domaines.
+
+L'amorçage idempotent a créé l'application `n09-suivi-taches` et une seule
+affectation pour l'identité NSK active de Fred TRAVERS. Cette affectation porte
+uniquement `tasks:read`. La chaîne d'audit est valide et aucun pouvoir
+d'administration, d'écriture ou de rattachement n'a été ajouté.
+
+La preuve interservices réelle confirme :
+
+- première décision signée : `200`, `access_granted` ;
+- rejeu strictement identique : `401` ;
+- `GET /health` : `200` après redémarrage explicite ;
+- secret absent des journaux et des réponses.
+
 ## Prochain jalon
 
 Le prochain jalon est l'autorisation distincte d'une première application
