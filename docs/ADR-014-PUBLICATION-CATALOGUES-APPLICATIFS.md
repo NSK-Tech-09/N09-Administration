@@ -65,4 +65,3 @@ Le registre authentifié affiche les deux catalogues et leurs prérequis. Le
 constat final reste à une identité active, deux applications actives et quatre
 affectations actives : aucune publication n'a créé, modifié ou révoqué un
 droit.
-
