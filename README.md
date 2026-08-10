@@ -43,11 +43,16 @@ créer aucun droit applicatif. Il ne gère aucun mot de passe externe.
 
 La première frontière d’API interne permet déjà d’évaluer un accès sans partager
 la base avec les applications. Un transport HTTP fermé par défaut est validé en
-local : sans adaptateur d’authentification, toute décision est refusée. La
-Le service Node et son adaptateur Infomaniak OIDC sont déployés en
+local : sans adaptateur d'authentification, toute décision est refusée. Le
+service Node et son adaptateur Infomaniak OIDC sont déployés en
 préproduction. L'adaptateur réalise Authorization Code avec PKCE, vérifie la
 signature RS256 et les claims obligatoires, puis crée seulement une session de
 preuve à rattacher : aucun compte ni droit NSK n'est créé automatiquement.
+
+Une interface authentifiée permet de traiter les demandes de rattachement. Elle
+exige la permission centrale exacte `administration:identity-links:decide`, une
+preuve CSRF et une justification auditée. L'approbation relie une preuve externe
+à une identité NSK active, sans créer de rôle ni de droit applicatif.
 
 Les objets de gouvernance sont conservés dans la même frontière transactionnelle
 que leur événement d’audit : une mutation sans preuve valide est annulée.
@@ -85,6 +90,7 @@ ne contient aucun secret réel. La production reste inchangée.
 - [`docs/ADR-005-MARIADB-PRODUCTION.md`](docs/ADR-005-MARIADB-PRODUCTION.md)
 - [`docs/ADR-006-TRANSPORT-HTTP.md`](docs/ADR-006-TRANSPORT-HTTP.md)
 - [`docs/ADR-007-DEMANDES-RATTACHEMENT-NODE.md`](docs/ADR-007-DEMANDES-RATTACHEMENT-NODE.md)
+- [`docs/ADR-008-ADMINISTRATION-RATTACHEMENTS.md`](docs/ADR-008-ADMINISTRATION-RATTACHEMENTS.md)
 - [`docs/ETAT-PREPROD-INFOMANIAK.md`](docs/ETAT-PREPROD-INFOMANIAK.md)
 - [`docs/CONFORMITE-NSES.md`](docs/CONFORMITE-NSES.md)
 - [`docs/CONTRAT-API-INTERNE.md`](docs/CONTRAT-API-INTERNE.md)

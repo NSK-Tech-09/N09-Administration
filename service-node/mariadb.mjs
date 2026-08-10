@@ -167,6 +167,17 @@ export class MariaDbRepository {
     return mapLinkRequest(rows[0]);
   }
 
+  async listLinkRequests(status = null) {
+    const [rows] = status
+      ? await this.pool.execute(
+        "SELECT * FROM external_identity_link_requests WHERE status = ? ORDER BY requested_at DESC", [status],
+      )
+      : await this.pool.execute(
+        "SELECT * FROM external_identity_link_requests ORDER BY requested_at DESC",
+      );
+    return rows.map(mapLinkRequest);
+  }
+
   async findActiveLinkRequest(issuer, subject, now = new Date()) {
     const [rows] = await this.pool.execute(
       `SELECT * FROM external_identity_link_requests
@@ -203,9 +214,10 @@ export class MariaDbRepository {
       if (request.status !== "pending") throw new Error("link request is not pending");
       if (now >= new Date(request.expires_at)) throw new Error("link request has expired");
       const [identities] = await connection.execute(
-        "SELECT 1 FROM identities WHERE identity_id = ? FOR UPDATE", [identityId],
+        "SELECT status FROM identities WHERE identity_id = ? FOR UPDATE", [identityId],
       );
       if (!identities.length) throw new Error("NSK identity not found");
+      if (identities[0].status !== "active") throw new Error("NSK identity is not active");
       const link = {
         externalIdentityId: randomUUID(), identityId, issuer: request.issuer,
         subject: request.subject, providerKey: request.provider_key, status: "active",
@@ -287,6 +299,20 @@ export class MariaDbRepository {
     );
     const row = rows[0];
     return row ? { identityId: row.identity_id, email: row.email, displayName: row.display_name, status: row.status } : null;
+  }
+
+  async listIdentities(status = null) {
+    const [rows] = status
+      ? await this.pool.execute(
+        "SELECT identity_id, email, display_name, status FROM identities WHERE status = ? ORDER BY display_name, identity_id", [status],
+      )
+      : await this.pool.execute(
+        "SELECT identity_id, email, display_name, status FROM identities ORDER BY display_name, identity_id",
+      );
+    return rows.map((row) => ({
+      identityId: row.identity_id, email: row.email,
+      displayName: row.display_name, status: row.status,
+    }));
   }
 
   async getApplication(applicationId) {
