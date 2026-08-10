@@ -39,13 +39,15 @@ transactionnel, un journal d’audit append-only vérifiable, les groupes, les
 délégations bornées, les demandes d’accès par application et le cycle audité de
 rattachement d’une identité externe. Une connexion inconnue crée uniquement une
 demande temporaire : son approbation explicite établit le lien d’identité sans
-créer aucun droit applicatif. Il ne gère encore
-ni mots de passe, ni jetons, ni interface réseau.
+créer aucun droit applicatif. Il ne gère aucun mot de passe externe.
 
 La première frontière d’API interne permet déjà d’évaluer un accès sans partager
 la base avec les applications. Un transport HTTP fermé par défaut est validé en
 local : sans adaptateur d’authentification, toute décision est refusée. La
-validation OIDC et le déploiement sur la préproduction restent à brancher.
+Le service Node et son adaptateur Infomaniak OIDC sont déployés en
+préproduction. L'adaptateur réalise Authorization Code avec PKCE, vérifie la
+signature RS256 et les claims obligatoires, puis crée seulement une session de
+preuve à rattacher : aucun compte ni droit NSK n'est créé automatiquement.
 
 Les objets de gouvernance sont conservés dans la même frontière transactionnelle
 que leur événement d’audit : une mutation sans preuve valide est annulée.
@@ -68,9 +70,9 @@ La même vérification est exécutée automatiquement à chaque PR et mise à jo
 `main`. Le dépôt public utilise les minutes Actions non facturées par GitHub.
 
 Le service Node dispose de points d'entrée explicites pour son écoute locale
-fermée et pour l'amorçage synthétique de la préproduction. Les variables
-attendues sont décrites dans `service-node/.env.example` ; ce fichier ne contient
-aucun secret réel. Aucun artefact de production n’est livré à ce stade.
+fermée, l'amorçage synthétique de la préproduction et le parcours OIDC. Les
+variables attendues sont décrites dans `service-node/.env.example` ; ce fichier
+ne contient aucun secret réel. La production reste inchangée.
 
 ## Documents
 
