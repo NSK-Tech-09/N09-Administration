@@ -249,13 +249,48 @@ Le parcours réel authentifié confirme :
   actives après l'amorçage ;
 - aucune révocation réelle et aucun octroi arbitraire pendant la validation.
 
+## Catalogues applicatifs publiés et validés
+
+La PR **#34** de N09 – Administration a été fusionnée avec le commit
+`6acc1ac9299a5059dcf5445c2ca88efba3eec0e7`. La release active est isolée dans
+`releases/6acc1ac9` ; `releases/e89d95ee` reste disponible pour un retour
+arrière immédiat. Les **112 tests Node** réussissent sur Infomaniak et
+`GET /health` répond `200` avec `{"status":"ok"}` après le redémarrage
+explicite.
+
+La PR **#10** de N09 – Suivi des tâches a été fusionnée avec le commit
+`232470688c732be37fa148b2e3434a00c4485baf`. La release
+`releases/23247068` a été reconstruite depuis la release active précédente,
+avec vérification SHA-256 des huit fichiers modifiés. Les **31 tests Node**
+réussissent sur Infomaniak et `GET /api/health` confirme ce commit exact, la
+base prête et le mode lecture seule.
+
+La table additive `application_access_catalog_versions` a été créée sur la
+seule base `6p7h3x_n09_admin_preprod`. L'identité MariaDB de migration, limitée
+à cette base, a été créée pour l'opération puis supprimée ; seuls les deux
+utilisateurs applicatifs permanents subsistent.
+
+Les catalogues version 1 ont été publiés et affichés dans le registre :
+
+- N09 – Administration : empreinte
+  `26e5ff8ec29ae1faeb3ce688e383a63b059047f21b4a3e26dad34f65773159ad` ;
+- N09 – Suivi des tâches : empreinte
+  `b550eda66d0cb82c1c0974854daa221231120da6f66d1430d71b7dd096c90961`.
+
+Chaque répétition a renvoyé `created: false` avec la même empreinte. La chaîne
+d'audit est valide après la publication interservices. Le parcours authentifié
+affiche une identité active, deux applications actives et quatre affectations
+actives, soit exactement l'état antérieur : aucun octroi, retrait ou profil
+métier n'a été créé par ce lot. Les rôles futurs de Suivi des tâches restent
+explicitement `planned` et la création automatique par courriel reste interdite.
+
 ## Prochain jalon
 
-Le prochain jalon est la publication par chaque application de son catalogue de
-rôles et de ses prérequis de provisionnement. Les octrois centraux resteront
-fermés tant que ces contrats ne permettront pas de créer un profil applicatif
-cohérent. La migration des utilisateurs de N09 – Suivi des tâches pourra alors
-être préparée sans déplacer ses rôles métier, ses périmètres locaux ni ses
-préférences de notification.
+Le prochain jalon est l'inventaire contrôlé des profils existants de N09 –
+Suivi des tâches et leur rapprochement exclusif par `identity_id`. Chaque profil,
+rôle métier et appartenance de site devra être confirmé par l'application avant
+tout nouvel octroi. La production et l'autorité locale restent inchangées tant
+que la matrice de parité et le retour arrière ne sont pas validés.
 
 La production et les applications existantes restent inchangées.
+
