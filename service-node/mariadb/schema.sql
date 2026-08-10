@@ -51,6 +51,40 @@ CREATE TABLE IF NOT EXISTS applications (
   CONSTRAINT applications_registration CHECK (registration_policy IN ('closed', 'invitation', 'approval'))
 ) ENGINE=InnoDB;
 
+CREATE TABLE IF NOT EXISTS application_redirect_uris (
+  application_id VARCHAR(100) NOT NULL,
+  redirect_uri VARCHAR(2048) NOT NULL,
+  redirect_uri_hash CHAR(64) NOT NULL,
+  status VARCHAR(32) NOT NULL,
+  PRIMARY KEY (application_id, redirect_uri_hash),
+  CONSTRAINT application_redirects_application_fk FOREIGN KEY (application_id) REFERENCES applications(application_id),
+  CONSTRAINT application_redirects_status CHECK (status IN ('active', 'revoked'))
+) ENGINE=InnoDB;
+
+CREATE TABLE IF NOT EXISTS application_login_policies (
+  application_id VARCHAR(100) PRIMARY KEY,
+  required_permission VARCHAR(150) NOT NULL,
+  status VARCHAR(32) NOT NULL,
+  CONSTRAINT application_login_policy_application_fk FOREIGN KEY (application_id) REFERENCES applications(application_id),
+  CONSTRAINT application_login_policy_status CHECK (status IN ('active', 'disabled'))
+) ENGINE=InnoDB;
+
+CREATE TABLE IF NOT EXISTS application_authorization_codes (
+  code_hash CHAR(64) PRIMARY KEY,
+  identity_id CHAR(36) NOT NULL,
+  application_id VARCHAR(100) NOT NULL,
+  redirect_uri VARCHAR(2048) NOT NULL,
+  code_challenge CHAR(43) NOT NULL,
+  issued_at DATETIME(6) NOT NULL,
+  expires_at DATETIME(6) NOT NULL,
+  consumed_at DATETIME(6),
+  CONSTRAINT application_codes_identity_fk FOREIGN KEY (identity_id) REFERENCES identities(identity_id),
+  CONSTRAINT application_codes_application_fk FOREIGN KEY (application_id) REFERENCES applications(application_id),
+  CONSTRAINT application_codes_validity CHECK (expires_at > issued_at),
+  INDEX application_codes_expiry (expires_at),
+  INDEX application_codes_identity_application (identity_id, application_id)
+) ENGINE=InnoDB;
+
 CREATE TABLE IF NOT EXISTS access_assignments (
   assignment_id CHAR(36) PRIMARY KEY,
   subject_id CHAR(36) NOT NULL,

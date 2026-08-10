@@ -4,6 +4,9 @@ import { createAuditEvent } from "./audit.mjs";
 import { createLinkRequest } from "./federated-identity.mjs";
 import { authorizeIdentityLinkAdministration } from "./identity-link-admin.mjs";
 import {
+  exchangeApplicationLoginCode, issueApplicationLoginCode, validateAuthorizationRequest,
+} from "./application-login.mjs";
+import {
   authorizationRequest, cookie, exchangeAuthorizationCode, INFOMANIAK_ISSUER,
   OIDC_SESSION_COOKIE, OIDC_TRANSACTION_COOKIE, open, parseCookies, seal, verifyIdToken,
 } from "./oidc.mjs";
@@ -92,6 +95,12 @@ function redirect(response, location) {
   response.end();
 }
 
+function safeLoginReturnPath(value) {
+  if (typeof value !== "string" || !value.startsWith("/application-login/authorize?") || value.includes("\r") || value.includes("\n")) return null;
+  const parsed = new URL(value, "https://n09.invalid");
+  return parsed.origin === "https://n09.invalid" ? `${parsed.pathname}${parsed.search}` : null;
+}
+
 function formatDate(value) {
   return new Intl.DateTimeFormat("fr-FR", { dateStyle: "medium", timeStyle: "short", timeZone: "Europe/Paris" }).format(new Date(value));
 }
@@ -119,6 +128,47 @@ export function createHttpHandler({ repository, authenticate = async () => null,
       writeJson(response, 200, { status: "ok" });
       return;
     }
+    if (url.pathname === "/application-login/authorize" && request.method === "GET") {
+      try {
+        if (!oidcConfig) throw new Error("oidc_not_configured");
+        const loginRequest = validateAuthorizationRequest(url.searchParams);
+        let session;
+        try { session = open(parseCookies(request.headers.cookie).get(OIDC_SESSION_COOKIE), oidcConfig.sessionSecret, "oidc-session"); } catch { /* login below */ }
+        if (!session) {
+          redirect(response, `/auth/infomaniak/start?return_to=${encodeURIComponent(`${url.pathname}${url.search}`)}`);
+          return;
+        }
+        const { code } = await issueApplicationLoginCode({ repository, session, request: loginRequest });
+        const callback = new URL(loginRequest.redirectUri);
+        callback.searchParams.set("code", code);
+        callback.searchParams.set("state", loginRequest.state);
+        redirect(response, callback.toString());
+      } catch (error) {
+        const denied = error?.message === "application_access_denied";
+        const invalid = ["invalid_authorization_request", "redirect_uri_not_allowed", "application_login_not_configured", "authentication_required"].includes(error?.message);
+        const unavailable = !denied && !invalid;
+        writeHtml(response, unavailable ? 503 : denied ? 403 : 400, "Connexion applicative refusée",
+          `<h1>Connexion applicative refusée</h1><p>${unavailable ? "Le registre central n’est pas vérifiable pour le moment." : denied ? "Cette identité ne possède pas l’autorisation centrale requise." : "La demande de connexion n’est pas valide ou n’est pas enregistrée."} Aucun accès n’a été ouvert.</p><a class="button" href="/">Retour</a>`);
+      }
+      return;
+    }
+    if (url.pathname === "/internal/v1/application-login/token" && request.method === "POST") {
+      let correlationId = randomUUID();
+      try {
+        const { payload, rawBody } = await readJson(request, maxBodyBytes);
+        const principal = await authenticate(request, { rawBody });
+        correlationId = principal?.correlationId || correlationId;
+        const identity = await exchangeApplicationLoginCode({ repository, principal, payload });
+        writeJson(response, 200, identity, correlationId);
+      } catch (error) {
+        if (error instanceof HttpInputError) writeJson(response, error.status, { error: error.code }, correlationId);
+        else if (error?.message === "invalid_technical_client") writeJson(response, 401, { error: "authentication_required" }, correlationId);
+        else if (["invalid_token_request", "invalid_or_consumed_code", "identity_not_active"].includes(error?.message)) {
+          writeJson(response, 400, { error: "invalid_grant" }, correlationId);
+        } else writeJson(response, 503, { error: "identity_service_unavailable" }, correlationId);
+      }
+      return;
+    }
     if (url.pathname === "/" && request.method === "GET") {
       let session = null;
       if (oidcConfig) {
@@ -142,6 +192,8 @@ export function createHttpHandler({ repository, authenticate = async () => null,
     if (url.pathname === "/auth/infomaniak/start" && request.method === "GET") {
       if (!oidcConfig) { writeJson(response, 503, { error: "oidc_not_configured" }); return; }
       const { url: authorizationUrl, transaction } = authorizationRequest(oidcConfig);
+      const returnTo = safeLoginReturnPath(url.searchParams.get("return_to"));
+      if (returnTo) transaction.returnTo = returnTo;
       response.statusCode = 302;
       response.setHeader("cache-control", "no-store");
       response.setHeader("location", authorizationUrl.toString());
@@ -200,7 +252,7 @@ export function createHttpHandler({ repository, authenticate = async () => null,
         const sessionCookie = cookie(OIDC_SESSION_COOKIE, seal(session, oidcConfig.sessionSecret, "oidc-session"), { maxAge: 8 * 60 * 60 });
         response.statusCode = 303;
         response.setHeader("cache-control", "no-store");
-        response.setHeader("location", "/");
+        response.setHeader("location", session.status === "authenticated" && transaction.returnTo ? transaction.returnTo : "/");
         response.setHeader("set-cookie", [clearTransaction, sessionCookie]);
         response.end();
       } catch (error) {

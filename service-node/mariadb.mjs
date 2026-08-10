@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { canonicalJson, eventHash, verifyAuditChain } from "./audit.mjs";
 import { externalPrincipalKey } from "./federated-identity.mjs";
 
@@ -322,6 +322,95 @@ export class MariaDbRepository {
     );
     const row = rows[0];
     return row ? { applicationId: row.application_id, displayName: row.display_name, status: row.status, registrationPolicy: row.registration_policy } : null;
+  }
+
+  async saveApplicationRedirectUri(applicationId, redirectUri, auditEvent) {
+    const redirectHash = createHash("sha256").update(redirectUri, "utf8").digest("hex");
+    return this.#transaction(async (connection) => {
+      await connection.execute(
+        `INSERT INTO application_redirect_uris(application_id, redirect_uri, redirect_uri_hash, status)
+         VALUES (?, ?, ?, 'active')
+         ON DUPLICATE KEY UPDATE redirect_uri = VALUES(redirect_uri), status = 'active'`,
+        [applicationId, redirectUri, redirectHash],
+      );
+      await this.#appendAudit(connection, auditEvent);
+    });
+  }
+
+  async isApplicationRedirectUriAllowed(applicationId, redirectUri) {
+    const redirectHash = createHash("sha256").update(redirectUri, "utf8").digest("hex");
+    const [rows] = await this.pool.execute(
+      `SELECT 1 FROM application_redirect_uris
+       WHERE application_id = ? AND redirect_uri_hash = ? AND redirect_uri = ? AND status = 'active'`,
+      [applicationId, redirectHash, redirectUri],
+    );
+    return rows.length === 1;
+  }
+
+  async getApplicationRedirectUri(applicationId, redirectUri) {
+    const redirectHash = createHash("sha256").update(redirectUri, "utf8").digest("hex");
+    const [rows] = await this.pool.execute(
+      `SELECT application_id, redirect_uri, status FROM application_redirect_uris
+       WHERE application_id = ? AND redirect_uri_hash = ? AND redirect_uri = ?`,
+      [applicationId, redirectHash, redirectUri],
+    );
+    const row = rows[0];
+    return row ? { applicationId: row.application_id, redirectUri: row.redirect_uri, status: row.status } : null;
+  }
+
+  async saveApplicationLoginPolicy(applicationId, requiredPermission, auditEvent) {
+    return this.#transaction(async (connection) => {
+      await connection.execute(
+        `INSERT INTO application_login_policies(application_id, required_permission, status)
+         VALUES (?, ?, 'active')
+         ON DUPLICATE KEY UPDATE required_permission = VALUES(required_permission), status = 'active'`,
+        [applicationId, requiredPermission],
+      );
+      await this.#appendAudit(connection, auditEvent);
+    });
+  }
+
+  async getApplicationLoginPolicy(applicationId) {
+    const [rows] = await this.pool.execute(
+      `SELECT application_id, required_permission, status FROM application_login_policies
+       WHERE application_id = ?`, [applicationId],
+    );
+    const row = rows[0];
+    return row ? { applicationId: row.application_id, requiredPermission: row.required_permission, status: row.status } : null;
+  }
+
+  async saveApplicationAuthorizationCode(record, auditEvent) {
+    return this.#transaction(async (connection) => {
+      await connection.execute(
+        `INSERT INTO application_authorization_codes(
+           code_hash, identity_id, application_id, redirect_uri, code_challenge, issued_at, expires_at, consumed_at
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, NULL)`,
+        [record.codeHash, record.identityId, record.applicationId, record.redirectUri,
+         record.codeChallenge, asMariaDate(record.issuedAt), asMariaDate(record.expiresAt)],
+      );
+      await this.#appendAudit(connection, auditEvent);
+    });
+  }
+
+  async consumeApplicationAuthorizationCode({ codeHash, applicationId, redirectUri, codeChallenge, now = new Date() }, auditEvent) {
+    return this.#transaction(async (connection) => {
+      const [rows] = await connection.execute(
+        `SELECT * FROM application_authorization_codes WHERE code_hash = ? FOR UPDATE`, [codeHash],
+      );
+      const row = rows[0];
+      if (!row || row.consumed_at || row.application_id !== applicationId || row.redirect_uri !== redirectUri ||
+          row.code_challenge !== codeChallenge || new Date(row.expires_at) <= now) return null;
+      await connection.execute(
+        "UPDATE application_authorization_codes SET consumed_at = ? WHERE code_hash = ?",
+        [asMariaDate(now), codeHash],
+      );
+      await this.#appendAudit(connection, auditEvent);
+      return {
+        codeHash: row.code_hash, identityId: row.identity_id, applicationId: row.application_id,
+        redirectUri: row.redirect_uri, codeChallenge: row.code_challenge,
+        issuedAt: asIso(row.issued_at), expiresAt: asIso(row.expires_at), consumedAt: now.toISOString(),
+      };
+    });
   }
 
   async listAssignments(identityId, applicationId) {
