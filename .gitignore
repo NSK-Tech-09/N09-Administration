@@ -5,3 +5,4 @@ __pycache__/
 .pytest_cache/
 var/
 *.sqlite3
+node_modules/
