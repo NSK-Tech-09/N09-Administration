@@ -3,7 +3,7 @@ import { generateKeyPairSync, sign } from "node:crypto";
 import test from "node:test";
 import {
   authorizationRequest, INFOMANIAK_ENDPOINTS, INFOMANIAK_ISSUER, oidcConfigFromEnvironment,
-  open, pkceChallenge, seal, verifyIdToken,
+  exchangeAuthorizationCode, open, pkceChallenge, seal, verifyIdToken,
 } from "./oidc.mjs";
 
 const config = {
@@ -41,6 +41,21 @@ test("impose HTTPS et un secret de session suffisamment long", () => {
     INFOMANIAK_CLIENT_ID: "id", INFOMANIAK_CLIENT_SECRET: "secret",
     INFOMANIAK_REDIRECT_URI: "http://example.invalid/callback", N09_SESSION_SECRET: config.sessionSecret,
   }), /oidc_redirect_must_use_https/);
+});
+
+test("échange le code avec les identifiants attendus dans le formulaire", async () => {
+  let request;
+  const fetchImpl = async (url, options) => {
+    request = { url, options };
+    return new Response(JSON.stringify({ id_token: "signed-token" }), { status: 200 });
+  };
+  assert.equal(await exchangeAuthorizationCode({ code: "code-1", verifier: "verifier-1", config, fetchImpl }), "signed-token");
+  const body = new URLSearchParams(request.options.body);
+  assert.equal(request.url, INFOMANIAK_ENDPOINTS.token);
+  assert.equal(request.options.headers.authorization, undefined);
+  assert.equal(body.get("client_id"), config.clientId);
+  assert.equal(body.get("client_secret"), config.clientSecret);
+  assert.equal(body.get("code_verifier"), "verifier-1");
 });
 
 test("vérifie signature RS256, émetteur, audience, dates et nonce", async () => {

@@ -115,7 +115,10 @@ export function createHttpHandler({ repository, authenticate = async () => null,
         response.setHeader("location", "/");
         response.setHeader("set-cookie", [clearTransaction, sessionCookie]);
         response.end();
-      } catch {
+      } catch (error) {
+        const reason = typeof error?.message === "string" && /^[a-z0-9_]+$/.test(error.message)
+          ? error.message : "unexpected_oidc_error";
+        console.error(JSON.stringify({ event: "oidc_callback_failed", reason }));
         writeHtml(response, 400, "Connexion non validée", "<h1>Connexion non validée</h1><p>La preuve d’identité n’a pas pu être vérifiée. Aucun compte et aucun droit n’ont été modifiés.</p><a class=\"button\" href=\"/\">Retour</a>", [clearTransaction]);
       }
       return;
