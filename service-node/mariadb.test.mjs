@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { createAuditEvent } from "./audit.mjs";
+import { createLinkRequest } from "./federated-identity.mjs";
 import { createMariaDbPool, MariaDbRepository } from "./mariadb.mjs";
 
 const identity = { identityId: "identity-1", email: "COLLEGUE@example.test", displayName: "Collègue", status: "active" };
@@ -52,4 +53,22 @@ test("refuse un contexte d’audit incohérent avant d’ouvrir une transaction"
   const pool = fakePool();
   await assert.rejects(new MariaDbRepository(pool).saveIdentity(identity, audit({ subjectId: "identity-2" })), /must match/);
   assert.equal(pool.calls.length, 0);
+});
+
+test("persiste la demande de rattachement et son audit dans la même transaction", async () => {
+  const pool = fakePool();
+  const requestedAt = new Date("2026-08-10T09:00:00Z");
+  const request = createLinkRequest({
+    issuer: "https://login.infomaniak.com", subject: "external-42",
+    providerKey: "infomaniak", now: requestedAt,
+  });
+  const event = createAuditEvent({
+    action: "external_identity.link_requested", result: "pending",
+    source: "tests", correlationId: "correlation-link", occurredAt: requestedAt,
+  });
+  await new MariaDbRepository(pool).saveLinkRequest(request, event);
+  assert.equal(pool.calls[0], "begin");
+  assert.equal(pool.calls.some((call) => typeof call === "object" && call.sql.includes("INSERT INTO external_identity_link_requests")), true);
+  assert.equal(pool.calls.filter((call) => typeof call === "object" && call.sql.includes("INSERT INTO audit_events")).length, 1);
+  assert.equal(pool.calls.at(-2), "commit");
 });

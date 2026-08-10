@@ -1,4 +1,6 @@
+import { randomUUID } from "node:crypto";
 import { canonicalJson, eventHash, verifyAuditChain } from "./audit.mjs";
+import { externalPrincipalKey } from "./federated-identity.mjs";
 
 function required(config, name) {
   const value = config[name];
@@ -33,6 +35,22 @@ function asMariaDate(value) {
 
 function parseJson(value) {
   return typeof value === "string" ? JSON.parse(value) : value;
+}
+
+function asIso(value) {
+  return value ? new Date(value).toISOString() : null;
+}
+
+function mapLinkRequest(row) {
+  if (!row) return null;
+  return {
+    requestId: row.request_id, issuer: row.issuer, subject: row.subject,
+    providerKey: row.provider_key, emailHint: row.email_hint,
+    displayNameHint: row.display_name_hint, requestedAt: asIso(row.requested_at),
+    expiresAt: asIso(row.expires_at), status: row.status,
+    targetIdentityId: row.target_identity_id, decidedBy: row.decided_by,
+    decisionJustification: row.decision_justification,
+  };
 }
 
 export class MariaDbRepository {
@@ -108,6 +126,123 @@ export class MariaDbRepository {
          ON DUPLICATE KEY UPDATE display_name = VALUES(display_name), status = VALUES(status),
            registration_policy = VALUES(registration_policy)`,
         [application.applicationId, application.displayName.trim(), application.status, application.registrationPolicy],
+      );
+      await this.#appendAudit(connection, auditEvent);
+    });
+  }
+
+  async saveLinkRequest(request, auditEvent) {
+    if (request.status !== "pending") throw new Error("a new link request must be pending");
+    if (auditEvent.action !== "external_identity.link_requested") throw new Error("invalid audit action for link request");
+    return this.#transaction(async (connection) => {
+      const [linked] = await connection.execute(
+        "SELECT 1 FROM external_identities WHERE issuer = ? AND subject = ? FOR UPDATE",
+        [request.issuer, request.subject],
+      );
+      if (linked.length) throw new Error("external identity is already linked");
+      const [pending] = await connection.execute(
+        `SELECT request_id FROM external_identity_link_requests
+         WHERE issuer = ? AND subject = ? AND status = 'pending' AND expires_at > ?
+         FOR UPDATE`,
+        [request.issuer, request.subject, asMariaDate(request.requestedAt)],
+      );
+      if (pending.length) throw new Error("an active link request already exists");
+      await connection.execute(
+        `INSERT INTO external_identity_link_requests(
+           request_id, issuer, subject, provider_key, email_hint, display_name_hint,
+           requested_at, expires_at, status, target_identity_id, decided_by, decision_justification
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', NULL, NULL, '')`,
+        [request.requestId, request.issuer, request.subject, request.providerKey,
+         request.emailHint, request.displayNameHint, asMariaDate(request.requestedAt),
+         asMariaDate(request.expiresAt)],
+      );
+      await this.#appendAudit(connection, auditEvent);
+    });
+  }
+
+  async getLinkRequest(requestId) {
+    const [rows] = await this.pool.execute(
+      "SELECT * FROM external_identity_link_requests WHERE request_id = ?", [requestId],
+    );
+    return mapLinkRequest(rows[0]);
+  }
+
+  async findActiveLinkRequest(issuer, subject, now = new Date()) {
+    const [rows] = await this.pool.execute(
+      `SELECT * FROM external_identity_link_requests
+       WHERE issuer = ? AND subject = ? AND status = 'pending' AND expires_at > ?
+       ORDER BY requested_at DESC LIMIT 1`,
+      [issuer, subject, asMariaDate(now)],
+    );
+    return mapLinkRequest(rows[0]);
+  }
+
+  async findExternalIdentity(issuer, subject) {
+    const [rows] = await this.pool.execute(
+      `SELECT external_identity_id, identity_id, issuer, subject, provider_key, status, linked_at
+       FROM external_identities WHERE issuer = ? AND subject = ?`, [issuer, subject],
+    );
+    const row = rows[0];
+    return row ? {
+      externalIdentityId: row.external_identity_id, identityId: row.identity_id,
+      issuer: row.issuer, subject: row.subject, providerKey: row.provider_key,
+      status: row.status, linkedAt: asIso(row.linked_at),
+    } : null;
+  }
+
+  async approveLinkRequest(requestId, identityId, decidedBy, justification, auditEvent, now = new Date()) {
+    if (!String(justification ?? "").trim()) throw new Error("approval justification is required");
+    if (auditEvent.action !== "external_identity.link_approved") throw new Error("invalid audit action for link approval");
+    if (auditEvent.actor_id !== decidedBy || auditEvent.subject_id !== identityId) throw new Error("audit identities must match approval");
+    return this.#transaction(async (connection) => {
+      const [requests] = await connection.execute(
+        "SELECT * FROM external_identity_link_requests WHERE request_id = ? FOR UPDATE", [requestId],
+      );
+      const request = requests[0];
+      if (!request) throw new Error("link request not found");
+      if (request.status !== "pending") throw new Error("link request is not pending");
+      if (now >= new Date(request.expires_at)) throw new Error("link request has expired");
+      const [identities] = await connection.execute(
+        "SELECT 1 FROM identities WHERE identity_id = ? FOR UPDATE", [identityId],
+      );
+      if (!identities.length) throw new Error("NSK identity not found");
+      const link = {
+        externalIdentityId: randomUUID(), identityId, issuer: request.issuer,
+        subject: request.subject, providerKey: request.provider_key, status: "active",
+        linkedAt: now.toISOString(),
+      };
+      await connection.execute(
+        `INSERT INTO external_identities(
+           external_identity_id, identity_id, issuer, subject, provider_key, principal_hash, status, linked_at
+         ) VALUES (?, ?, ?, ?, ?, ?, 'active', ?)`,
+        [link.externalIdentityId, identityId, link.issuer, link.subject, link.providerKey,
+         externalPrincipalKey(link.issuer, link.subject), asMariaDate(link.linkedAt)],
+      );
+      await connection.execute(
+        `UPDATE external_identity_link_requests SET status = 'approved', target_identity_id = ?,
+           decided_by = ?, decision_justification = ? WHERE request_id = ?`,
+        [identityId, decidedBy, justification.trim(), requestId],
+      );
+      await this.#appendAudit(connection, auditEvent);
+      return link;
+    });
+  }
+
+  async rejectLinkRequest(requestId, decidedBy, justification, auditEvent) {
+    if (!String(justification ?? "").trim()) throw new Error("rejection justification is required");
+    if (auditEvent.action !== "external_identity.link_rejected") throw new Error("invalid audit action for link rejection");
+    if (auditEvent.actor_id !== decidedBy) throw new Error("audit actor must match decision maker");
+    return this.#transaction(async (connection) => {
+      const [requests] = await connection.execute(
+        "SELECT * FROM external_identity_link_requests WHERE request_id = ? FOR UPDATE", [requestId],
+      );
+      const request = requests[0];
+      if (!request) throw new Error("link request not found");
+      if (request.status !== "pending") throw new Error("link request is not pending");
+      await connection.execute(
+        `UPDATE external_identity_link_requests SET status = 'rejected', decided_by = ?,
+           decision_justification = ? WHERE request_id = ?`,
+        [decidedBy, justification.trim(), requestId],
       );
       await this.#appendAudit(connection, auditEvent);
     });

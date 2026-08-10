@@ -7,6 +7,41 @@ CREATE TABLE IF NOT EXISTS identities (
   CONSTRAINT identities_status CHECK (status IN ('invited', 'active', 'suspended', 'disabled', 'archived', 'deleted'))
 ) ENGINE=InnoDB;
 
+CREATE TABLE IF NOT EXISTS external_identities (
+  external_identity_id CHAR(36) PRIMARY KEY,
+  identity_id CHAR(36) NOT NULL,
+  issuer VARCHAR(512) NOT NULL,
+  subject VARCHAR(512) NOT NULL,
+  provider_key VARCHAR(100) NOT NULL,
+  principal_hash CHAR(64) NOT NULL UNIQUE,
+  status VARCHAR(32) NOT NULL,
+  linked_at DATETIME(6) NOT NULL,
+  CONSTRAINT external_identities_identity_fk FOREIGN KEY (identity_id) REFERENCES identities(identity_id),
+  CONSTRAINT external_identities_status CHECK (status IN ('active', 'revoked')),
+  INDEX external_identities_identity (identity_id)
+) ENGINE=InnoDB;
+
+CREATE TABLE IF NOT EXISTS external_identity_link_requests (
+  request_id CHAR(36) PRIMARY KEY,
+  issuer VARCHAR(512) NOT NULL,
+  subject VARCHAR(512) NOT NULL,
+  provider_key VARCHAR(100) NOT NULL,
+  email_hint VARCHAR(320),
+  display_name_hint VARCHAR(255),
+  requested_at DATETIME(6) NOT NULL,
+  expires_at DATETIME(6) NOT NULL,
+  status VARCHAR(32) NOT NULL,
+  target_identity_id CHAR(36),
+  decided_by CHAR(36),
+  decision_justification TEXT NOT NULL,
+  CONSTRAINT link_requests_target_fk FOREIGN KEY (target_identity_id) REFERENCES identities(identity_id),
+  CONSTRAINT link_requests_decider_fk FOREIGN KEY (decided_by) REFERENCES identities(identity_id),
+  CONSTRAINT link_requests_status CHECK (status IN ('pending', 'approved', 'rejected', 'expired')),
+  CONSTRAINT link_requests_validity CHECK (expires_at > requested_at),
+  INDEX link_requests_principal_status (issuer(191), subject(191), status, expires_at),
+  INDEX link_requests_status_expiry (status, expires_at)
+) ENGINE=InnoDB;
+
 CREATE TABLE IF NOT EXISTS applications (
   application_id VARCHAR(100) PRIMARY KEY,
   display_name VARCHAR(255) NOT NULL,

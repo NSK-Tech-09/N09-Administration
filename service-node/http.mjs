@@ -1,5 +1,7 @@
 import { randomUUID, timingSafeEqual } from "node:crypto";
 import { evaluateAccessRequestAsync } from "./api.mjs";
+import { createAuditEvent } from "./audit.mjs";
+import { createLinkRequest } from "./federated-identity.mjs";
 import {
   authorizationRequest, cookie, exchangeAuthorizationCode, INFOMANIAK_ISSUER,
   OIDC_SESSION_COOKIE, OIDC_TRANSACTION_COOKIE, open, parseCookies, seal, verifyIdToken,
@@ -76,8 +78,10 @@ export function createHttpHandler({ repository, authenticate = async () => null,
       if (oidcConfig) {
         try { session = open(parseCookies(request.headers.cookie).get(OIDC_SESSION_COOKIE), oidcConfig.sessionSecret, "oidc-session"); } catch { /* anonymous */ }
       }
+      const requestReference = session?.requestId
+        ? `<p>Demande enregistrée : <strong>${escapeHtml(session.requestId)}</strong></p>` : "";
       const content = session
-        ? `<h1>Identité Infomaniak vérifiée</h1><p>Bienvenue <strong>${escapeHtml(session.displayName)}</strong>. La preuve cryptographique est valide.</p><div class="facts"><p>État NSK : <strong>rattachement requis</strong></p><p>Aucun compte, rôle ou droit n’a été créé automatiquement.</p></div><form method="post" action="/auth/logout"><button type="submit">Fermer la session</button></form>`
+        ? `<h1>Identité Infomaniak vérifiée</h1><p>Bienvenue <strong>${escapeHtml(session.displayName)}</strong>. La preuve cryptographique est valide.</p><div class="facts"><p>État NSK : <strong>${session.status === "authenticated" ? "rattachée" : "rattachement requis"}</strong></p>${requestReference}<p>${session.status === "authenticated" ? "Le compte NSK est reconnu ; les droits restent contrôlés séparément." : "Aucun compte, rôle ou droit n’a été créé automatiquement. Une décision humaine reste obligatoire."}</p></div><form method="post" action="/auth/logout"><button type="submit">Fermer la session</button></form>`
         : `<h1>Le cœur d’identité est prêt</h1><p>Connecte-toi avec Infomaniak pour présenter une preuve d’identité au registre central NSK.</p><div class="facts"><p><strong>Connexion réelle :</strong> Authorization Code + PKCE S256.</p><p><strong>Zéro privilège implicite :</strong> une identité inconnue reste sans droit.</p></div>${oidcConfig ? '<a class="button" href="/auth/infomaniak/start">Continuer avec Infomaniak</a>' : '<p>Le fournisseur OIDC n’est pas encore configuré.</p>'}`;
       writeHtml(response, 200, "Accueil", content);
       return;
@@ -108,7 +112,38 @@ export function createHttpHandler({ repository, authenticate = async () => null,
         const idToken = await exchangeAuthorizationCode({ code, verifier: transaction.verifier, config: oidcConfig, fetchImpl });
         const claims = await verifyIdToken(idToken, { clientId: oidcConfig.clientId, nonce: transaction.nonce, fetchImpl });
         const displayName = claims.name || [claims.given_name, claims.family_name].filter(Boolean).join(" ") || "Utilisateur Infomaniak";
-        const session = { issuer: INFOMANIAK_ISSUER, subject: claims.sub, displayName, status: "link_required", expiresAt: Date.now() + 8 * 60 * 60 * 1000 };
+        const linked = await repository.findExternalIdentity(INFOMANIAK_ISSUER, claims.sub);
+        let session;
+        if (linked) {
+          if (linked.status !== "active") throw new Error("external_identity_not_active");
+          const identity = await repository.getIdentity(linked.identityId);
+          if (!identity || identity.status !== "active") throw new Error("nsk_identity_not_active");
+          session = {
+            issuer: INFOMANIAK_ISSUER, subject: claims.sub, identityId: identity.identityId,
+            displayName: identity.displayName, status: "authenticated",
+            expiresAt: Date.now() + 8 * 60 * 60 * 1000,
+          };
+        } else {
+          const now = new Date();
+          let linkRequest = await repository.findActiveLinkRequest(INFOMANIAK_ISSUER, claims.sub, now);
+          if (!linkRequest) {
+            linkRequest = createLinkRequest({
+              issuer: INFOMANIAK_ISSUER, subject: claims.sub, providerKey: "infomaniak",
+              emailHint: claims.email, displayNameHint: displayName, now,
+            });
+            await repository.saveLinkRequest(linkRequest, createAuditEvent({
+              action: "external_identity.link_requested", result: "pending",
+              source: "infomaniak-callback", correlationId: randomUUID(),
+              newValue: { request_id: linkRequest.requestId, status: "pending", expires_at: linkRequest.expiresAt },
+            }));
+          }
+          session = {
+            issuer: INFOMANIAK_ISSUER, subject: claims.sub, displayName,
+            status: "link_required", requestId: linkRequest.requestId,
+            requestExpiresAt: linkRequest.expiresAt,
+            expiresAt: Date.now() + 8 * 60 * 60 * 1000,
+          };
+        }
         const sessionCookie = cookie(OIDC_SESSION_COOKIE, seal(session, oidcConfig.sessionSecret, "oidc-session"), { maxAge: 8 * 60 * 60 });
         response.statusCode = 303;
         response.setHeader("cache-control", "no-store");
@@ -128,7 +163,10 @@ export function createHttpHandler({ repository, authenticate = async () => null,
       try {
         if (!oidcConfig) throw new Error("oidc_not_configured");
         const session = open(parseCookies(request.headers.cookie).get(OIDC_SESSION_COOKIE), oidcConfig.sessionSecret, "oidc-session");
-        writeJson(response, 200, { authenticated: true, provider: "infomaniak", status: session.status, display_name: session.displayName });
+        writeJson(response, 200, {
+          authenticated: true, provider: "infomaniak", status: session.status,
+          display_name: session.displayName, request_id: session.requestId ?? null,
+        });
       } catch { writeJson(response, 401, { authenticated: false }); }
       return;
     }
