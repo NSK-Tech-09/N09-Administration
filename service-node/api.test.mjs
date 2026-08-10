@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { evaluateAccessRequest } from "./api.mjs";
+import { evaluateAccessRequest, evaluateAccessRequestAsync } from "./api.mjs";
 
 const identity = { identityId: "identity-1", status: "active" };
 const application = { applicationId: "tasks", status: "active" };
@@ -40,4 +40,16 @@ test("un refus métier reste une décision HTTP réussie", () => {
   const response = evaluateAccessRequest({ repository, principal, payload: { ...payload, scope_id: "site-11" } });
   assert.equal(response.status, 200);
   assert.equal(response.body.allowed, false);
+});
+
+test("la frontière asynchrone conserve exactement la décision", async () => {
+  const asynchronousRepository = {
+    getIdentity: async (id) => repository.getIdentity(id),
+    getApplication: async (id) => repository.getApplication(id),
+    listAssignments: async (...args) => repository.listAssignments(...args),
+  };
+  const response = await evaluateAccessRequestAsync({ repository: asynchronousRepository, principal, payload });
+  assert.equal(response.status, 200);
+  assert.deepEqual(response.body, { allowed: true, reason_code: "access_granted" });
+  assert.equal(response.correlationId, "correlation-1");
 });
