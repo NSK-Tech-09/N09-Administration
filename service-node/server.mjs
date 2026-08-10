@@ -2,15 +2,17 @@ import { createServer } from "node:http";
 import { createHttpHandler } from "./http.mjs";
 import { createMariaDbPool, MariaDbRepository } from "./mariadb.mjs";
 import { httpConfigFromEnvironment, mariaDbConfigFromEnvironment } from "./runtime-config.mjs";
+import { oidcConfigFromEnvironment } from "./oidc.mjs";
 
 async function main() {
   const databaseConfig = mariaDbConfigFromEnvironment(process.env);
   const httpConfig = httpConfigFromEnvironment(process.env);
+  const oidcConfig = oidcConfigFromEnvironment(process.env);
   const pool = await createMariaDbPool(databaseConfig);
   await pool.query("SELECT 1");
 
   const repository = new MariaDbRepository(pool);
-  const server = createServer(createHttpHandler({ repository }));
+  const server = createServer(createHttpHandler({ repository, oidcConfig }));
   server.on("clientError", (_error, socket) => socket.end("HTTP/1.1 400 Bad Request\r\n\r\n"));
 
   const stop = async () => {
