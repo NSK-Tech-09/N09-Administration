@@ -1,0 +1,45 @@
+import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
+import test from "node:test";
+import {
+  ADMINISTRATION_ACCESS_CATALOG, publishAdministrationAccessCatalog,
+} from "./administration-access-catalog.mjs";
+import { createAuditEvent } from "./audit.mjs";
+import { ADMIN_APPLICATION_ID } from "./identity-link-admin.mjs";
+import { TransactionalMemoryRepository } from "./repository.mjs";
+
+function repositoryWithAdministration() {
+  const repository = new TransactionalMemoryRepository();
+  repository.saveApplication({
+    applicationId: ADMIN_APPLICATION_ID, displayName: "N09 – Administration",
+    status: "active", registrationPolicy: "closed",
+  }, createAuditEvent({
+    action: "application.registered", result: "success", source: "catalog-tests",
+    correlationId: randomUUID(), applicationId: ADMIN_APPLICATION_ID,
+  }));
+  return repository;
+}
+
+test("décrit les trois pouvoirs existants sans créer de nouveau droit", () => {
+  assert.deepEqual(ADMINISTRATION_ACCESS_CATALOG.roles.map((item) => item.role_id).sort(), [
+    "access-decision-administrator", "access-directory-reader", "identity-link-administrator",
+  ]);
+  assert.equal(ADMINISTRATION_ACCESS_CATALOG.provisioning.mode, "central_identity_only");
+});
+
+test("borne la publication à la préproduction et la rend idempotente", async () => {
+  const repository = repositoryWithAdministration();
+  await assert.rejects(publishAdministrationAccessCatalog(repository, {
+    database: "n09_admin_prod", allowBootstrap: "true",
+  }), /preproduction/);
+  const first = await publishAdministrationAccessCatalog(repository, {
+    database: "n09_admin_preprod", allowBootstrap: "true",
+  });
+  const second = await publishAdministrationAccessCatalog(repository, {
+    database: "n09_admin_preprod", allowBootstrap: "true",
+  });
+  assert.equal(first.created, true);
+  assert.equal(second.created, false);
+  assert.equal(repository.getLatestApplicationAccessCatalog(ADMIN_APPLICATION_ID).catalogVersion, 1);
+  assert.equal(repository.verifyAuditChain(), true);
+});

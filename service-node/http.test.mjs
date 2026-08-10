@@ -5,6 +5,8 @@ import test from "node:test";
 import { createAuditEvent } from "./audit.mjs";
 import { ACCESS_DIRECTORY_READ_PERMISSION } from "./access-admin.mjs";
 import { ACCESS_DECISION_PERMISSION } from "./access-decision-admin.mjs";
+import { ADMINISTRATION_ACCESS_CATALOG } from "./administration-access-catalog.mjs";
+import { publishApplicationAccessCatalog } from "./application-access-catalog.mjs";
 import { createLinkRequest } from "./federated-identity.mjs";
 import { createHttpHandler } from "./http.mjs";
 import { ADMIN_APPLICATION_ID, LINK_DECISION_PERMISSION } from "./identity-link-admin.mjs";
@@ -178,6 +180,12 @@ test("sépare la consultation des accès du pouvoir de décision sur les rattach
 
 test("affiche le registre en lecture seule avec identités, applications et affectations", async () => {
   const { adminRepository } = seededAdminRepository({ withAccessRead: true });
+  const publication = await publishApplicationAccessCatalog({
+    repository: adminRepository,
+    principal: { applicationId: ADMIN_APPLICATION_ID, audience: ADMIN_APPLICATION_ID },
+    payload: ADMINISTRATION_ACCESS_CATALOG,
+  });
+  assert.equal(publication.status, 201);
   await withServer({ repository: adminRepository, oidcConfig }, async (baseUrl) => {
     const response = await fetch(`${baseUrl}/admin/access`, { headers: { cookie: adminCookie() } });
     const body = await response.text();
@@ -185,6 +193,8 @@ test("affiche le registre en lecture seule avec identités, applications et affe
     assert.match(body, /Utilisateurs et accès/);
     assert.match(body, /Admin NSK/);
     assert.match(body, /N09 – Administration/);
+    assert.match(body, /Catalogue v1/);
+    assert.match(body, /Responsable des rattachements/);
     assert.match(body, /access-directory-reader/);
     assert.match(body, /administration:access:read/);
     assert.match(body, /lecture seule/);
@@ -413,6 +423,43 @@ test("transporte une décision authentifiée sans modifier son contrat", async (
     assert.equal(response.status, 200);
     assert.deepEqual(await response.json(), { allowed: true, reason_code: "access_granted" });
     assert.equal(response.headers.get("x-correlation-id"), "00000000-0000-4000-8000-000000000009");
+  });
+});
+
+test("reçoit un catalogue uniquement de l’application technique propriétaire", async () => {
+  const catalogRepository = new TransactionalMemoryRepository();
+  catalogRepository.saveApplication({
+    applicationId: "tasks", displayName: "Tâches", status: "active", registrationPolicy: "closed",
+  }, adminAudit("application.registered", { applicationId: "tasks" }));
+  const catalogPayload = {
+    application_id: "tasks", catalog_version: 1,
+    permissions: [{ permission_id: "tasks:read", display_name: "Lire", description: "Consulter les tâches.", status: "active" }],
+    scope_types: [{ scope_type_id: "global", display_name: "Global", description: "Toute l’application.", status: "active" }],
+    roles: [{ role_id: "tasks-reader", display_name: "Lecteur", description: "Lecture globale.", status: "active", permissions: ["tasks:read"], scope_types: ["global"] }],
+    provisioning: {
+      mode: "preexisting_profile_required", identity_key: "identity_id",
+      readiness: "application_confirmation_required", automatic_profile_creation: false,
+      email_matching: "forbidden",
+      requirements: [{ requirement_id: "local-profile", display_name: "Profil local", description: "Profil confirmé par l’application." }],
+    },
+  };
+  await withServer({
+    repository: catalogRepository,
+    authenticate: async () => ({ applicationId: "tasks", audience: "tasks" }),
+  }, async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/internal/v1/application-access-catalogs`, {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(catalogPayload),
+    });
+    assert.equal(response.status, 201);
+    assert.equal((await response.json()).created, true);
+    assert.equal(catalogRepository.getLatestApplicationAccessCatalog("tasks").catalogVersion, 1);
+  });
+  await withServer({ repository: catalogRepository }, async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/internal/v1/application-access-catalogs`, {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(catalogPayload),
+    });
+    assert.equal(response.status, 401);
+    assert.deepEqual(await response.json(), { error: "authentication_required" });
   });
 });
 

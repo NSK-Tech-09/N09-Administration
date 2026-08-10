@@ -69,6 +69,21 @@ CREATE TABLE IF NOT EXISTS application_login_policies (
   CONSTRAINT application_login_policy_status CHECK (status IN ('active', 'disabled'))
 ) ENGINE=InnoDB;
 
+CREATE TABLE IF NOT EXISTS application_access_catalog_versions (
+  application_id VARCHAR(100) NOT NULL,
+  catalog_version INT UNSIGNED NOT NULL,
+  catalog_hash CHAR(64) NOT NULL,
+  roles_json JSON NOT NULL,
+  permissions_json JSON NOT NULL,
+  scope_types_json JSON NOT NULL,
+  provisioning_json JSON NOT NULL,
+  published_at DATETIME(6) NOT NULL,
+  PRIMARY KEY (application_id, catalog_version),
+  CONSTRAINT application_catalog_application_fk FOREIGN KEY (application_id) REFERENCES applications(application_id),
+  CONSTRAINT application_catalog_version CHECK (catalog_version >= 1),
+  UNIQUE KEY application_catalog_hash (application_id, catalog_hash)
+) ENGINE=InnoDB;
+
 CREATE TABLE IF NOT EXISTS application_authorization_codes (
   code_hash CHAR(64) PRIMARY KEY,
   identity_id CHAR(36) NOT NULL,

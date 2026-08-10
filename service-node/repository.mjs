@@ -1,5 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { eventHash, verifyAuditChain } from "./audit.mjs";
+import {
+  ApplicationAccessCatalogError, applicationAccessCatalogHash, assertCompatibleCatalogEvolution,
+} from "./application-access-catalog.mjs";
 
 function cloneMap(map) {
   return new Map([...map].map(([key, value]) => [key, structuredClone(value)]));
@@ -10,6 +13,7 @@ export class TransactionalMemoryRepository {
   #externalIdentities = new Map();
   #linkRequests = new Map();
   #applications = new Map();
+  #applicationAccessCatalogs = new Map();
   #applicationRedirectUris = new Map();
   #applicationLoginPolicies = new Map();
   #applicationAuthorizationCodes = new Map();
@@ -22,6 +26,7 @@ export class TransactionalMemoryRepository {
       externalIdentities: cloneMap(this.#externalIdentities),
       linkRequests: cloneMap(this.#linkRequests),
       applications: cloneMap(this.#applications),
+      applicationAccessCatalogs: cloneMap(this.#applicationAccessCatalogs),
       applicationRedirectUris: cloneMap(this.#applicationRedirectUris),
       applicationLoginPolicies: cloneMap(this.#applicationLoginPolicies),
       applicationAuthorizationCodes: cloneMap(this.#applicationAuthorizationCodes),
@@ -33,6 +38,7 @@ export class TransactionalMemoryRepository {
     this.#externalIdentities = state.externalIdentities;
     this.#linkRequests = state.linkRequests;
     this.#applications = state.applications;
+    this.#applicationAccessCatalogs = state.applicationAccessCatalogs;
     this.#applicationRedirectUris = state.applicationRedirectUris;
     this.#applicationLoginPolicies = state.applicationLoginPolicies;
     this.#applicationAuthorizationCodes = state.applicationAuthorizationCodes;
@@ -94,6 +100,35 @@ export class TransactionalMemoryRepository {
 
   getLinkRequest(requestId) {
     return structuredClone(this.#linkRequests.get(requestId) ?? null);
+  }
+
+  publishApplicationAccessCatalog(catalog, auditEvent) {
+    if (auditEvent.application_id !== catalog.applicationId) throw new Error("audit application must match catalog");
+    return this.#transaction((state) => {
+      if (!state.applications.has(catalog.applicationId)) throw new Error("application not found");
+      const key = `${catalog.applicationId}\n${catalog.catalogVersion}`;
+      const existing = state.applicationAccessCatalogs.get(key);
+      const catalogHash = applicationAccessCatalogHash(catalog);
+      if (existing) {
+        if (existing.catalogHash !== catalogHash) throw new ApplicationAccessCatalogError("catalog_version_conflict", 409);
+        return { created: false, catalog: structuredClone(existing) };
+      }
+      const previous = [...state.applicationAccessCatalogs.values()]
+        .filter((item) => item.applicationId === catalog.applicationId)
+        .sort((left, right) => right.catalogVersion - left.catalogVersion)[0] ?? null;
+      assertCompatibleCatalogEvolution(previous, catalog);
+      const roleIds = new Set(catalog.roles.map((item) => item.role_id));
+      const permissionIds = new Set(catalog.permissions.map((item) => item.permission_id));
+      const incompatibleAssignment = [...state.assignments.values()].find((assignment) =>
+        assignment.applicationId === catalog.applicationId && assignment.status === "active" &&
+        (!roleIds.has(assignment.roleId) || assignment.permissions.some((permission) => !permissionIds.has(permission)))
+      );
+      if (incompatibleAssignment) throw new ApplicationAccessCatalogError("catalog_excludes_active_assignment", 409);
+      const stored = { ...structuredClone(catalog), catalogHash, publishedAt: auditEvent.occurred_at };
+      state.applicationAccessCatalogs.set(key, stored);
+      this.#appendAudit(state, auditEvent);
+      return { created: true, catalog: structuredClone(stored) };
+    });
   }
 
   saveApplicationRedirectUri(applicationId, redirectUri, auditEvent) {
@@ -244,6 +279,18 @@ export class TransactionalMemoryRepository {
     return [...this.#applications.values()]
       .sort((left, right) => left.displayName.localeCompare(right.displayName, "fr"))
       .map((item) => structuredClone(item));
+  }
+
+  getLatestApplicationAccessCatalog(applicationId) {
+    const catalog = [...this.#applicationAccessCatalogs.values()]
+      .filter((item) => item.applicationId === applicationId)
+      .sort((left, right) => right.catalogVersion - left.catalogVersion)[0];
+    return structuredClone(catalog ?? null);
+  }
+
+  listLatestApplicationAccessCatalogs() {
+    return [...this.#applications.keys()].map((applicationId) => this.getLatestApplicationAccessCatalog(applicationId))
+      .filter(Boolean).sort((left, right) => left.applicationId.localeCompare(right.applicationId));
   }
 
   listAssignments(identityId, applicationId) {

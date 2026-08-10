@@ -74,6 +74,12 @@ plus parmi les accès actifs.
 Les objets de gouvernance sont conservés dans la même frontière transactionnelle
 que leur événement d’audit : une mutation sans preuve valide est annulée.
 
+Une application authentifiée peut maintenant publier son catalogue versionné de
+rôles, permissions, types de périmètres et prérequis de provisionnement. Une
+version nouvelle est immuable et auditée ; la répétition identique est
+idempotente. La console les présente en lecture seule et signale explicitement
+une application sans catalogue. Cette publication n’ouvre aucun octroi.
+
 ## Prérequis et démarrage local
 
 - Python 3.11 ou supérieur ;
@@ -113,6 +119,7 @@ ne contient aucun secret réel. La production reste inchangée.
 - [`docs/ADR-011-CONSULTATION-CENTRALE-ACCES.md`](docs/ADR-011-CONSULTATION-CENTRALE-ACCES.md)
 - [`docs/ADR-012-RETRAIT-DONNEES-SYNTHETIQUES.md`](docs/ADR-012-RETRAIT-DONNEES-SYNTHETIQUES.md)
 - [`docs/ADR-013-REVOCATION-CENTRALE-ACCES.md`](docs/ADR-013-REVOCATION-CENTRALE-ACCES.md)
+- [`docs/ADR-014-PUBLICATION-CATALOGUES-APPLICATIFS.md`](docs/ADR-014-PUBLICATION-CATALOGUES-APPLICATIFS.md)
 - [`docs/ETAT-PREPROD-INFOMANIAK.md`](docs/ETAT-PREPROD-INFOMANIAK.md)
 - [`docs/CONFORMITE-NSES.md`](docs/CONFORMITE-NSES.md)
 - [`docs/CONTRAT-API-INTERNE.md`](docs/CONTRAT-API-INTERNE.md)

@@ -1,6 +1,9 @@
 import { createHash, randomUUID } from "node:crypto";
 import { canonicalJson, eventHash, verifyAuditChain } from "./audit.mjs";
 import { externalPrincipalKey } from "./federated-identity.mjs";
+import {
+  ApplicationAccessCatalogError, applicationAccessCatalogHash, assertCompatibleCatalogEvolution,
+} from "./application-access-catalog.mjs";
 
 function required(config, name) {
   const value = config[name];
@@ -50,6 +53,16 @@ function mapLinkRequest(row) {
     expiresAt: asIso(row.expires_at), status: row.status,
     targetIdentityId: row.target_identity_id, decidedBy: row.decided_by,
     decisionJustification: row.decision_justification,
+  };
+}
+
+function mapApplicationAccessCatalog(row) {
+  if (!row) return null;
+  return {
+    applicationId: row.application_id, catalogVersion: Number(row.catalog_version),
+    catalogHash: row.catalog_hash, roles: parseJson(row.roles_json),
+    permissions: parseJson(row.permissions_json), scopeTypes: parseJson(row.scope_types_json),
+    provisioning: parseJson(row.provisioning_json), publishedAt: asIso(row.published_at),
   };
 }
 
@@ -165,6 +178,51 @@ export class MariaDbRepository {
       "SELECT * FROM external_identity_link_requests WHERE request_id = ?", [requestId],
     );
     return mapLinkRequest(rows[0]);
+  }
+
+  async publishApplicationAccessCatalog(catalog, auditEvent) {
+    if (auditEvent.application_id !== catalog.applicationId) throw new Error("audit application must match catalog");
+    return this.#transaction(async (connection) => {
+      const [applications] = await connection.execute(
+        "SELECT application_id FROM applications WHERE application_id = ? FOR UPDATE", [catalog.applicationId],
+      );
+      if (!applications.length) throw new Error("application not found");
+      const [versions] = await connection.execute(
+        `SELECT * FROM application_access_catalog_versions
+         WHERE application_id = ? ORDER BY catalog_version DESC FOR UPDATE`, [catalog.applicationId],
+      );
+      const catalogHash = applicationAccessCatalogHash(catalog);
+      const sameVersion = versions.find((row) => Number(row.catalog_version) === catalog.catalogVersion);
+      if (sameVersion) {
+        if (sameVersion.catalog_hash !== catalogHash) throw new ApplicationAccessCatalogError("catalog_version_conflict", 409);
+        return { created: false, catalog: mapApplicationAccessCatalog(sameVersion) };
+      }
+      const previous = mapApplicationAccessCatalog(versions[0]);
+      assertCompatibleCatalogEvolution(previous, catalog);
+      const [assignmentRows] = await connection.execute(
+        `SELECT role_id, permissions_json FROM access_assignments
+         WHERE application_id = ? AND status = 'active' FOR UPDATE`, [catalog.applicationId],
+      );
+      const roleIds = new Set(catalog.roles.map((item) => item.role_id));
+      const permissionIds = new Set(catalog.permissions.map((item) => item.permission_id));
+      if (assignmentRows.some((row) => !roleIds.has(row.role_id) || parseJson(row.permissions_json).some((item) => !permissionIds.has(item)))) {
+        throw new ApplicationAccessCatalogError("catalog_excludes_active_assignment", 409);
+      }
+      await connection.execute(
+        `INSERT INTO application_access_catalog_versions(
+           application_id, catalog_version, catalog_hash, roles_json, permissions_json,
+           scope_types_json, provisioning_json, published_at
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        [catalog.applicationId, catalog.catalogVersion, catalogHash, JSON.stringify(catalog.roles),
+         JSON.stringify(catalog.permissions), JSON.stringify(catalog.scopeTypes),
+         JSON.stringify(catalog.provisioning), asMariaDate(auditEvent.occurred_at)],
+      );
+      await this.#appendAudit(connection, auditEvent);
+      return {
+        created: true,
+        catalog: { ...structuredClone(catalog), catalogHash, publishedAt: auditEvent.occurred_at },
+      };
+    });
   }
 
   async listLinkRequests(status = null) {
@@ -332,6 +390,27 @@ export class MariaDbRepository {
       applicationId: row.application_id, displayName: row.display_name,
       status: row.status, registrationPolicy: row.registration_policy,
     }));
+  }
+
+  async getLatestApplicationAccessCatalog(applicationId) {
+    const [rows] = await this.pool.execute(
+      `SELECT * FROM application_access_catalog_versions
+       WHERE application_id = ? ORDER BY catalog_version DESC LIMIT 1`, [applicationId],
+    );
+    return mapApplicationAccessCatalog(rows[0]);
+  }
+
+  async listLatestApplicationAccessCatalogs() {
+    const [rows] = await this.pool.execute(
+      `SELECT catalog.* FROM application_access_catalog_versions catalog
+       INNER JOIN (
+         SELECT application_id, MAX(catalog_version) AS catalog_version
+         FROM application_access_catalog_versions GROUP BY application_id
+       ) latest ON latest.application_id = catalog.application_id
+         AND latest.catalog_version = catalog.catalog_version
+       ORDER BY catalog.application_id`,
+    );
+    return rows.map(mapApplicationAccessCatalog);
   }
 
   async saveApplicationRedirectUri(applicationId, redirectUri, auditEvent) {
