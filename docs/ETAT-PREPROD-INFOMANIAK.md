@@ -162,11 +162,44 @@ Les **60 tests Node** réussissent sur Infomaniak. Le parcours réel confirme :
 - zéro affectation pour l'application pilote tant qu'une autorisation séparée
   n'a pas été décidée.
 
-## Prochain jalon autorisé
+## Administration authentifiée des rattachements validée
 
-Le prochain jalon est l'interface administrative authentifiée pour consulter
-et décider les demandes futures, puis l'autorisation distincte d'une première
-application pilote. Le rattachement d'identité ne doit jamais valoir droit
-d'accès.
+La PR **#25** a été validée par GitHub Actions puis fusionnée dans `main` avec
+le commit `9ea0c8a2e4079e89f222e8d8a1bada619672bec2`. La release active est isolée
+dans `releases/9ea0c8a2` ; la release `5ab7a261` reste disponible pour un retour
+arrière. Le clone temporaire utilisé pendant le déploiement a été supprimé.
+
+Les dépendances ont été installées avec le lockfile vérifié et les **72 tests
+Node** réussissent sur Infomaniak. Le processus a été redémarré explicitement
+après la bascule et le journal du Manager confirme son démarrage sur le port
+interne `3000`. Les contrôles publics confirment toujours :
+
+- `GET /health` : `200` et `{"status":"ok"}` ;
+- absence de cache et protection `nosniff` ;
+- site déclaré en ligne et sécurisé dans le Manager.
+
+L'amorçage ponctuel de la gouvernance a créé exactement l'application centrale
+`n09-administration` et une affectation pour l'identité NSK de **Fred TRAVERS**.
+Cette affectation porte uniquement la permission
+`administration:identity-links:decide`. L'opération était bornée à la base
+`_preprod`, justifiée, idempotente et a confirmé la validité de la chaîne
+d'audit.
+
+Après renouvellement de la session OIDC, le parcours réel confirme :
+
+- identité Infomaniak reconnue et rattachée à Fred TRAVERS ;
+- présence de l'entrée « Administrer les rattachements » uniquement pour cette
+  identité explicitement autorisée ;
+- ouverture de l'écran des demandes avec protection CSRF ;
+- aucune demande en attente au moment du constat ;
+- aucun rôle ni droit applicatif créé par ce pouvoir administratif ou par un
+  rattachement.
+
+## Prochain jalon
+
+Le prochain jalon est l'autorisation distincte d'une première application
+pilote, puis la migration progressive de la gestion des utilisateurs de
+N09 – Suivi des tâches vers ce registre central. Le rattachement d'identité
+reste strictement séparé du droit d'accès.
 
 La production et les applications existantes restent inchangées.
