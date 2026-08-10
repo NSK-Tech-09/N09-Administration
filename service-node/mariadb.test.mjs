@@ -3,6 +3,7 @@ import test from "node:test";
 import { createAuditEvent } from "./audit.mjs";
 import { createLinkRequest } from "./federated-identity.mjs";
 import { createMariaDbPool, MariaDbRepository } from "./mariadb.mjs";
+import { prepareApplicationAccessCatalog } from "./application-access-catalog.mjs";
 
 const identity = { identityId: "identity-1", email: "COLLEGUE@example.test", displayName: "Collègue", status: "active" };
 const audit = (changes = {}) => createAuditEvent({
@@ -71,4 +72,40 @@ test("persiste la demande de rattachement et son audit dans la même transaction
   assert.equal(pool.calls.some((call) => typeof call === "object" && call.sql.includes("INSERT INTO external_identity_link_requests")), true);
   assert.equal(pool.calls.filter((call) => typeof call === "object" && call.sql.includes("INSERT INTO audit_events")).length, 1);
   assert.equal(pool.calls.at(-2), "commit");
+});
+
+test("persiste une version de catalogue et son audit dans la même transaction", async () => {
+  const calls = [];
+  const connection = {
+    beginTransaction: async () => calls.push("begin"),
+    commit: async () => calls.push("commit"),
+    rollback: async () => calls.push("rollback"),
+    release: () => calls.push("release"),
+    execute: async (sql, values = []) => {
+      calls.push({ sql, values });
+      if (sql.includes("FROM applications") && sql.includes("FOR UPDATE")) return [[{ application_id: "tasks" }]];
+      if (sql.includes("FROM application_access_catalog_versions")) return [[]];
+      if (sql.includes("FROM access_assignments")) return [[]];
+      if (sql.startsWith("SELECT current_hash")) return [[{ current_hash: "" }]];
+      return [{ affectedRows: 1 }];
+    },
+  };
+  const pool = { getConnection: async () => connection };
+  const catalog = prepareApplicationAccessCatalog({
+    application_id: "tasks", catalog_version: 1,
+    permissions: [{ permission_id: "tasks:read", display_name: "Lire", description: "Consulter les tâches.", status: "active" }],
+    scope_types: [{ scope_type_id: "global", display_name: "Global", description: "Toute l’application.", status: "active" }],
+    roles: [{ role_id: "tasks-reader", display_name: "Lecteur", description: "Lecture globale.", status: "active", permissions: ["tasks:read"], scope_types: ["global"] }],
+    provisioning: { mode: "central_identity_only", identity_key: "identity_id", readiness: "immediate", automatic_profile_creation: false, email_matching: "forbidden", requirements: [] },
+  });
+  const event = createAuditEvent({
+    action: "application.access_catalog_published", result: "success", source: "tests",
+    correlationId: "catalog-correlation", applicationId: "tasks",
+  });
+  const result = await new MariaDbRepository(pool).publishApplicationAccessCatalog(catalog, event);
+  assert.equal(result.created, true);
+  assert.equal(calls.some((call) => typeof call === "object" && call.sql.includes("INSERT INTO application_access_catalog_versions")), true);
+  assert.equal(calls.filter((call) => typeof call === "object" && call.sql.includes("INSERT INTO audit_events")).length, 1);
+  assert.equal(calls.at(-2), "commit");
+  assert.equal(calls.at(-1), "release");
 });

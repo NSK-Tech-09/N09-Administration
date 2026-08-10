@@ -14,3 +14,13 @@ test("le registre applicatif porte retours, politique d’entrée et codes à us
   assert.doesNotMatch(schema, /\bcode\s+VARCHAR/i);
   assert.doesNotMatch(schema, /access_token|refresh_token|id_token/i);
 });
+
+test("le catalogue applicatif conserve chaque version sans secret", () => {
+  assert.match(schema, /CREATE TABLE IF NOT EXISTS application_access_catalog_versions/);
+  assert.match(schema, /PRIMARY KEY \(application_id, catalog_version\)/);
+  assert.match(schema, /catalog_hash CHAR\(64\) NOT NULL/);
+  assert.match(schema, /roles_json JSON NOT NULL/);
+  assert.match(schema, /provisioning_json JSON NOT NULL/);
+  const catalogTable = schema.match(/CREATE TABLE IF NOT EXISTS application_access_catalog_versions[\s\S]*?ENGINE=InnoDB;/)?.[0] ?? "";
+  assert.doesNotMatch(catalogTable, /secret|certificate|token/i);
+});

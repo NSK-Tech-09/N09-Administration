@@ -1,6 +1,7 @@
 import { randomUUID, timingSafeEqual } from "node:crypto";
 import { evaluateAccessRequestAsync } from "./api.mjs";
 import { createAuditEvent } from "./audit.mjs";
+import { publishApplicationAccessCatalog } from "./application-access-catalog.mjs";
 import { createLinkRequest } from "./federated-identity.mjs";
 import { authorizeAccessAdministration } from "./access-admin.mjs";
 import {
@@ -122,9 +123,10 @@ function renderLinkRequestAdministration(requests, identities, csrf, now = new D
   return `<h1>Demandes de rattachement</h1><p>Chaque décision est nominative, justifiée et inscrite dans le journal d’audit. Aucun rôle ni droit applicatif n’est accordé par un rattachement.</p>${cards || '<div class="facts"><p>Aucune demande en attente.</p></div>'}<nav><a class="button secondary" href="/">Retour à l’accueil</a><form method="post" action="/auth/logout"><button class="secondary" type="submit">Fermer la session</button></form></nav>`;
 }
 
-function renderAccessAdministration(identities, applications, assignments) {
+function renderAccessAdministration(identities, applications, assignments, catalogs) {
   const identityById = new Map(identities.map((identity) => [identity.identityId, identity]));
   const applicationById = new Map(applications.map((application) => [application.applicationId, application]));
+  const catalogByApplicationId = new Map(catalogs.map((catalog) => [catalog.applicationId, catalog]));
   const activeIdentities = identities.filter((identity) => identity.status === "active").length;
   const activeApplications = applications.filter((application) => application.status === "active").length;
   const activeAssignments = assignments.filter((assignment) => assignment.status === "active").length;
@@ -132,9 +134,17 @@ function renderAccessAdministration(identities, applications, assignments) {
   const identityCards = identities.map((identity) =>
     `<article class="entry"><h3>${escapeHtml(identity.displayName)}</h3><p>${escapeHtml(identity.email)}</p><p>${statusPill(identity.status)}</p><p class="muted">Identité : <code>${escapeHtml(identity.identityId)}</code></p></article>`
   ).join("");
-  const applicationCards = applications.map((application) =>
-    `<article class="entry"><h3>${escapeHtml(application.displayName)}</h3><p>${statusPill(application.status)} · inscription ${escapeHtml(application.registrationPolicy)}</p><p class="muted">Application : <code>${escapeHtml(application.applicationId)}</code></p></article>`
-  ).join("");
+  const applicationCards = applications.map((application) => {
+    const catalog = catalogByApplicationId.get(application.applicationId);
+    if (!catalog) return `<article class="entry"><h3>${escapeHtml(application.displayName)}</h3><p>${statusPill(application.status)} · inscription ${escapeHtml(application.registrationPolicy)}</p><div class="facts"><p><strong>Catalogue absent :</strong> aucun nouvel octroi ne doit être ouvert pour cette application.</p></div><p class="muted">Application : <code>${escapeHtml(application.applicationId)}</code></p></article>`;
+    const roles = catalog.roles.map((role) => `<li><code>${escapeHtml(role.role_id)}</code> — ${escapeHtml(role.displayName)} (${escapeHtml(role.status)})</li>`).join("");
+    const provisioning = catalog.provisioning.mode === "central_identity_only"
+      ? "identité centrale, sans profil applicatif supplémentaire"
+      : catalog.provisioning.mode === "preexisting_profile_required"
+        ? "profil applicatif préexistant et confirmation de l’application requis"
+        : "création automatique déclarée par l’application";
+    return `<article class="entry"><h3>${escapeHtml(application.displayName)}</h3><p>${statusPill(application.status)} · inscription ${escapeHtml(application.registrationPolicy)}</p><p><strong>Catalogue v${escapeHtml(catalog.catalogVersion)}</strong> · ${escapeHtml(provisioning)}</p><ul class="permissions">${roles}</ul><p class="muted">Application : <code>${escapeHtml(application.applicationId)}</code><br>Empreinte : <code>${escapeHtml(catalog.catalogHash)}</code></p></article>`;
+  }).join("");
   const assignmentCards = assignments.map((assignment) => {
     const identity = identityById.get(assignment.subjectId);
     const application = applicationById.get(assignment.applicationId);
@@ -142,7 +152,7 @@ function renderAccessAdministration(identities, applications, assignments) {
     const permissions = assignment.permissions.map((permission) => `<li><code>${escapeHtml(permission)}</code></li>`).join("");
     return `<article class="entry assignment"><h3>${escapeHtml(identity?.displayName || assignment.subjectId)} → ${escapeHtml(application?.displayName || assignment.applicationId)}</h3><p><strong>${escapeHtml(assignment.roleId)}</strong> · ${statusPill(assignment.status)} · périmètre ${escapeHtml(scope)}</p><ul class="permissions">${permissions || "<li>Aucune permission</li>"}</ul><p class="muted">Motif : ${escapeHtml(assignment.reason || "non renseigné")} · version ${escapeHtml(assignment.version)}</p></article>`;
   }).join("");
-  return `<h1>Utilisateurs et accès</h1><p>Vue centrale en lecture seule des identités, applications et affectations. Cette page n’accorde, ne modifie et ne révoque aucun droit.</p><div class="summary"><div class="metric"><strong>${activeIdentities}</strong>identités actives</div><div class="metric"><strong>${activeApplications}</strong>applications actives</div><div class="metric"><strong>${activeAssignments}</strong>affectations actives</div></div><h2>Identités</h2><div class="directory">${identityCards || '<div class="facts"><p>Aucune identité enregistrée.</p></div>'}</div><h2>Applications</h2><div class="directory">${applicationCards || '<div class="facts"><p>Aucune application enregistrée.</p></div>'}</div><h2>Affectations</h2><div class="directory">${assignmentCards || '<div class="facts"><p>Aucune affectation enregistrée.</p></div>'}</div><nav><a class="button secondary" href="/">Retour à l’accueil</a><a class="button secondary" href="/admin/link-requests">Rattachements</a><form method="post" action="/auth/logout"><button class="secondary" type="submit">Fermer la session</button></form></nav>`;
+  return `<h1>Utilisateurs et accès</h1><p>Vue centrale en lecture seule des identités, applications, catalogues publiés et affectations. Cette page n’accorde, ne modifie et ne révoque aucun droit.</p><div class="summary"><div class="metric"><strong>${activeIdentities}</strong>identités actives</div><div class="metric"><strong>${activeApplications}</strong>applications actives</div><div class="metric"><strong>${activeAssignments}</strong>affectations actives</div></div><h2>Identités</h2><div class="directory">${identityCards || '<div class="facts"><p>Aucune identité enregistrée.</p></div>'}</div><h2>Applications et catalogues</h2><div class="directory">${applicationCards || '<div class="facts"><p>Aucune application enregistrée.</p></div>'}</div><h2>Affectations</h2><div class="directory">${assignmentCards || '<div class="facts"><p>Aucune affectation enregistrée.</p></div>'}</div><nav><a class="button secondary" href="/">Retour à l’accueil</a><a class="button secondary" href="/admin/link-requests">Rattachements</a><form method="post" action="/auth/logout"><button class="secondary" type="submit">Fermer la session</button></form></nav>`;
 }
 
 function renderAccessDecisionAdministration(identities, applications, assignments, csrf) {
@@ -437,10 +447,11 @@ export function createHttpHandler({ repository, authenticate = async () => null,
         return;
       }
       try {
-        const [identities, applications, assignments] = await Promise.all([
+        const [identities, applications, assignments, catalogs] = await Promise.all([
           repository.listIdentities(), repository.listApplications(), repository.listAllAssignments(),
+          repository.listLatestApplicationAccessCatalogs(),
         ]);
-        writeHtml(response, 200, "Utilisateurs et accès", renderAccessAdministration(identities, applications, assignments));
+        writeHtml(response, 200, "Utilisateurs et accès", renderAccessAdministration(identities, applications, assignments, catalogs));
       } catch {
         console.error(JSON.stringify({ event: "access_administration_unavailable", reason: "listing_repository_failure" }));
         writeHtml(response, 503, "Administration indisponible", '<h1>Administration momentanément indisponible</h1><p>Le registre n’a pas pu être consulté. Aucun accès n’a été modifié.</p><a class="button" href="/">Retour</a>');
@@ -527,6 +538,26 @@ export function createHttpHandler({ repository, authenticate = async () => null,
       }
       response.setHeader("allow", adminRoute[1] ? "POST" : "GET");
       writeJson(response, 405, { error: "method_not_allowed" });
+      return;
+    }
+    if (url.pathname === "/internal/v1/application-access-catalogs") {
+      if (request.method !== "POST") {
+        response.setHeader("allow", "POST");
+        writeJson(response, 405, { error: "method_not_allowed" });
+        return;
+      }
+      let correlationId = randomUUID();
+      try {
+        const { payload, rawBody } = await readJson(request, maxBodyBytes);
+        const authenticated = await authenticate(request, { rawBody });
+        correlationId = authenticated?.correlationId || correlationId;
+        const principal = authenticated ? { ...authenticated, correlationId } : null;
+        const result = await publishApplicationAccessCatalog({ repository, principal, payload });
+        writeJson(response, result.status, result.body, correlationId);
+      } catch (error) {
+        if (error instanceof HttpInputError) writeJson(response, error.status, { error: error.code }, correlationId);
+        else writeJson(response, 503, { error: "catalog_service_unavailable" }, correlationId);
+      }
       return;
     }
     if (url.pathname !== "/internal/v1/access-decisions") {
