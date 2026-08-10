@@ -20,3 +20,25 @@ peut interroger que sa propre audience.
 
 Cette séparation évite de confondre un refus métier avec une panne du service.
 Le futur transport HTTP devra conserver ces codes sans exposer de détail interne.
+
+## Authentification technique du pilote
+
+Le pilote `n09-suivi-taches` appelle cette frontière avec une identité technique
+distincte de toute session humaine. Aucun cookie utilisateur n'est partagé entre
+les sous-domaines.
+
+Chaque requête porte les en-têtes suivants :
+
+- `x-n09-client-id` : identifiant public du client technique ;
+- `x-n09-timestamp` : date Unix en secondes ;
+- `x-n09-nonce` : UUID unique par requête ;
+- `x-n09-signature` : HMAC-SHA256 en hexadécimal.
+
+La signature couvre exactement la méthode, le chemin, la date, le nonce et le
+SHA-256 du corps brut, séparés par des sauts de ligne. Le serveur refuse une date
+écartée de plus de 30 secondes, un nonce rejoué, une audience différente ou une
+signature invalide. Le transport TLS est obligatoire hors tests.
+
+Le secret, d'au moins 32 caractères, reste hors du dépôt et doit pouvoir être
+renouvelé indépendamment par environnement. Cette authentification de service ne
+remplace pas le futur parcours central d'authentification de l'utilisateur.

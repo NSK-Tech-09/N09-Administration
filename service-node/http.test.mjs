@@ -6,6 +6,7 @@ import { createAuditEvent } from "./audit.mjs";
 import { createLinkRequest } from "./federated-identity.mjs";
 import { createHttpHandler } from "./http.mjs";
 import { ADMIN_APPLICATION_ID, LINK_DECISION_PERMISSION } from "./identity-link-admin.mjs";
+import { createInternalClientAuthenticator, INTERNAL_CLIENT_HEADERS, signInternalRequest } from "./internal-client-auth.mjs";
 import { OIDC_SESSION_COOKIE, seal } from "./oidc.mjs";
 import { TransactionalMemoryRepository } from "./repository.mjs";
 
@@ -264,6 +265,40 @@ test("transporte une décision authentifiée sans modifier son contrat", async (
     assert.equal(response.status, 200);
     assert.deepEqual(await response.json(), { allowed: true, reason_code: "access_granted" });
     assert.equal(response.headers.get("x-correlation-id"), "00000000-0000-4000-8000-000000000009");
+  });
+});
+
+test("accepte la décision signée par l’identité technique et bloque son rejeu", async () => {
+  const clientId = "tasks-preprod";
+  const secret = "a-protected-test-secret-with-at-least-32-characters";
+  const timestamp = String(Date.now());
+  const nonce = randomUUID();
+  const rawBody = JSON.stringify(payload);
+  const signature = signInternalRequest(secret, {
+    method: "POST", pathname: "/internal/v1/access-decisions", timestamp, nonce, rawBody,
+  });
+  const headers = {
+    "content-type": "application/json",
+    [INTERNAL_CLIENT_HEADERS.clientId]: clientId,
+    [INTERNAL_CLIENT_HEADERS.timestamp]: timestamp,
+    [INTERNAL_CLIENT_HEADERS.nonce]: nonce,
+    [INTERNAL_CLIENT_HEADERS.signature]: signature,
+  };
+  const authenticate = createInternalClientAuthenticator({
+    clients: new Map([[clientId, { applicationId: "tasks", secret }]]),
+  });
+  await withServer({ authenticate }, async (baseUrl) => {
+    const accepted = await fetch(`${baseUrl}/internal/v1/access-decisions`, {
+      method: "POST", headers, body: rawBody,
+    });
+    assert.equal(accepted.status, 200);
+    assert.deepEqual(await accepted.json(), { allowed: true, reason_code: "access_granted" });
+
+    const replayed = await fetch(`${baseUrl}/internal/v1/access-decisions`, {
+      method: "POST", headers, body: rawBody,
+    });
+    assert.equal(replayed.status, 401);
+    assert.deepEqual(await replayed.json(), { error: "authentication_required" });
   });
 });
 
