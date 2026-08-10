@@ -25,6 +25,9 @@ test("maintient le transport sur la boucle locale avant OIDC", () => {
   assert.deepEqual(httpConfigFromEnvironment({ N09_HTTP_HOST: "::1", N09_HTTP_PORT: "3100" }), {
     host: "::1", port: 3100,
   });
-  assert.throws(() => httpConfigFromEnvironment({ N09_HTTP_HOST: "0.0.0.0" }), /loopback/);
+  assert.deepEqual(httpConfigFromEnvironment({
+    N09_HTTP_HOST: "0.0.0.0", N09_TRUSTED_REVERSE_PROXY: "true", PORT: "3200",
+  }), { host: "0.0.0.0", port: 3200 });
+  assert.throws(() => httpConfigFromEnvironment({ N09_HTTP_HOST: "0.0.0.0" }), /trusted reverse proxy/);
   assert.throws(() => httpConfigFromEnvironment({ N09_HTTP_PORT: "70000" }), /port/);
 });
