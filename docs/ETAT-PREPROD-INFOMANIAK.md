@@ -101,18 +101,24 @@ utilisateur réelle n'a été introduite.
 
 ## Adaptateur OIDC déployé
 
-La PR **#18** a été validée par GitHub Actions puis fusionnée. La version active
-porte le commit `91c67d0e5e4fcf2dda543771bcb72844f9fba023` et reste isolée dans
-`releases/91c67d0`. La version `72de3040` est conservée pour le retour arrière.
+Les PR **#18**, **#20** et **#21** ont été validées par GitHub Actions puis
+fusionnées. La version active porte le commit
+`a25efe4f7a13f56d54437dfdf0faf6182bd6a4bc` et reste isolée dans
+`releases/a25efe4f`. Les versions `72de3040`, `91c67d0` et `7720a1da` sont
+conservées pour le retour arrière jusqu'à la clôture du jalon suivant.
 
 L'application OAuth **N09 Administration – Préproduction** est enregistrée
 chez Infomaniak avec l'unique retour
 `https://preprod-admin.nsktech.fr/auth/infomaniak/callback`. Les secrets sont
 hors dépôt et hors base métier dans le fichier d'environnement en permissions
-`600`. Les secrets affichés pendant l'amorçage ont été renouvelés avant usage ;
-seule la dernière valeur, transférée sans affichage, reste active.
+`600`. Les secrets affichés pendant l'amorçage ont été renouvelés avant usage.
+Le terminal managé ajoutait silencieusement ses marqueurs de collage au secret
+masqué : la longueur enregistrée était de 76 caractères au lieu de 64 et
+Infomaniak répondait `invalid_client`. Les marqueurs ont été retirés sans lire
+la valeur. Un essai avec un code volontairement invalide a ensuite obtenu
+`invalid_grant`, confirmant que le Client ID et le secret étaient reconnus.
 
-Les **52 tests Node** réussissent aussi sur Infomaniak. Les constats publics
+Les **54 tests Node** réussissent aussi sur Infomaniak. Les constats publics
 confirment :
 
 - `GET /health` : `200` et `{"status":"ok"}` ;
@@ -120,14 +126,22 @@ confirment :
 - `GET /auth/infomaniak/start` : redirection `302` vers l'autorisation
   Infomaniak, PKCE S256 et cookie temporaire `HttpOnly`, `Secure`,
   `SameSite=Lax` ;
-- aucun compte, rattachement ou droit créé avant décision NSK.
+- consentement réel Infomaniak, échange du code, signature RS256 et claims
+  vérifiés de bout en bout ;
+- session maintenue après redémarrage du service ;
+- identité externe reconnue avec l'état strict `link_required` ;
+- aucun compte, rattachement, rôle ou droit créé automatiquement.
+
+Le diagnostic temporaire n'exposait qu'un code interne prédéfini, jamais un
+secret, un jeton, le code OAuth ou une donnée personnelle. Il a été remis à
+`false` puis le service a été redémarré. Le comportement nominal ne présente
+donc plus aucun détail d'échec.
 
 ## Prochain jalon autorisé
 
-Le dernier contrôle de bout en bout attend le consentement explicite du
-titulaire Infomaniak pour transmettre son profil et son adresse au banc de
-préproduction. Après ce contrôle, le prochain jalon sera le stockage audité des
-demandes de rattachement, puis l'autorisation distincte d'une première
-application pilote.
+Le prochain jalon est le stockage audité des demandes de rattachement et leur
+décision explicite, puis l'autorisation distincte d'une première application
+pilote. La preuve Infomaniak validée ne doit pas être reliée à une identité NSK
+avant cette frontière transactionnelle.
 
 La production et les applications existantes restent inchangées.
