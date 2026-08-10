@@ -293,4 +293,3 @@ tout nouvel octroi. La production et l'autorité locale restent inchangées tant
 que la matrice de parité et le retour arrière ne sont pas validés.
 
 La production et les applications existantes restent inchangées.
-
