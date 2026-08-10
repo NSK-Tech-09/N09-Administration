@@ -4,6 +4,7 @@ import { createServer } from "node:http";
 import test from "node:test";
 import { createAuditEvent } from "./audit.mjs";
 import { ACCESS_DIRECTORY_READ_PERMISSION } from "./access-admin.mjs";
+import { ACCESS_DECISION_PERMISSION } from "./access-decision-admin.mjs";
 import { createLinkRequest } from "./federated-identity.mjs";
 import { createHttpHandler } from "./http.mjs";
 import { ADMIN_APPLICATION_ID, LINK_DECISION_PERMISSION } from "./identity-link-admin.mjs";
@@ -57,7 +58,12 @@ const adminAudit = (action, changes = {}) => createAuditEvent({
   justification: "Test HTTP reproductible", ...changes,
 });
 
-function seededAdminRepository({ withPermission = true, withAccessRead = false, subject = "provider-subject-secret" } = {}) {
+function seededAdminRepository({
+  withPermission = true,
+  withAccessRead = false,
+  withAccessDecision = false,
+  subject = "provider-subject-secret",
+} = {}) {
   const adminRepository = new TransactionalMemoryRepository();
   adminRepository.saveIdentity(adminIdentity, adminAudit("identity.created", { subjectId: adminIdentity.identityId }));
   adminRepository.saveIdentity(targetIdentity, adminAudit("identity.created", { subjectId: targetIdentity.identityId }));
@@ -80,6 +86,15 @@ function seededAdminRepository({ withPermission = true, withAccessRead = false, 
       roleId: "access-directory-reader", permissions: [ACCESS_DIRECTORY_READ_PERMISSION], scopeType: null,
       scopeId: null, conditions: [], status: "active", validFrom: null, validUntil: null,
       reason: "Test de la consultation des accès", decidedBy: adminIdentity.identityId,
+      inheritedFromGroup: null, version: 1,
+    }, adminAudit("assignment.created", { subjectId: adminIdentity.identityId, applicationId: ADMIN_APPLICATION_ID }));
+  }
+  if (withAccessDecision) {
+    adminRepository.saveAssignment({
+      assignmentId: randomUUID(), subjectId: adminIdentity.identityId, applicationId: ADMIN_APPLICATION_ID,
+      roleId: "access-decision-administrator", permissions: [ACCESS_DECISION_PERMISSION], scopeType: null,
+      scopeId: null, conditions: [], status: "active", validFrom: null, validUntil: null,
+      reason: "Test des décisions d’accès", decidedBy: adminIdentity.identityId,
       inheritedFromGroup: null, version: 1,
     }, adminAudit("assignment.created", { subjectId: adminIdentity.identityId, applicationId: ADMIN_APPLICATION_ID }));
   }
@@ -187,6 +202,92 @@ test("refuse toute écriture sur le registre de consultation", async () => {
     assert.equal(response.status, 405);
     assert.equal(response.headers.get("allow"), "GET");
   });
+});
+
+test("sépare le pouvoir de révocation de la simple consultation", async () => {
+  const { adminRepository } = seededAdminRepository({ withAccessRead: true, withAccessDecision: false });
+  await withServer({ repository: adminRepository, oidcConfig }, async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/admin/access-decisions`, { headers: { cookie: adminCookie() } });
+    assert.equal(response.status, 403);
+    assert.match(await response.text(), /permission dédiée aux décisions d’accès/);
+  });
+});
+
+test("révoque une affectation centrale avec CSRF, version et audit", async () => {
+  const { adminRepository } = seededAdminRepository({ withAccessDecision: true });
+  adminRepository.saveApplication({
+    applicationId: "n09-suivi-taches", displayName: "N09 – Suivi des tâches",
+    status: "active", registrationPolicy: "closed",
+  }, adminAudit("application.registered", { applicationId: "n09-suivi-taches" }));
+  const assignmentId = "80a40cd7-f2a4-4393-8021-9f806b42b41c";
+  adminRepository.saveAssignment({
+    assignmentId, subjectId: targetIdentity.identityId, applicationId: "n09-suivi-taches",
+    roleId: "tasks-reader", permissions: ["tasks:read"], scopeType: null, scopeId: null,
+    conditions: [], status: "active", validFrom: null, validUntil: null,
+    reason: "Accès initial contrôlé", decidedBy: adminIdentity.identityId,
+    inheritedFromGroup: null, version: 1,
+  }, adminAudit("assignment.created", { subjectId: targetIdentity.identityId, applicationId: "n09-suivi-taches" }));
+
+  await withServer({ repository: adminRepository, oidcConfig }, async (baseUrl) => {
+    const page = await fetch(`${baseUrl}/admin/access-decisions`, { headers: { cookie: adminCookie() } });
+    const body = await page.text();
+    const [decisionAuthority] = adminRepository.listAssignments(adminIdentity.identityId, ADMIN_APPLICATION_ID)
+      .filter((item) => item.permissions.includes(ACCESS_DECISION_PERMISSION));
+    assert.equal(page.status, 200);
+    assert.match(body, /Décider les révocations d’accès/);
+    assert.match(body, new RegExp(assignmentId));
+    assert.match(body, /Aucun accès ne peut être accordé/);
+    assert.match(body, /Pouvoir protégé/);
+    assert.doesNotMatch(body, new RegExp(`/admin/access-decisions/${decisionAuthority.assignmentId}/revoke`));
+
+    const forged = await fetch(`${baseUrl}/admin/access-decisions/${assignmentId}/revoke`, {
+      method: "POST", redirect: "manual", headers: {
+        cookie: adminCookie("expected-csrf"), "content-type": "application/x-www-form-urlencoded",
+      }, body: new URLSearchParams({
+        csrf: "forged-csrf", expected_version: "1",
+        justification: "Retrait demandé après fin du besoin applicatif",
+      }),
+    });
+    assert.equal(forged.status, 403);
+    assert.equal(adminRepository.listAssignments(targetIdentity.identityId, "n09-suivi-taches")[0].status, "active");
+
+    const auditBefore = adminRepository.auditCount();
+    const response = await fetch(`${baseUrl}/admin/access-decisions/${assignmentId}/revoke`, {
+      method: "POST", redirect: "manual", headers: {
+        cookie: adminCookie(), "content-type": "application/x-www-form-urlencoded",
+      }, body: new URLSearchParams({
+        csrf: "csrf-value", expected_version: "1",
+        justification: "Retrait demandé après fin du besoin applicatif",
+      }),
+    });
+    assert.equal(response.status, 303);
+    assert.equal(response.headers.get("location"), "/admin/access-decisions");
+    assert.equal(adminRepository.auditCount(), auditBefore + 1);
+  });
+  const [revoked] = adminRepository.listAssignments(targetIdentity.identityId, "n09-suivi-taches");
+  assert.equal(revoked.status, "revoked");
+  assert.equal(revoked.version, 2);
+  assert.equal(revoked.decidedBy, adminIdentity.identityId);
+  assert.equal(adminRepository.verifyAuditChain(), true);
+});
+
+test("réserve le pouvoir de décision à une gouvernance dédiée", async () => {
+  const { adminRepository } = seededAdminRepository({ withAccessDecision: true });
+  const [lastDecider] = adminRepository.listAssignments(adminIdentity.identityId, ADMIN_APPLICATION_ID)
+    .filter((item) => item.permissions.includes(ACCESS_DECISION_PERMISSION));
+  await withServer({ repository: adminRepository, oidcConfig }, async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/admin/access-decisions/${lastDecider.assignmentId}/revoke`, {
+      method: "POST", redirect: "manual", headers: {
+        cookie: adminCookie(), "content-type": "application/x-www-form-urlencoded",
+      }, body: new URLSearchParams({
+        csrf: "csrf-value", expected_version: "1",
+        justification: "Passage de relais du pouvoir de décision central",
+      }),
+    });
+    assert.equal(response.status, 409);
+  });
+  assert.equal(adminRepository.listAssignments(adminIdentity.identityId, ADMIN_APPLICATION_ID)
+    .find((item) => item.assignmentId === lastDecider.assignmentId).status, "active");
 });
 
 test("bloque une décision dont la preuve CSRF est incorrecte", async () => {

@@ -60,6 +60,12 @@ applications et affectations centrales. Il exige la permission exacte
 ou révocation. Le pouvoir de consulter le registre ne se confond donc jamais
 avec celui de décider un rattachement ou un droit.
 
+Une frontière séparée prépare la première décision d'accès opérationnelle : la
+révocation justifiée d'une affectation active. Elle exige
+`administration:access:decide`, contrôle la version de l'affectation, soustrait
+le pouvoir de décision lui-même à cette interface générale et ne permet encore
+aucun octroi arbitraire.
+
 Les objets synthétiques ayant servi à la validation initiale disposent d'une
 procédure de retrait dédiée : l'affectation est révoquée, l'identité archivée et
 l'application retirée. Leur histoire reste visible et auditée ; ils ne comptent
@@ -106,6 +112,7 @@ ne contient aucun secret réel. La production reste inchangée.
 - [`docs/ADR-010-COURTAGE-CONNEXION-APPLICATIVE.md`](docs/ADR-010-COURTAGE-CONNEXION-APPLICATIVE.md)
 - [`docs/ADR-011-CONSULTATION-CENTRALE-ACCES.md`](docs/ADR-011-CONSULTATION-CENTRALE-ACCES.md)
 - [`docs/ADR-012-RETRAIT-DONNEES-SYNTHETIQUES.md`](docs/ADR-012-RETRAIT-DONNEES-SYNTHETIQUES.md)
+- [`docs/ADR-013-REVOCATION-CENTRALE-ACCES.md`](docs/ADR-013-REVOCATION-CENTRALE-ACCES.md)
 - [`docs/ETAT-PREPROD-INFOMANIAK.md`](docs/ETAT-PREPROD-INFOMANIAK.md)
 - [`docs/CONFORMITE-NSES.md`](docs/CONFORMITE-NSES.md)
 - [`docs/CONTRAT-API-INTERNE.md`](docs/CONTRAT-API-INTERNE.md)
