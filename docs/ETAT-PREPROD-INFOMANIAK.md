@@ -39,11 +39,28 @@ Les cinq tables suivantes existent :
 Les déclencheurs `audit_events_no_update` et `audit_events_no_delete` sont
 installés. La tête de chaîne initiale existe, sans événement métier.
 
-## Limites constatées
+## Sauvegarde et restauration vérifiées
 
-Le tableau de bord de l'hébergement affiche actuellement **« Aucune
-sauvegarde »**. La base ne doit donc recevoir aucune donnée utilisateur réelle
-avant qu'une sauvegarde et une restauration aient été exécutées puis vérifiées.
+Infomaniak expose une sauvegarde de la base datée du **10 août 2026 à
+08:15:54**. Elle est sélectionnable et téléchargeable depuis le Manager.
+
+Un export logique complet a aussi été restauré dans la base isolée temporaire
+`6p7h3x_n09_admin_restore`. Le premier essai a confirmé que le compte
+d'exécution ne peut pas exporter les déclencheurs, conformément à ses droits
+minimaux. Un compte éphémère a donc reçu les seuls privilèges nécessaires pour
+l'exercice.
+
+L'export MariaDB contenait le `DEFINER` technique d'origine des déclencheurs. La
+restauration isolée l'a refusé sans privilège global ; la clause a été retirée
+de la copie avant un second essai réussi. La sauvegarde testée faisait **8 706
+octets** et portait l'empreinte SHA-256
+`8539254002facd335179e3020ad58027c592480cc2c8a3633a5df9ab87295143`.
+
+La base restaurée contenait cinq tables, deux déclencheurs, une tête de chaîne
+d'audit et aucune donnée utilisateur. Le code retour final était `0`. La base
+isolée, le compte éphémère, son secret et le fichier SQL temporaire ont ensuite
+été supprimés. Les deux bases et les deux comptes permanents sont les seuls
+éléments restants.
 
 Une tentative de connexion depuis l'environnement local a expiré. MariaDB n'est
 donc pas considérée comme accessible depuis Internet. Le test du compte
@@ -59,12 +76,13 @@ Il confirme :
 
 ## Prochain jalon autorisé
 
-Les jalons 1 à 3 (site Node, secret protégé, connexion et droits SQL) sont
-terminés. Le prochain jalon autorisé est désormais :
+Les jalons 1 à 4 (site Node, secret protégé, connexion, droits SQL, sauvegarde
+et restauration) sont terminés. Le prochain jalon autorisé est désormais :
 
-1. mettre en place puis tester sauvegarde et restauration ;
-2. seulement ensuite, introduire les premières données de préproduction ;
-3. déployer le transport HTTP après sa validation isolée ;
-4. raccorder OIDC et HTTPS après validation distincte.
+1. introduire uniquement les premières données synthétiques de préproduction ;
+2. déployer le transport HTTP après sa validation isolée ;
+3. raccorder OIDC et HTTPS après validation distincte ;
+4. autoriser des données utilisateur seulement après validation fonctionnelle
+   et décision explicite.
 
 La production et les applications existantes restent inchangées.
