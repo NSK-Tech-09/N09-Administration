@@ -67,8 +67,10 @@ python -m unittest discover -s tests -v
 La même vérification est exécutée automatiquement à chaque PR et mise à jour de
 `main`. Le dépôt public utilise les minutes Actions non facturées par GitHub.
 
-La commande de construction du paquet sera ajoutée lorsque le premier service
-exécutable sera introduit. Aucun artefact de production n’est livré à ce stade.
+Le service Node dispose de points d'entrée explicites pour son écoute locale
+fermée et pour l'amorçage synthétique de la préproduction. Les variables
+attendues sont décrites dans `service-node/.env.example` ; ce fichier ne contient
+aucun secret réel. Aucun artefact de production n’est livré à ce stade.
 
 ## Documents
 

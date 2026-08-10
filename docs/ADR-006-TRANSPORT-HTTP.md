@@ -27,6 +27,11 @@ Le jeu de validation associé utilise exclusivement le domaine réservé
 amorçage exige un indicateur explicite et une base dont le nom se termine par
 `_preprod`. Chaque création reste auditée et l'opération est idempotente.
 
+Les points d'entrée `server.mjs` et `seed-synthetic-preprod-cli.mjs` chargent une
+configuration nommée et vérifiée. TLS est obligatoire pour MariaDB. Tant que
+OIDC n'est pas raccordé, le serveur refuse toute écoute hors de la boucle locale
+et sa route de décision reste anonyme, donc fermée avec `401`.
+
 ## Limites avant déploiement
 
 - aucun adaptateur OIDC réel n'est encore raccordé ;
