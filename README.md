@@ -43,8 +43,9 @@ créer aucun droit applicatif. Il ne gère encore
 ni mots de passe, ni jetons, ni interface réseau.
 
 La première frontière d’API interne permet déjà d’évaluer un accès sans partager
-la base avec les applications. L’adaptateur réseau et la validation OIDC restent
-à brancher.
+la base avec les applications. Un transport HTTP fermé par défaut est validé en
+local : sans adaptateur d’authentification, toute décision est refusée. La
+validation OIDC et le déploiement sur la préproduction restent à brancher.
 
 Les objets de gouvernance sont conservés dans la même frontière transactionnelle
 que leur événement d’audit : une mutation sans preuve valide est annulée.
@@ -78,6 +79,7 @@ exécutable sera introduit. Aucun artefact de production n’est livré à ce st
 - [`docs/ADR-002-STOCKAGE-ET-AUDIT.md`](docs/ADR-002-STOCKAGE-ET-AUDIT.md)
 - [`docs/ADR-004-PORTAGE-SERVICE-NODE.md`](docs/ADR-004-PORTAGE-SERVICE-NODE.md)
 - [`docs/ADR-005-MARIADB-PRODUCTION.md`](docs/ADR-005-MARIADB-PRODUCTION.md)
+- [`docs/ADR-006-TRANSPORT-HTTP.md`](docs/ADR-006-TRANSPORT-HTTP.md)
 - [`docs/ETAT-PREPROD-INFOMANIAK.md`](docs/ETAT-PREPROD-INFOMANIAK.md)
 - [`docs/CONFORMITE-NSES.md`](docs/CONFORMITE-NSES.md)
 - [`docs/CONTRAT-API-INTERNE.md`](docs/CONTRAT-API-INTERNE.md)
