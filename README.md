@@ -1,3 +1,4 @@
+
 # N09 – Administration
 
 Poste de contrôle central des identités, des accès et de l’audit de l’écosystème
@@ -76,5 +77,6 @@ exécutable sera introduit. Aucun artefact de production n’est livré à ce st
 - [`docs/PLAN-MIGRATION-SUIVI-TACHES.md`](docs/PLAN-MIGRATION-SUIVI-TACHES.md)
 - [`docs/ADR-001-SEPARATION-RESPONSABILITES.md`](docs/ADR-001-SEPARATION-RESPONSABILITES.md)
 - [`docs/ADR-002-STOCKAGE-ET-AUDIT.md`](docs/ADR-002-STOCKAGE-ET-AUDIT.md)
+- [`docs/ADR-004-PORTAGE-SERVICE-NODE.md`](docs/ADR-004-PORTAGE-SERVICE-NODE.md)
 - [`docs/CONFORMITE-NSES.md`](docs/CONFORMITE-NSES.md)
 - [`docs/CONTRAT-API-INTERNE.md`](docs/CONTRAT-API-INTERNE.md)
