@@ -119,7 +119,8 @@ export function createHttpHandler({ repository, authenticate = async () => null,
         const reason = typeof error?.message === "string" && /^[a-z0-9_]+$/.test(error.message)
           ? error.message : "unexpected_oidc_error";
         console.error(JSON.stringify({ event: "oidc_callback_failed", reason }));
-        writeHtml(response, 400, "Connexion non validée", "<h1>Connexion non validée</h1><p>La preuve d’identité n’a pas pu être vérifiée. Aucun compte et aucun droit n’ont été modifiés.</p><a class=\"button\" href=\"/\">Retour</a>", [clearTransaction]);
+        const diagnostic = oidcConfig?.exposeSafeErrors ? `<p class="note">Code diagnostic : <code>${reason}</code></p>` : "";
+        writeHtml(response, 400, "Connexion non validée", `<h1>Connexion non validée</h1><p>La preuve d’identité n’a pas pu être vérifiée. Aucun compte et aucun droit n’ont été modifiés.</p>${diagnostic}<a class="button" href="/">Retour</a>`, [clearTransaction]);
       }
       return;
     }

@@ -68,6 +68,16 @@ test("ne révèle pas la preuve externe dans l'état de session public", async (
   });
 });
 
+test("n'expose un code OIDC sûr que lorsque le banc de validation l'autorise", async () => {
+  await withServer({ oidcConfig: { ...oidcConfig, exposeSafeErrors: true } }, async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/auth/infomaniak/callback`);
+    const body = await response.text();
+    assert.equal(response.status, 400);
+    assert.match(body, /incomplete_oidc_callback/);
+    assert.doesNotMatch(body, /client-secret|session-secret/);
+  });
+});
+
 test("valide le retour Infomaniak et crée seulement une session à rattacher", async () => {
   const { publicKey, privateKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
   const jwk = publicKey.export({ format: "jwk" });

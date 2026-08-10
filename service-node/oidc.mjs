@@ -102,7 +102,7 @@ export function oidcConfigFromEnvironment(environment = process.env) {
   }
   const redirect = new URL(config.redirectUri);
   if (redirect.protocol !== "https:") throw new Error("oidc_redirect_must_use_https");
-  return config;
+  return { ...config, exposeSafeErrors: environment.N09_EXPOSE_SAFE_OIDC_ERRORS === "true" };
 }
 
 export function authorizationRequest(config, now = Date.now()) {
