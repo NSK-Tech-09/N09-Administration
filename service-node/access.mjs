@@ -1,4 +1,3 @@
-
 export function decideAccess({
   identity,
   application,
