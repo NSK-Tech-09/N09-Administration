@@ -129,11 +129,11 @@ export async function exchangeAuthorizationCode({ code, verifier, config, fetchI
     method: "POST",
     headers: {
       accept: "application/json",
-      authorization: `Basic ${Buffer.from(`${config.clientId}:${config.clientSecret}`).toString("base64")}`,
       "content-type": "application/x-www-form-urlencoded",
     },
     body: new URLSearchParams({
-      grant_type: "authorization_code", code, redirect_uri: config.redirectUri, code_verifier: verifier,
+      grant_type: "authorization_code", code, redirect_uri: config.redirectUri,
+      client_id: config.clientId, client_secret: config.clientSecret, code_verifier: verifier,
     }),
   });
   let body;
