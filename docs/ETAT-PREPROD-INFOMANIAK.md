@@ -99,15 +99,35 @@ affectation synthétiques. Deux exécutions suivantes n'ont rien recréé
 utilisée appartient au domaine réservé `example.invalid` ; aucune donnée
 utilisateur réelle n'a été introduite.
 
+## Adaptateur OIDC déployé
+
+La PR **#18** a été validée par GitHub Actions puis fusionnée. La version active
+porte le commit `91c67d0e5e4fcf2dda543771bcb72844f9fba023` et reste isolée dans
+`releases/91c67d0`. La version `72de3040` est conservée pour le retour arrière.
+
+L'application OAuth **N09 Administration – Préproduction** est enregistrée
+chez Infomaniak avec l'unique retour
+`https://preprod-admin.nsktech.fr/auth/infomaniak/callback`. Les secrets sont
+hors dépôt et hors base métier dans le fichier d'environnement en permissions
+`600`. Les secrets affichés pendant l'amorçage ont été renouvelés avant usage ;
+seule la dernière valeur, transférée sans affichage, reste active.
+
+Les **52 tests Node** réussissent aussi sur Infomaniak. Les constats publics
+confirment :
+
+- `GET /health` : `200` et `{"status":"ok"}` ;
+- `GET /` : portail N09 et action « Continuer avec Infomaniak » ;
+- `GET /auth/infomaniak/start` : redirection `302` vers l'autorisation
+  Infomaniak, PKCE S256 et cookie temporaire `HttpOnly`, `Secure`,
+  `SameSite=Lax` ;
+- aucun compte, rattachement ou droit créé avant décision NSK.
+
 ## Prochain jalon autorisé
 
-Les jalons 1 à 6 (site Node, secret protégé, connexion, droits SQL, sauvegarde,
-restauration, données synthétiques et transport HTTPS fermé) sont terminés. Le
-prochain jalon autorisé est désormais :
-
-1. raccorder et valider l'adaptateur OIDC ;
-2. autoriser une première application pilote après validation distincte ;
-3. autoriser des données utilisateur seulement après validation fonctionnelle
-   et décision explicite.
+Le dernier contrôle de bout en bout attend le consentement explicite du
+titulaire Infomaniak pour transmettre son profil et son adresse au banc de
+préproduction. Après ce contrôle, le prochain jalon sera le stockage audité des
+demandes de rattachement, puis l'autorisation distincte d'une première
+application pilote.
 
 La production et les applications existantes restent inchangées.
