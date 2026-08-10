@@ -7,7 +7,7 @@ export const TASKS_APPLICATION = Object.freeze({
 });
 export const TASKS_READ_PERMISSION = "tasks:read";
 
-export function assertTasksPilotBootstrapTarget({ database, allowBootstrap, identityId, justification }) {
+export function assertTasksPilotBootstrapTarget({ database, allowBootstrap, identityId, justification, redirectUri }) {
   if (allowBootstrap !== "true") throw new Error("tasks pilot bootstrap is not explicitly enabled");
   if (typeof database !== "string" || !database.endsWith("_preprod")) throw new Error("tasks pilot bootstrap can only target preproduction");
   if (typeof identityId !== "string" || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(identityId)) {
@@ -16,13 +16,17 @@ export function assertTasksPilotBootstrapTarget({ database, allowBootstrap, iden
   if (typeof justification !== "string" || justification.trim().length < 20 || justification.trim().length > 500) {
     throw new Error("an explicit pilot justification between 20 and 500 characters is required");
   }
+  const redirect = new URL(redirectUri);
+  if (redirect.protocol !== "https:" || redirect.pathname !== "/auth/nsk/callback" || redirect.search || redirect.hash) {
+    throw new Error("tasks login redirect must be an exact HTTPS callback URI");
+  }
 }
 
 export async function bootstrapTasksPilot(repository, {
-  database, allowBootstrap, identityId, justification,
+  database, allowBootstrap, identityId, justification, redirectUri,
   correlationId = randomUUID(), assignmentId = randomUUID(),
 } = {}) {
-  assertTasksPilotBootstrapTarget({ database, allowBootstrap, identityId, justification });
+  assertTasksPilotBootstrapTarget({ database, allowBootstrap, identityId, justification, redirectUri });
   const identity = await repository.getIdentity(identityId);
   if (!identity || identity.status !== "active") throw new Error("pilot identity must exist and be active");
   const created = [];
@@ -37,6 +41,30 @@ export async function bootstrapTasksPilot(repository, {
       newValue: { status: "active", registration_policy: "closed" },
     }));
     created.push("application");
+  }
+  const registeredRedirect = await repository.getApplicationRedirectUri(TASKS_APPLICATION.applicationId, redirectUri);
+  if (registeredRedirect && registeredRedirect.status !== "active") {
+    throw new Error("tasks login redirect exists but is not active");
+  }
+  if (!registeredRedirect) {
+    await repository.saveApplicationRedirectUri(TASKS_APPLICATION.applicationId, redirectUri, createAuditEvent({
+      action: "application.redirect_uri_registered", result: "success", source: "tasks-pilot-bootstrap",
+      correlationId, applicationId: TASKS_APPLICATION.applicationId, justification,
+      newValue: { redirect_uri: redirectUri, status: "active" },
+    }));
+    created.push("redirect_uri");
+  }
+  const loginPolicy = await repository.getApplicationLoginPolicy(TASKS_APPLICATION.applicationId);
+  if (loginPolicy && (loginPolicy.status !== "active" || loginPolicy.requiredPermission !== TASKS_READ_PERMISSION)) {
+    throw new Error("tasks login policy conflicts with the controlled definition");
+  }
+  if (!loginPolicy) {
+    await repository.saveApplicationLoginPolicy(TASKS_APPLICATION.applicationId, TASKS_READ_PERMISSION, createAuditEvent({
+      action: "application.login_policy_registered", result: "success", source: "tasks-pilot-bootstrap",
+      correlationId, applicationId: TASKS_APPLICATION.applicationId, justification,
+      newValue: { required_permission: TASKS_READ_PERMISSION, status: "active" },
+    }));
+    created.push("login_policy");
   }
 
   const existing = await repository.listAssignments(identityId, TASKS_APPLICATION.applicationId);

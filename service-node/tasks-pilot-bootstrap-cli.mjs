@@ -12,6 +12,7 @@ async function main() {
       allowBootstrap: process.env.N09_ALLOW_TASKS_PILOT_BOOTSTRAP,
       identityId: process.env.N09_TASKS_PILOT_IDENTITY_ID,
       justification: process.env.N09_TASKS_PILOT_JUSTIFICATION,
+      redirectUri: process.env.N09_TASKS_LOGIN_REDIRECT_URI,
     });
     if (!await repository.verifyAuditChain()) throw new Error("audit chain verification failed");
     console.log(JSON.stringify({

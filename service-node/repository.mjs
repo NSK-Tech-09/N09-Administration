@@ -10,6 +10,9 @@ export class TransactionalMemoryRepository {
   #externalIdentities = new Map();
   #linkRequests = new Map();
   #applications = new Map();
+  #applicationRedirectUris = new Map();
+  #applicationLoginPolicies = new Map();
+  #applicationAuthorizationCodes = new Map();
   #assignments = new Map();
   #auditEntries = [];
 
@@ -19,6 +22,9 @@ export class TransactionalMemoryRepository {
       externalIdentities: cloneMap(this.#externalIdentities),
       linkRequests: cloneMap(this.#linkRequests),
       applications: cloneMap(this.#applications),
+      applicationRedirectUris: cloneMap(this.#applicationRedirectUris),
+      applicationLoginPolicies: cloneMap(this.#applicationLoginPolicies),
+      applicationAuthorizationCodes: cloneMap(this.#applicationAuthorizationCodes),
       assignments: cloneMap(this.#assignments),
       auditEntries: structuredClone(this.#auditEntries),
     };
@@ -27,6 +33,9 @@ export class TransactionalMemoryRepository {
     this.#externalIdentities = state.externalIdentities;
     this.#linkRequests = state.linkRequests;
     this.#applications = state.applications;
+    this.#applicationRedirectUris = state.applicationRedirectUris;
+    this.#applicationLoginPolicies = state.applicationLoginPolicies;
+    this.#applicationAuthorizationCodes = state.applicationAuthorizationCodes;
     this.#assignments = state.assignments;
     this.#auditEntries = state.auditEntries;
     return result;
@@ -85,6 +94,54 @@ export class TransactionalMemoryRepository {
 
   getLinkRequest(requestId) {
     return structuredClone(this.#linkRequests.get(requestId) ?? null);
+  }
+
+  saveApplicationRedirectUri(applicationId, redirectUri, auditEvent) {
+    return this.#transaction((state) => {
+      if (!state.applications.has(applicationId)) throw new Error("application not found");
+      state.applicationRedirectUris.set(`${applicationId}\n${redirectUri}`, { applicationId, redirectUri, status: "active" });
+      this.#appendAudit(state, auditEvent);
+    });
+  }
+
+  isApplicationRedirectUriAllowed(applicationId, redirectUri) {
+    return this.#applicationRedirectUris.get(`${applicationId}\n${redirectUri}`)?.status === "active";
+  }
+
+  getApplicationRedirectUri(applicationId, redirectUri) {
+    return structuredClone(this.#applicationRedirectUris.get(`${applicationId}\n${redirectUri}`) ?? null);
+  }
+
+  saveApplicationLoginPolicy(applicationId, requiredPermission, auditEvent) {
+    return this.#transaction((state) => {
+      if (!state.applications.has(applicationId)) throw new Error("application not found");
+      state.applicationLoginPolicies.set(applicationId, { applicationId, requiredPermission, status: "active" });
+      this.#appendAudit(state, auditEvent);
+    });
+  }
+
+  getApplicationLoginPolicy(applicationId) {
+    return structuredClone(this.#applicationLoginPolicies.get(applicationId) ?? null);
+  }
+
+  saveApplicationAuthorizationCode(record, auditEvent) {
+    return this.#transaction((state) => {
+      if (state.applicationAuthorizationCodes.has(record.codeHash)) throw new Error("authorization code already exists");
+      state.applicationAuthorizationCodes.set(record.codeHash, structuredClone({ ...record, consumedAt: null }));
+      this.#appendAudit(state, auditEvent);
+    });
+  }
+
+  consumeApplicationAuthorizationCode({ codeHash, applicationId, redirectUri, codeChallenge, now = new Date() }, auditEvent) {
+    return this.#transaction((state) => {
+      const record = state.applicationAuthorizationCodes.get(codeHash);
+      if (!record || record.consumedAt || record.applicationId !== applicationId ||
+          record.redirectUri !== redirectUri || record.codeChallenge !== codeChallenge || new Date(record.expiresAt) <= now) return null;
+      const consumed = { ...record, consumedAt: now.toISOString() };
+      state.applicationAuthorizationCodes.set(codeHash, consumed);
+      this.#appendAudit(state, auditEvent);
+      return structuredClone(consumed);
+    });
   }
 
   listLinkRequests(status = null) {
