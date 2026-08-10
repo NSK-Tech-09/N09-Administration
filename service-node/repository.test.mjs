@@ -65,6 +65,25 @@ test("accepte la version suivante et préserve la chaîne", () => {
   assert.equal(repository.verifyAuditChain(), true);
 });
 
+test("fournit un instantané trié du registre d’accès", () => {
+  const repository = new TransactionalMemoryRepository();
+  prerequisites(repository);
+  const secondApplication = {
+    applicationId: "admin", displayName: "N09 – Administration",
+    status: "active", registrationPolicy: "closed",
+  };
+  repository.saveApplication(secondApplication, audit("application.registered", {
+    applicationId: secondApplication.applicationId,
+  }));
+  repository.saveAssignment({
+    assignmentId: "assignment-1", subjectId: identity.identityId, applicationId: application.applicationId,
+    roleId: "reader", permissions: ["tasks:read"], scopeType: null, scopeId: null,
+    conditions: [], status: "active", version: 1,
+  }, audit("assignment.created", { subjectId: identity.identityId, applicationId: application.applicationId }));
+  assert.deepEqual(repository.listApplications().map((item) => item.applicationId), ["admin", "tasks"]);
+  assert.deepEqual(repository.listAllAssignments().map((item) => item.assignmentId), ["assignment-1"]);
+});
+
 test("l’instantané d’audit ne permet pas d’altérer le journal", () => {
   const repository = new TransactionalMemoryRepository();
   repository.saveIdentity(identity, audit("identity.created", { subjectId: identity.identityId }));

@@ -3,6 +3,7 @@ import { generateKeyPairSync, randomUUID, sign } from "node:crypto";
 import { createServer } from "node:http";
 import test from "node:test";
 import { createAuditEvent } from "./audit.mjs";
+import { ACCESS_DIRECTORY_READ_PERMISSION } from "./access-admin.mjs";
 import { createLinkRequest } from "./federated-identity.mjs";
 import { createHttpHandler } from "./http.mjs";
 import { ADMIN_APPLICATION_ID, LINK_DECISION_PERMISSION } from "./identity-link-admin.mjs";
@@ -56,7 +57,7 @@ const adminAudit = (action, changes = {}) => createAuditEvent({
   justification: "Test HTTP reproductible", ...changes,
 });
 
-function seededAdminRepository({ withPermission = true, subject = "provider-subject-secret" } = {}) {
+function seededAdminRepository({ withPermission = true, withAccessRead = false, subject = "provider-subject-secret" } = {}) {
   const adminRepository = new TransactionalMemoryRepository();
   adminRepository.saveIdentity(adminIdentity, adminAudit("identity.created", { subjectId: adminIdentity.identityId }));
   adminRepository.saveIdentity(targetIdentity, adminAudit("identity.created", { subjectId: targetIdentity.identityId }));
@@ -70,6 +71,15 @@ function seededAdminRepository({ withPermission = true, subject = "provider-subj
       roleId: "identity-link-administrator", permissions: [LINK_DECISION_PERMISSION], scopeType: null,
       scopeId: null, conditions: [], status: "active", validFrom: null, validUntil: null,
       reason: "Test de l’administration", decidedBy: adminIdentity.identityId,
+      inheritedFromGroup: null, version: 1,
+    }, adminAudit("assignment.created", { subjectId: adminIdentity.identityId, applicationId: ADMIN_APPLICATION_ID }));
+  }
+  if (withAccessRead) {
+    adminRepository.saveAssignment({
+      assignmentId: randomUUID(), subjectId: adminIdentity.identityId, applicationId: ADMIN_APPLICATION_ID,
+      roleId: "access-directory-reader", permissions: [ACCESS_DIRECTORY_READ_PERMISSION], scopeType: null,
+      scopeId: null, conditions: [], status: "active", validFrom: null, validUntil: null,
+      reason: "Test de la consultation des accès", decidedBy: adminIdentity.identityId,
       inheritedFromGroup: null, version: 1,
     }, adminAudit("assignment.created", { subjectId: adminIdentity.identityId, applicationId: ADMIN_APPLICATION_ID }));
   }
@@ -139,6 +149,43 @@ test("affiche les demandes sans exposer le sujet technique du fournisseur", asyn
     assert.match(body, new RegExp(linkRequest.requestId));
     assert.match(body, /Personne candidate|candidate@example\.test/);
     assert.doesNotMatch(body, /provider-subject-secret/);
+  });
+});
+
+test("sépare la consultation des accès du pouvoir de décision sur les rattachements", async () => {
+  const { adminRepository } = seededAdminRepository({ withPermission: true, withAccessRead: false });
+  await withServer({ repository: adminRepository, oidcConfig }, async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/admin/access`, { headers: { cookie: adminCookie() } });
+    assert.equal(response.status, 403);
+    assert.match(await response.text(), /permission dédiée à la consultation des accès/);
+  });
+});
+
+test("affiche le registre en lecture seule avec identités, applications et affectations", async () => {
+  const { adminRepository } = seededAdminRepository({ withAccessRead: true });
+  await withServer({ repository: adminRepository, oidcConfig }, async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/admin/access`, { headers: { cookie: adminCookie() } });
+    const body = await response.text();
+    assert.equal(response.status, 200);
+    assert.match(body, /Utilisateurs et accès/);
+    assert.match(body, /Admin NSK/);
+    assert.match(body, /N09 – Administration/);
+    assert.match(body, /access-directory-reader/);
+    assert.match(body, /administration:access:read/);
+    assert.match(body, /lecture seule/);
+    assert.doesNotMatch(body, /provider-subject-secret/);
+    assert.doesNotMatch(body, /target_identity_id|justification/);
+  });
+});
+
+test("refuse toute écriture sur le registre de consultation", async () => {
+  const { adminRepository } = seededAdminRepository({ withAccessRead: true });
+  await withServer({ repository: adminRepository, oidcConfig }, async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/admin/access`, {
+      method: "POST", headers: { cookie: adminCookie() },
+    });
+    assert.equal(response.status, 405);
+    assert.equal(response.headers.get("allow"), "GET");
   });
 });
 

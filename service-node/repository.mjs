@@ -240,9 +240,25 @@ export class TransactionalMemoryRepository {
     return structuredClone(this.#applications.get(applicationId) ?? null);
   }
 
+  listApplications() {
+    return [...this.#applications.values()]
+      .sort((left, right) => left.displayName.localeCompare(right.displayName, "fr"))
+      .map((item) => structuredClone(item));
+  }
+
   listAssignments(identityId, applicationId) {
     return [...this.#assignments.values()]
       .filter((item) => item.subjectId === identityId && item.applicationId === applicationId)
+      .map((item) => structuredClone(item));
+  }
+
+  listAllAssignments() {
+    return [...this.#assignments.values()]
+      .sort((left, right) =>
+        left.subjectId.localeCompare(right.subjectId) ||
+        left.applicationId.localeCompare(right.applicationId) ||
+        left.roleId.localeCompare(right.roleId)
+      )
       .map((item) => structuredClone(item));
   }
 

@@ -9,6 +9,7 @@
   },
   "scripts": {
     "start": "node server.mjs",
+    "bootstrap:access-admin": "node access-admin-bootstrap-cli.mjs",
     "bootstrap:identity-link-admin": "node identity-link-admin-bootstrap-cli.mjs",
     "bootstrap:tasks-pilot": "node tasks-pilot-bootstrap-cli.mjs",
     "seed:synthetic-preprod": "node seed-synthetic-preprod-cli.mjs",
