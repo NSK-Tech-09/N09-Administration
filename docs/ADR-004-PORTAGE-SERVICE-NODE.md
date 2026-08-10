@@ -18,6 +18,12 @@ doit reproduire ses codes de décision à partir des mêmes vecteurs de conformi
 Le premier lot couvre la fonction pure de décision et la frontière de l'API
 interne, sans transport, stockage ou jeton réel.
 
+Le deuxième lot porte le contrat d'audit append-only, le chaînage SHA-256 et les
+garanties transactionnelles dans un adaptateur mémoire déterministe. Cet
+adaptateur est un oracle de comportement et non un stockage de production. Le
+branchement MariaDB restera un lot distinct afin que son pilote, ses migrations
+et sa stratégie de sauvegarde puissent être validés ensemble.
+
 Les lots suivants porteront séparément le stockage transactionnel et l'audit,
 puis la validation OIDC et le transport HTTPS. Aucun appel de l'écosystème ne
 sera ouvert avant égalité des décisions, validation cryptographique et retour
