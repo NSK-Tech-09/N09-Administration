@@ -3,7 +3,10 @@ import { evaluateAccessRequestAsync } from "./api.mjs";
 import { createAuditEvent } from "./audit.mjs";
 import { createLinkRequest } from "./federated-identity.mjs";
 import { authorizeAccessAdministration } from "./access-admin.mjs";
-import { authorizeIdentityLinkAdministration } from "./identity-link-admin.mjs";
+import {
+  ACCESS_DECISION_PERMISSION, authorizeAccessDecisionAdministration, revokeAccessAssignment,
+} from "./access-decision-admin.mjs";
+import { ADMIN_APPLICATION_ID, authorizeIdentityLinkAdministration } from "./identity-link-admin.mjs";
 import {
   exchangeApplicationLoginCode, issueApplicationLoginCode, validateAuthorizationRequest,
 } from "./application-login.mjs";
@@ -142,6 +145,25 @@ function renderAccessAdministration(identities, applications, assignments) {
   return `<h1>Utilisateurs et accès</h1><p>Vue centrale en lecture seule des identités, applications et affectations. Cette page n’accorde, ne modifie et ne révoque aucun droit.</p><div class="summary"><div class="metric"><strong>${activeIdentities}</strong>identités actives</div><div class="metric"><strong>${activeApplications}</strong>applications actives</div><div class="metric"><strong>${activeAssignments}</strong>affectations actives</div></div><h2>Identités</h2><div class="directory">${identityCards || '<div class="facts"><p>Aucune identité enregistrée.</p></div>'}</div><h2>Applications</h2><div class="directory">${applicationCards || '<div class="facts"><p>Aucune application enregistrée.</p></div>'}</div><h2>Affectations</h2><div class="directory">${assignmentCards || '<div class="facts"><p>Aucune affectation enregistrée.</p></div>'}</div><nav><a class="button secondary" href="/">Retour à l’accueil</a><a class="button secondary" href="/admin/link-requests">Rattachements</a><form method="post" action="/auth/logout"><button class="secondary" type="submit">Fermer la session</button></form></nav>`;
 }
 
+function renderAccessDecisionAdministration(identities, applications, assignments, csrf) {
+  const identityById = new Map(identities.map((identity) => [identity.identityId, identity]));
+  const applicationById = new Map(applications.map((application) => [application.applicationId, application]));
+  const activeAssignments = assignments.filter((assignment) => assignment.status === "active");
+  const cards = activeAssignments.map((assignment) => {
+    const identity = identityById.get(assignment.subjectId);
+    const application = applicationById.get(assignment.applicationId);
+    const scope = assignment.scopeType ? `${assignment.scopeType} : ${assignment.scopeId || "non défini"}` : "global";
+    const permissions = assignment.permissions.map((permission) => `<li><code>${escapeHtml(permission)}</code></li>`).join("");
+    const protectedAuthority = assignment.applicationId === ADMIN_APPLICATION_ID
+      && assignment.permissions.includes(ACCESS_DECISION_PERMISSION);
+    const action = protectedAuthority
+      ? '<div class="facts"><p><strong>Pouvoir protégé :</strong> son passage de relais relève d’une procédure de gouvernance dédiée.</p></div>'
+      : `<div class="actions"><form method="post" action="/admin/access-decisions/${escapeHtml(assignment.assignmentId)}/revoke"><input type="hidden" name="csrf" value="${escapeHtml(csrf)}"><input type="hidden" name="expected_version" value="${escapeHtml(assignment.version)}"><label>Justification de la révocation<input name="justification" minlength="20" maxlength="500" required placeholder="Pourquoi cet accès doit-il être retiré ?"></label><button class="secondary" type="submit">Révoquer cet accès</button></form></div>`;
+    return `<article class="entry assignment"><h2>${escapeHtml(identity?.displayName || assignment.subjectId)} → ${escapeHtml(application?.displayName || assignment.applicationId)}</h2><p><strong>${escapeHtml(assignment.roleId)}</strong> · périmètre ${escapeHtml(scope)} · version ${escapeHtml(assignment.version)}</p><ul class="permissions">${permissions}</ul>${action}</article>`;
+  }).join("");
+  return `<h1>Décider les révocations d’accès</h1><p>Cette première frontière de décision retire un accès central existant. Chaque révocation exige une justification, contrôle la version affichée et écrit sa preuve dans la même transaction. Aucun accès ne peut être accordé depuis cet écran.</p><div class="facts"><p><strong>Protection de continuité :</strong> le pouvoir de décision lui-même relève d’une procédure dédiée et n’est pas révocable ici.</p></div><div class="directory">${cards || '<div class="facts"><p>Aucune affectation active.</p></div>'}</div><nav><a class="button secondary" href="/admin/access">Retour au registre</a><a class="button secondary" href="/">Retour à l’accueil</a><form method="post" action="/auth/logout"><button class="secondary" type="submit">Fermer la session</button></form></nav>`;
+}
+
 export function createHttpHandler({ repository, authenticate = async () => null, oidcConfig = null, fetchImpl = fetch, maxBodyBytes = DEFAULT_MAX_BODY_BYTES }) {
   if (!repository) throw new Error("repository is required");
   if (typeof authenticate !== "function") throw new Error("authenticate must be a function");
@@ -209,6 +231,10 @@ export function createHttpHandler({ repository, authenticate = async () => null,
         try {
           const decision = await authorizeAccessAdministration(repository, session.identityId);
           if (decision.allowed) administrationLinks.push('<a class="button" href="/admin/access">Consulter les utilisateurs et accès</a>');
+        } catch { /* no administrative affordance on repository failure */ }
+        try {
+          const decision = await authorizeAccessDecisionAdministration(repository, session.identityId);
+          if (decision.allowed) administrationLinks.push('<a class="button" href="/admin/access-decisions">Décider les révocations</a>');
         } catch { /* no administrative affordance on repository failure */ }
       }
       const content = session
@@ -309,6 +335,75 @@ export function createHttpHandler({ repository, authenticate = async () => null,
       response.setHeader("location", "/");
       response.setHeader("set-cookie", cookie(OIDC_SESSION_COOKIE, "", { maxAge: 0 }));
       response.end();
+      return;
+    }
+    const accessDecisionRoute = url.pathname.match(/^\/admin\/access-decisions(?:\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\/revoke)?$/i);
+    if (accessDecisionRoute) {
+      let session;
+      try {
+        if (!oidcConfig) throw new Error("oidc_not_configured");
+        session = open(parseCookies(request.headers.cookie).get(OIDC_SESSION_COOKIE), oidcConfig.sessionSecret, "oidc-session");
+      } catch {
+        writeHtml(response, 401, "Connexion requise", '<h1>Connexion requise</h1><p>Une session NSK valide est nécessaire.</p><a class="button" href="/">Se connecter</a>');
+        return;
+      }
+      if (session.status !== "authenticated" || !session.identityId || !session.csrf) {
+        writeHtml(response, 401, "Nouvelle connexion requise", '<h1>Nouvelle connexion requise</h1><p>Ferme puis renouvelle ta session afin d’accéder à l’administration sécurisée.</p><a class="button" href="/">Retour</a>');
+        return;
+      }
+      let access;
+      try {
+        access = await authorizeAccessDecisionAdministration(repository, session.identityId);
+      } catch {
+        console.error(JSON.stringify({ event: "access_decision_administration_unavailable", reason: "authorization_repository_failure" }));
+        writeHtml(response, 503, "Administration indisponible", '<h1>Administration momentanément indisponible</h1><p>Aucune décision d’accès ne peut être vérifiée ou appliquée pour le moment.</p><a class="button" href="/">Retour</a>');
+        return;
+      }
+      if (!access.allowed) {
+        writeHtml(response, 403, "Accès refusé", '<h1>Accès refusé</h1><p>Cette identité ne possède pas la permission dédiée aux décisions d’accès. Aucun droit implicite n’est accordé.</p><a class="button" href="/">Retour</a>');
+        return;
+      }
+      if (!accessDecisionRoute[1] && request.method === "GET") {
+        try {
+          const [identities, applications, assignments] = await Promise.all([
+            repository.listIdentities(), repository.listApplications(), repository.listAllAssignments(),
+          ]);
+          writeHtml(response, 200, "Décisions d’accès", renderAccessDecisionAdministration(
+            identities, applications, assignments, session.csrf,
+          ));
+        } catch {
+          console.error(JSON.stringify({ event: "access_decision_administration_unavailable", reason: "listing_repository_failure" }));
+          writeHtml(response, 503, "Administration indisponible", '<h1>Administration momentanément indisponible</h1><p>Le registre n’a pas pu être consulté. Aucun accès n’a été modifié.</p><a class="button" href="/">Retour</a>');
+        }
+        return;
+      }
+      if (accessDecisionRoute[1] && request.method === "POST") {
+        try {
+          const form = await readForm(request, maxBodyBytes);
+          if (!safeEqual(form.get("csrf"), session.csrf)) throw new HttpInputError(403, "invalid_csrf");
+          const expectedVersion = Number(form.get("expected_version"));
+          const justification = String(form.get("justification") ?? "").trim();
+          if (!Number.isInteger(expectedVersion) || expectedVersion < 1) throw new HttpInputError(400, "invalid_assignment_version");
+          if (justification.length < 20 || justification.length > 500) throw new HttpInputError(400, "invalid_justification");
+          await revokeAccessAssignment(repository, {
+            assignmentId: accessDecisionRoute[1].toLowerCase(),
+            expectedVersion,
+            operatorIdentityId: session.identityId,
+            justification,
+          });
+          redirect(response, "/admin/access-decisions");
+        } catch (error) {
+          if (error instanceof HttpInputError) {
+            writeHtml(response, error.status, "Révocation non appliquée", `<h1>Révocation non appliquée</h1><p>La demande est invalide. Aucun accès n’a été modifié.</p><p class="note">Code : ${escapeHtml(error.code)}</p><a class="button" href="/admin/access-decisions">Retour</a>`);
+          } else {
+            console.error(JSON.stringify({ event: "access_revocation_failed", reason: "repository_rejected_decision" }));
+            writeHtml(response, 409, "Révocation non appliquée", '<h1>Révocation non appliquée</h1><p>L’affectation a changé, n’est plus active ou son retrait relève d’une gouvernance dédiée. Aucun changement partiel n’a été conservé.</p><a class="button" href="/admin/access-decisions">Retour</a>');
+          }
+        }
+        return;
+      }
+      response.setHeader("allow", accessDecisionRoute[1] ? "POST" : "GET");
+      writeJson(response, 405, { error: "method_not_allowed" });
       return;
     }
     if (url.pathname === "/admin/access") {
