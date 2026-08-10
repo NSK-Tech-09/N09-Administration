@@ -10,18 +10,16 @@ const ALLOWED_FIELDS = new Set([
   "satisfied_conditions",
 ]);
 
-export function evaluateAccessRequest({ repository, principal, payload }) {
-  const correlationId = principal?.correlationId || randomUUID();
-  const respond = (status, body) => ({ status, body, correlationId });
-  if (!principal) return respond(401, { error: "authentication_required" });
+function prepareRequest(principal, payload) {
+  if (!principal) return { error: [401, { error: "authentication_required" }] };
   if (principal.audience !== principal.applicationId) {
-    return respond(403, { error: "invalid_audience" });
+    return { error: [403, { error: "invalid_audience" }] };
   }
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
-    return respond(400, { error: "invalid_request" });
+    return { error: [400, { error: "invalid_request" }] };
   }
   if (Object.keys(payload).some((field) => !ALLOWED_FIELDS.has(field))) {
-    return respond(400, { error: "invalid_request" });
+    return { error: [400, { error: "invalid_request" }] };
   }
   const conditions = payload.satisfied_conditions ?? [];
   if (
@@ -31,23 +29,54 @@ export function evaluateAccessRequest({ repository, principal, payload }) {
     !Array.isArray(conditions) ||
     !conditions.every((condition) => typeof condition === "string")
   ) {
-    return respond(400, { error: "invalid_request" });
+    return { error: [400, { error: "invalid_request" }] };
   }
   if (payload.application_id !== principal.applicationId) {
-    return respond(403, { error: "application_boundary_violation" });
+    return { error: [403, { error: "application_boundary_violation" }] };
   }
+  return { conditions };
+}
 
-  const identity = repository.getIdentity(payload.identity_id);
-  const application = repository.getApplication(payload.application_id);
+function decisionResponse({ identity, application, assignments, payload, conditions, respond }) {
   if (!identity || !application) return respond(404, { error: "resource_not_found" });
   const decision = decideAccess({
-    identity,
-    application,
-    assignments: repository.listAssignments(payload.identity_id, payload.application_id),
+    identity, application, assignments,
     requiredPermission: payload.required_permission,
     scopeType: payload.scope_type ?? null,
     scopeId: payload.scope_id ?? null,
     satisfiedConditions: conditions,
   });
   return respond(200, { allowed: decision.allowed, reason_code: decision.reasonCode });
+}
+
+export function evaluateAccessRequest({ repository, principal, payload }) {
+  const correlationId = principal?.correlationId || randomUUID();
+  const respond = (status, body) => ({ status, body, correlationId });
+  const prepared = prepareRequest(principal, payload);
+  if (prepared.error) return respond(...prepared.error);
+
+  const identity = repository.getIdentity(payload.identity_id);
+  const application = repository.getApplication(payload.application_id);
+  return decisionResponse({
+    identity, application,
+    assignments: repository.listAssignments(payload.identity_id, payload.application_id),
+    payload, conditions: prepared.conditions, respond,
+  });
+}
+
+export async function evaluateAccessRequestAsync({ repository, principal, payload }) {
+  const correlationId = principal?.correlationId || randomUUID();
+  const respond = (status, body) => ({ status, body, correlationId });
+  const prepared = prepareRequest(principal, payload);
+  if (prepared.error) return respond(...prepared.error);
+
+  const [identity, application, assignments] = await Promise.all([
+    repository.getIdentity(payload.identity_id),
+    repository.getApplication(payload.application_id),
+    repository.listAssignments(payload.identity_id, payload.application_id),
+  ]);
+  return decisionResponse({
+    identity, application, assignments,
+    payload, conditions: prepared.conditions, respond,
+  });
 }
