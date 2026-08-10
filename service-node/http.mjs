@@ -2,6 +2,7 @@ import { randomUUID, timingSafeEqual } from "node:crypto";
 import { evaluateAccessRequestAsync } from "./api.mjs";
 import { createAuditEvent } from "./audit.mjs";
 import { createLinkRequest } from "./federated-identity.mjs";
+import { authorizeIdentityLinkAdministration } from "./identity-link-admin.mjs";
 import {
   authorizationRequest, cookie, exchangeAuthorizationCode, INFOMANIAK_ISSUER,
   OIDC_SESSION_COOKIE, OIDC_TRANSACTION_COOKIE, open, parseCookies, seal, verifyIdToken,
@@ -40,7 +41,18 @@ function writeHtml(response, status, title, content, setCookies = []) {
   response.setHeader("referrer-policy", "no-referrer");
   response.setHeader("x-content-type-options", "nosniff");
   if (setCookies.length) response.setHeader("set-cookie", setCookies);
-  response.end(`<!doctype html><html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>${escapeHtml(title)} · N09 Administration</title><style>*{box-sizing:border-box}body{margin:0;background:#f3f6f4;color:#18221e;font:16px system-ui,sans-serif;display:grid;place-items:center;min-height:100vh}.card{width:min(640px,calc(100% - 36px));background:#fff;border:1px solid #dfe6e2;border-radius:18px;padding:34px;box-shadow:0 12px 40px #19392d14}.brand{color:#21825e;font-size:12px;font-weight:800;letter-spacing:1px}h1{font:600 31px Georgia,serif;margin:22px 0 12px}p{color:#5d6c65;line-height:1.6}.facts{padding:16px;border-radius:10px;background:#f3f7f5;margin:20px 0}.facts strong{color:#173e32}.button,button{display:inline-block;border:0;padding:12px 17px;border-radius:9px;background:#173e32;color:#fff;text-decoration:none;font-weight:bold;cursor:pointer}.note{font-size:13px}</style></head><body><main class="card"><div class="brand">N09 · ADMINISTRATION · NSK TECH 09</div>${content}</main></body></html>`);
+  response.end(`<!doctype html><html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>${escapeHtml(title)} · N09 Administration</title><style>*{box-sizing:border-box}body{margin:0;background:#f3f6f4;color:#18221e;font:16px system-ui,sans-serif;display:grid;place-items:center;min-height:100vh;padding:28px 0}.card{width:min(920px,calc(100% - 36px));background:#fff;border:1px solid #dfe6e2;border-radius:18px;padding:34px;box-shadow:0 12px 40px #19392d14}.brand{color:#21825e;font-size:12px;font-weight:800;letter-spacing:1px}h1{font:600 31px Georgia,serif;margin:22px 0 12px}h2{font:600 21px Georgia,serif}p{color:#5d6c65;line-height:1.6}.facts,.request{padding:16px;border-radius:10px;background:#f3f7f5;margin:20px 0}.facts strong,.request strong{color:#173e32}.button,button{display:inline-block;border:0;padding:12px 17px;border-radius:9px;background:#173e32;color:#fff;text-decoration:none;font-weight:bold;cursor:pointer}.button.secondary,button.secondary{background:#68756f}.actions{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:15px}.actions form{display:grid;gap:9px}.actions label{font-size:13px;font-weight:700}.actions select,.actions input{width:100%;padding:10px;border:1px solid #bdcac4;border-radius:8px;background:#fff}.note{font-size:13px}.expired{color:#9b391f;font-weight:700}nav{display:flex;gap:10px;align-items:center;margin-top:22px}@media(max-width:700px){.actions{grid-template-columns:1fr}.card{padding:24px}}</style></head><body><main class="card"><div class="brand">N09 · ADMINISTRATION · NSK TECH 09</div>${content}</main></body></html>`);
+}
+
+async function readBody(request, maxBodyBytes) {
+  const chunks = [];
+  let received = 0;
+  for await (const chunk of request) {
+    received += chunk.length;
+    if (received > maxBodyBytes) throw new HttpInputError(413, "request_too_large");
+    chunks.push(chunk);
+  }
+  return Buffer.concat(chunks).toString("utf8");
 }
 
 async function readJson(request, maxBodyBytes) {
@@ -49,18 +61,51 @@ async function readJson(request, maxBodyBytes) {
     throw new HttpInputError(415, "unsupported_media_type");
   }
 
-  const chunks = [];
-  let received = 0;
-  for await (const chunk of request) {
-    received += chunk.length;
-    if (received > maxBodyBytes) throw new HttpInputError(413, "request_too_large");
-    chunks.push(chunk);
-  }
   try {
-    return JSON.parse(Buffer.concat(chunks).toString("utf8"));
-  } catch {
+    return JSON.parse(await readBody(request, maxBodyBytes));
+  } catch (error) {
+    if (error instanceof HttpInputError) throw error;
     throw new HttpInputError(400, "invalid_json");
   }
+}
+
+async function readForm(request, maxBodyBytes) {
+  const contentType = request.headers["content-type"] ?? "";
+  if (!contentType.toLowerCase().startsWith("application/x-www-form-urlencoded")) {
+    throw new HttpInputError(415, "unsupported_media_type");
+  }
+  return new URLSearchParams(await readBody(request, maxBodyBytes));
+}
+
+function safeEqual(left, right) {
+  if (typeof left !== "string" || typeof right !== "string") return false;
+  const leftBuffer = Buffer.from(left);
+  const rightBuffer = Buffer.from(right);
+  return leftBuffer.length === rightBuffer.length && timingSafeEqual(leftBuffer, rightBuffer);
+}
+
+function redirect(response, location) {
+  response.statusCode = 303;
+  response.setHeader("cache-control", "no-store");
+  response.setHeader("location", location);
+  response.end();
+}
+
+function formatDate(value) {
+  return new Intl.DateTimeFormat("fr-FR", { dateStyle: "medium", timeStyle: "short", timeZone: "Europe/Paris" }).format(new Date(value));
+}
+
+function renderLinkRequestAdministration(requests, identities, csrf, now = new Date()) {
+  const identityOptions = identities.map((identity) =>
+    `<option value="${escapeHtml(identity.identityId)}">${escapeHtml(identity.displayName)} — ${escapeHtml(identity.email)}</option>`
+  ).join("");
+  const cards = requests.map((request) => {
+    const expired = new Date(request.expiresAt) <= now;
+    const approval = expired ? '<p class="expired">Cette demande est expirée et ne peut plus être approuvée.</p>' :
+      `<form method="post" action="/admin/link-requests/${escapeHtml(request.requestId)}/approve"><input type="hidden" name="csrf" value="${escapeHtml(csrf)}"><label>Identité NSK cible<select name="target_identity_id" required><option value="">Sélectionner…</option>${identityOptions}</select></label><label>Justification<input name="justification" maxlength="500" required placeholder="Pourquoi ce rattachement est légitime"></label><button type="submit">Approuver</button></form>`;
+    return `<section class="request"><h2>${escapeHtml(request.displayNameHint || "Identité externe")}</h2><p><strong>Fournisseur :</strong> ${escapeHtml(request.providerKey)}<br><strong>Adresse présentée :</strong> ${escapeHtml(request.emailHint || "non communiquée")}<br><strong>Demandée le :</strong> ${escapeHtml(formatDate(request.requestedAt))}<br><strong>Échéance :</strong> ${escapeHtml(formatDate(request.expiresAt))}<br><span class="note">Référence : ${escapeHtml(request.requestId)}</span></p><div class="actions">${approval}<form method="post" action="/admin/link-requests/${escapeHtml(request.requestId)}/reject"><input type="hidden" name="csrf" value="${escapeHtml(csrf)}"><label>Motif du refus<input name="justification" maxlength="500" required placeholder="Pourquoi cette demande est refusée"></label><button class="secondary" type="submit">Refuser</button></form></div></section>`;
+  }).join("");
+  return `<h1>Demandes de rattachement</h1><p>Chaque décision est nominative, justifiée et inscrite dans le journal d’audit. Aucun rôle ni droit applicatif n’est accordé par un rattachement.</p>${cards || '<div class="facts"><p>Aucune demande en attente.</p></div>'}<nav><a class="button secondary" href="/">Retour à l’accueil</a><form method="post" action="/auth/logout"><button class="secondary" type="submit">Fermer la session</button></form></nav>`;
 }
 
 export function createHttpHandler({ repository, authenticate = async () => null, oidcConfig = null, fetchImpl = fetch, maxBodyBytes = DEFAULT_MAX_BODY_BYTES }) {
@@ -80,8 +125,15 @@ export function createHttpHandler({ repository, authenticate = async () => null,
       }
       const requestReference = session?.requestId
         ? `<p>Demande enregistrée : <strong>${escapeHtml(session.requestId)}</strong></p>` : "";
+      let administrationLink = "";
+      if (session?.status === "authenticated" && session.csrf) {
+        try {
+          const decision = await authorizeIdentityLinkAdministration(repository, session.identityId);
+          if (decision.allowed) administrationLink = '<a class="button" href="/admin/link-requests">Administrer les rattachements</a>';
+        } catch { /* no administrative affordance on repository failure */ }
+      }
       const content = session
-        ? `<h1>Identité Infomaniak vérifiée</h1><p>Bienvenue <strong>${escapeHtml(session.displayName)}</strong>. La preuve cryptographique est valide.</p><div class="facts"><p>État NSK : <strong>${session.status === "authenticated" ? "rattachée" : "rattachement requis"}</strong></p>${requestReference}<p>${session.status === "authenticated" ? "Le compte NSK est reconnu ; les droits restent contrôlés séparément." : "Aucun compte, rôle ou droit n’a été créé automatiquement. Une décision humaine reste obligatoire."}</p></div><form method="post" action="/auth/logout"><button type="submit">Fermer la session</button></form>`
+        ? `<h1>Identité Infomaniak vérifiée</h1><p>Bienvenue <strong>${escapeHtml(session.displayName)}</strong>. La preuve cryptographique est valide.</p><div class="facts"><p>État NSK : <strong>${session.status === "authenticated" ? "rattachée" : "rattachement requis"}</strong></p>${requestReference}<p>${session.status === "authenticated" ? "Le compte NSK est reconnu ; les droits restent contrôlés séparément." : "Aucun compte, rôle ou droit n’a été créé automatiquement. Une décision humaine reste obligatoire."}</p></div><nav>${administrationLink}<form method="post" action="/auth/logout"><button class="secondary" type="submit">Fermer la session</button></form></nav>`
         : `<h1>Le cœur d’identité est prêt</h1><p>Connecte-toi avec Infomaniak pour présenter une preuve d’identité au registre central NSK.</p><div class="facts"><p><strong>Connexion réelle :</strong> Authorization Code + PKCE S256.</p><p><strong>Zéro privilège implicite :</strong> une identité inconnue reste sans droit.</p></div>${oidcConfig ? '<a class="button" href="/auth/infomaniak/start">Continuer avec Infomaniak</a>' : '<p>Le fournisseur OIDC n’est pas encore configuré.</p>'}`;
       writeHtml(response, 200, "Accueil", content);
       return;
@@ -120,7 +172,7 @@ export function createHttpHandler({ repository, authenticate = async () => null,
           if (!identity || identity.status !== "active") throw new Error("nsk_identity_not_active");
           session = {
             issuer: INFOMANIAK_ISSUER, subject: claims.sub, identityId: identity.identityId,
-            displayName: identity.displayName, status: "authenticated",
+            displayName: identity.displayName, status: "authenticated", csrf: randomUUID(),
             expiresAt: Date.now() + 8 * 60 * 60 * 1000,
           };
         } else {
@@ -176,6 +228,88 @@ export function createHttpHandler({ repository, authenticate = async () => null,
       response.setHeader("location", "/");
       response.setHeader("set-cookie", cookie(OIDC_SESSION_COOKIE, "", { maxAge: 0 }));
       response.end();
+      return;
+    }
+    const adminRoute = url.pathname.match(/^\/admin\/link-requests(?:\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\/(approve|reject))?$/i);
+    if (adminRoute) {
+      let session;
+      try {
+        if (!oidcConfig) throw new Error("oidc_not_configured");
+        session = open(parseCookies(request.headers.cookie).get(OIDC_SESSION_COOKIE), oidcConfig.sessionSecret, "oidc-session");
+      } catch {
+        writeHtml(response, 401, "Connexion requise", '<h1>Connexion requise</h1><p>Une session NSK valide est nécessaire.</p><a class="button" href="/">Se connecter</a>');
+        return;
+      }
+      if (session.status !== "authenticated" || !session.identityId || !session.csrf) {
+        writeHtml(response, 401, "Nouvelle connexion requise", '<h1>Nouvelle connexion requise</h1><p>Ferme puis renouvelle ta session afin d’accéder à l’administration sécurisée.</p><a class="button" href="/">Retour</a>');
+        return;
+      }
+      let access;
+      try {
+        access = await authorizeIdentityLinkAdministration(repository, session.identityId);
+      } catch {
+        console.error(JSON.stringify({ event: "link_administration_unavailable", reason: "authorization_repository_failure" }));
+        writeHtml(response, 503, "Administration indisponible", '<h1>Administration momentanément indisponible</h1><p>Aucune décision n’a été appliquée. Réessaie lorsque le registre central sera disponible.</p><a class="button" href="/">Retour</a>');
+        return;
+      }
+      if (!access.allowed) {
+        writeHtml(response, 403, "Accès refusé", '<h1>Accès refusé</h1><p>Cette identité ne possède pas la permission administrative dédiée. Aucun droit implicite n’est accordé.</p><a class="button" href="/">Retour</a>');
+        return;
+      }
+      if (!adminRoute[1] && request.method === "GET") {
+        try {
+          const [requests, identities] = await Promise.all([
+            repository.listLinkRequests("pending"), repository.listIdentities("active"),
+          ]);
+          writeHtml(response, 200, "Rattachements", renderLinkRequestAdministration(requests, identities, session.csrf));
+        } catch {
+          console.error(JSON.stringify({ event: "link_administration_unavailable", reason: "listing_repository_failure" }));
+          writeHtml(response, 503, "Administration indisponible", '<h1>Administration momentanément indisponible</h1><p>Le registre n’a pas pu être consulté. Aucune décision n’a été appliquée.</p><a class="button" href="/">Retour</a>');
+        }
+        return;
+      }
+      if (adminRoute[1] && request.method === "POST") {
+        try {
+          const form = await readForm(request, maxBodyBytes);
+          if (!safeEqual(form.get("csrf"), session.csrf)) throw new HttpInputError(403, "invalid_csrf");
+          const requestId = adminRoute[1].toLowerCase();
+          const decision = adminRoute[2].toLowerCase();
+          const justification = String(form.get("justification") ?? "").trim();
+          if (!justification || justification.length > 500) throw new HttpInputError(400, "invalid_justification");
+          const linkRequest = await repository.getLinkRequest(requestId);
+          if (!linkRequest) throw new HttpInputError(404, "link_request_not_found");
+          const correlationId = randomUUID();
+          if (decision === "approve") {
+            const targetIdentityId = String(form.get("target_identity_id") ?? "").trim();
+            if (!targetIdentityId) throw new HttpInputError(400, "target_identity_required");
+            await repository.approveLinkRequest(requestId, targetIdentityId, session.identityId, justification, createAuditEvent({
+              action: "external_identity.link_approved", result: "success", source: "administration-ui",
+              correlationId, actorId: session.identityId, subjectId: targetIdentityId,
+              previousValue: { request_id: requestId, status: "pending" },
+              newValue: { request_id: requestId, status: "approved", target_identity_id: targetIdentityId },
+              justification,
+            }));
+          } else {
+            await repository.rejectLinkRequest(requestId, session.identityId, justification, createAuditEvent({
+              action: "external_identity.link_rejected", result: "success", source: "administration-ui",
+              correlationId, actorId: session.identityId,
+              previousValue: { request_id: requestId, status: "pending" },
+              newValue: { request_id: requestId, status: "rejected" }, justification,
+            }));
+          }
+          redirect(response, "/admin/link-requests");
+        } catch (error) {
+          if (error instanceof HttpInputError) {
+            writeHtml(response, error.status, "Décision non appliquée", `<h1>Décision non appliquée</h1><p>La demande est invalide ou n’est plus disponible. Aucun changement partiel n’a été conservé.</p><p class="note">Code : ${escapeHtml(error.code)}</p><a class="button" href="/admin/link-requests">Retour</a>`);
+          } else {
+            console.error(JSON.stringify({ event: "link_decision_failed", reason: "repository_rejected_decision" }));
+            writeHtml(response, 409, "Décision non appliquée", '<h1>Décision non appliquée</h1><p>La demande ne peut pas être traitée dans son état actuel. Aucun changement partiel n’a été conservé.</p><a class="button" href="/admin/link-requests">Retour</a>');
+          }
+        }
+        return;
+      }
+      response.setHeader("allow", adminRoute[1] ? "POST" : "GET");
+      writeJson(response, 405, { error: "method_not_allowed" });
       return;
     }
     if (url.pathname !== "/internal/v1/access-decisions") {

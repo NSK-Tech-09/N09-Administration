@@ -87,6 +87,13 @@ export class TransactionalMemoryRepository {
     return structuredClone(this.#linkRequests.get(requestId) ?? null);
   }
 
+  listLinkRequests(status = null) {
+    return [...this.#linkRequests.values()]
+      .filter((item) => !status || item.status === status)
+      .sort((left, right) => String(right.requestedAt).localeCompare(String(left.requestedAt)))
+      .map((item) => structuredClone(item));
+  }
+
   findActiveLinkRequest(issuer, subject, now = new Date()) {
     const match = [...this.#linkRequests.values()].find((item) =>
       item.issuer === issuer && item.subject === subject &&
@@ -108,7 +115,9 @@ export class TransactionalMemoryRepository {
       if (!request) throw new Error("link request not found");
       if (request.status !== "pending") throw new Error("link request is not pending");
       if (now >= new Date(request.expiresAt)) throw new Error("link request has expired");
-      if (!state.identities.has(identityId)) throw new Error("NSK identity not found");
+      const identity = state.identities.get(identityId);
+      if (!identity) throw new Error("NSK identity not found");
+      if (identity.status !== "active") throw new Error("NSK identity is not active");
       const principalKey = `${request.issuer}\n${request.subject}`;
       if (state.externalIdentities.has(principalKey)) throw new Error("external identity is already linked");
       const link = {
@@ -161,6 +170,13 @@ export class TransactionalMemoryRepository {
 
   getIdentity(identityId) {
     return structuredClone(this.#identities.get(identityId) ?? null);
+  }
+
+  listIdentities(status = null) {
+    return [...this.#identities.values()]
+      .filter((item) => !status || item.status === status)
+      .sort((left, right) => left.displayName.localeCompare(right.displayName, "fr"))
+      .map((item) => structuredClone(item));
   }
 
   getApplication(applicationId) {

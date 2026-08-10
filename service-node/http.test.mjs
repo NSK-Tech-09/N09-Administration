@@ -1,8 +1,13 @@
 import assert from "node:assert/strict";
-import { generateKeyPairSync, sign } from "node:crypto";
+import { generateKeyPairSync, randomUUID, sign } from "node:crypto";
 import { createServer } from "node:http";
 import test from "node:test";
+import { createAuditEvent } from "./audit.mjs";
+import { createLinkRequest } from "./federated-identity.mjs";
 import { createHttpHandler } from "./http.mjs";
+import { ADMIN_APPLICATION_ID, LINK_DECISION_PERMISSION } from "./identity-link-admin.mjs";
+import { OIDC_SESSION_COOKIE, seal } from "./oidc.mjs";
+import { TransactionalMemoryRepository } from "./repository.mjs";
 
 const identity = { identityId: "identity-1", status: "active" };
 const application = { applicationId: "tasks", status: "active" };
@@ -37,6 +42,53 @@ async function withServer(options, operation) {
   }
 }
 
+const adminIdentity = {
+  identityId: "60a40cd7-f2a4-4393-8021-9f806b42b41a", email: "admin@example.test",
+  displayName: "Admin NSK", status: "active",
+};
+const targetIdentity = {
+  identityId: "70a40cd7-f2a4-4393-8021-9f806b42b41b", email: "target@example.test",
+  displayName: "Cible NSK", status: "active",
+};
+const adminAudit = (action, changes = {}) => createAuditEvent({
+  action, result: "success", source: "http-tests", correlationId: randomUUID(),
+  justification: "Test HTTP reproductible", ...changes,
+});
+
+function seededAdminRepository({ withPermission = true, subject = "provider-subject-secret" } = {}) {
+  const adminRepository = new TransactionalMemoryRepository();
+  adminRepository.saveIdentity(adminIdentity, adminAudit("identity.created", { subjectId: adminIdentity.identityId }));
+  adminRepository.saveIdentity(targetIdentity, adminAudit("identity.created", { subjectId: targetIdentity.identityId }));
+  adminRepository.saveApplication({
+    applicationId: ADMIN_APPLICATION_ID, displayName: "N09 – Administration",
+    status: "active", registrationPolicy: "closed",
+  }, adminAudit("application.registered", { applicationId: ADMIN_APPLICATION_ID }));
+  if (withPermission) {
+    adminRepository.saveAssignment({
+      assignmentId: randomUUID(), subjectId: adminIdentity.identityId, applicationId: ADMIN_APPLICATION_ID,
+      roleId: "identity-link-administrator", permissions: [LINK_DECISION_PERMISSION], scopeType: null,
+      scopeId: null, conditions: [], status: "active", validFrom: null, validUntil: null,
+      reason: "Test de l’administration", decidedBy: adminIdentity.identityId,
+      inheritedFromGroup: null, version: 1,
+    }, adminAudit("assignment.created", { subjectId: adminIdentity.identityId, applicationId: ADMIN_APPLICATION_ID }));
+  }
+  const linkRequest = createLinkRequest({
+    issuer: "https://login.infomaniak.com", subject, providerKey: "infomaniak",
+    emailHint: "candidate@example.test", displayNameHint: "Personne candidate",
+  });
+  adminRepository.saveLinkRequest(linkRequest, adminAudit("external_identity.link_requested"));
+  return { adminRepository, linkRequest };
+}
+
+function adminCookie(csrf = "csrf-value") {
+  const session = {
+    issuer: "https://login.infomaniak.com", subject: "admin-provider-subject",
+    identityId: adminIdentity.identityId, displayName: adminIdentity.displayName,
+    status: "authenticated", csrf, expiresAt: Date.now() + 60_000,
+  };
+  return `${OIDC_SESSION_COOKIE}=${seal(session, oidcConfig.sessionSecret, "oidc-session")}`;
+}
+
 test("expose une santé minimale sans information interne", async () => {
   await withServer({}, async (baseUrl) => {
     const response = await fetch(`${baseUrl}/health`);
@@ -66,6 +118,74 @@ test("ne révèle pas la preuve externe dans l'état de session public", async (
     assert.equal(response.status, 401);
     assert.deepEqual(await response.json(), { authenticated: false });
   });
+});
+
+test("refuse l’administration à une identité rattachée sans permission dédiée", async () => {
+  const { adminRepository } = seededAdminRepository({ withPermission: false });
+  await withServer({ repository: adminRepository, oidcConfig }, async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/admin/link-requests`, { headers: { cookie: adminCookie() } });
+    assert.equal(response.status, 403);
+    assert.match(await response.text(), /Aucun droit implicite/);
+  });
+});
+
+test("affiche les demandes sans exposer le sujet technique du fournisseur", async () => {
+  const { adminRepository, linkRequest } = seededAdminRepository();
+  await withServer({ repository: adminRepository, oidcConfig }, async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/admin/link-requests`, { headers: { cookie: adminCookie() } });
+    const body = await response.text();
+    assert.equal(response.status, 200);
+    assert.match(body, new RegExp(linkRequest.requestId));
+    assert.match(body, /Personne candidate|candidate@example\.test/);
+    assert.doesNotMatch(body, /provider-subject-secret/);
+  });
+});
+
+test("bloque une décision dont la preuve CSRF est incorrecte", async () => {
+  const { adminRepository, linkRequest } = seededAdminRepository();
+  await withServer({ repository: adminRepository, oidcConfig }, async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/admin/link-requests/${linkRequest.requestId}/approve`, {
+      method: "POST", redirect: "manual", headers: {
+        cookie: adminCookie("expected-csrf"), "content-type": "application/x-www-form-urlencoded",
+      }, body: new URLSearchParams({ csrf: "forged-csrf", target_identity_id: targetIdentity.identityId, justification: "Test" }),
+    });
+    assert.equal(response.status, 403);
+    assert.equal(adminRepository.getLinkRequest(linkRequest.requestId).status, "pending");
+  });
+});
+
+test("approuve un rattachement justifié et audité sans accorder de rôle", async () => {
+  const { adminRepository, linkRequest } = seededAdminRepository();
+  const auditBefore = adminRepository.auditCount();
+  await withServer({ repository: adminRepository, oidcConfig }, async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/admin/link-requests/${linkRequest.requestId}/approve`, {
+      method: "POST", redirect: "manual", headers: {
+        cookie: adminCookie(), "content-type": "application/x-www-form-urlencoded",
+      }, body: new URLSearchParams({ csrf: "csrf-value", target_identity_id: targetIdentity.identityId, justification: "Identité vérifiée" }),
+    });
+    assert.equal(response.status, 303);
+    assert.equal(response.headers.get("location"), "/admin/link-requests");
+  });
+  assert.equal(adminRepository.getLinkRequest(linkRequest.requestId).status, "approved");
+  assert.equal(adminRepository.listAssignments(targetIdentity.identityId, ADMIN_APPLICATION_ID).length, 0);
+  assert.equal(adminRepository.auditCount(), auditBefore + 1);
+  assert.equal(adminRepository.verifyAuditChain(), true);
+});
+
+test("refuse une demande avec justification et trace la décision", async () => {
+  const { adminRepository, linkRequest } = seededAdminRepository();
+  const auditBefore = adminRepository.auditCount();
+  await withServer({ repository: adminRepository, oidcConfig }, async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/admin/link-requests/${linkRequest.requestId}/reject`, {
+      method: "POST", redirect: "manual", headers: {
+        cookie: adminCookie(), "content-type": "application/x-www-form-urlencoded",
+      }, body: new URLSearchParams({ csrf: "csrf-value", justification: "Preuve insuffisante" }),
+    });
+    assert.equal(response.status, 303);
+  });
+  assert.equal(adminRepository.getLinkRequest(linkRequest.requestId).status, "rejected");
+  assert.equal(adminRepository.auditCount(), auditBefore + 1);
+  assert.equal(adminRepository.verifyAuditChain(), true);
 });
 
 test("n'expose un code OIDC sûr que lorsque le banc de validation l'autorise", async () => {
