@@ -60,6 +60,11 @@ applications et affectations centrales. Il exige la permission exacte
 ou révocation. Le pouvoir de consulter le registre ne se confond donc jamais
 avec celui de décider un rattachement ou un droit.
 
+Les objets synthétiques ayant servi à la validation initiale disposent d'une
+procédure de retrait dédiée : l'affectation est révoquée, l'identité archivée et
+l'application retirée. Leur histoire reste visible et auditée ; ils ne comptent
+plus parmi les accès actifs.
+
 Les objets de gouvernance sont conservés dans la même frontière transactionnelle
 que leur événement d’audit : une mutation sans preuve valide est annulée.
 
@@ -100,6 +105,7 @@ ne contient aucun secret réel. La production reste inchangée.
 - [`docs/ADR-009-APPLICATION-PILOTE-SUIVI-TACHES.md`](docs/ADR-009-APPLICATION-PILOTE-SUIVI-TACHES.md)
 - [`docs/ADR-010-COURTAGE-CONNEXION-APPLICATIVE.md`](docs/ADR-010-COURTAGE-CONNEXION-APPLICATIVE.md)
 - [`docs/ADR-011-CONSULTATION-CENTRALE-ACCES.md`](docs/ADR-011-CONSULTATION-CENTRALE-ACCES.md)
+- [`docs/ADR-012-RETRAIT-DONNEES-SYNTHETIQUES.md`](docs/ADR-012-RETRAIT-DONNEES-SYNTHETIQUES.md)
 - [`docs/ETAT-PREPROD-INFOMANIAK.md`](docs/ETAT-PREPROD-INFOMANIAK.md)
 - [`docs/CONFORMITE-NSES.md`](docs/CONFORMITE-NSES.md)
 - [`docs/CONTRAT-API-INTERNE.md`](docs/CONTRAT-API-INTERNE.md)
