@@ -24,8 +24,10 @@ export function mariaDbConfigFromEnvironment(environment) {
 
 export function httpConfigFromEnvironment(environment) {
   const host = environment.N09_HTTP_HOST?.trim() || "127.0.0.1";
-  if (host !== "127.0.0.1" && host !== "::1") {
-    throw new Error("HTTP transport must remain bound to loopback before OIDC validation");
+  const loopback = host === "127.0.0.1" || host === "::1";
+  const trustedProxyBinding = host === "0.0.0.0" && environment.N09_TRUSTED_REVERSE_PROXY === "true";
+  if (!loopback && !trustedProxyBinding) {
+    throw new Error("HTTP transport requires loopback or an explicitly trusted reverse proxy");
   }
-  return { host, port: port(environment.N09_HTTP_PORT, 3000) };
+  return { host, port: port(environment.N09_HTTP_PORT ?? environment.PORT, 3000) };
 }

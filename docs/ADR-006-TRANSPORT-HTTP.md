@@ -29,8 +29,10 @@ amorçage exige un indicateur explicite et une base dont le nom se termine par
 
 Les points d'entrée `server.mjs` et `seed-synthetic-preprod-cli.mjs` chargent une
 configuration nommée et vérifiée. TLS est obligatoire pour MariaDB. Tant que
-OIDC n'est pas raccordé, le serveur refuse toute écoute hors de la boucle locale
-et sa route de décision reste anonyme, donc fermée avec `401`.
+OIDC n'est pas raccordé, le serveur écoute sur la boucle locale. Une écoute sur
+`0.0.0.0` n'est admise qu'avec l'indicateur explicite de proxy de confiance
+requis par le frontal HTTPS managé Infomaniak. La route de décision reste alors
+anonyme et fermée avec `401`, et aucun port applicatif brut n'est ouvert.
 
 ## Limites avant déploiement
 
