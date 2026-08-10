@@ -1,4 +1,3 @@
-
 import { randomUUID } from "node:crypto";
 import { decideAccess } from "./access.mjs";
 
