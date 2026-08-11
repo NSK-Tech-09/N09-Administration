@@ -5,7 +5,7 @@ import { publishApplicationAccessCatalog } from "./application-access-catalog.mj
 import { createLinkRequest } from "./federated-identity.mjs";
 import { authorizeAccessAdministration } from "./access-admin.mjs";
 import {
-  ACCESS_DECISION_PERMISSION, authorizeAccessDecisionAdministration, revokeAccessAssignment,
+  ACCESS_DECISION_PERMISSION, authorizeAccessDecisionAdministration, grantAccessAssignment, revokeAccessAssignment,
 } from "./access-decision-admin.mjs";
 import { ADMIN_APPLICATION_ID, authorizeIdentityLinkAdministration } from "./identity-link-admin.mjs";
 import {
@@ -49,7 +49,7 @@ function writeHtml(response, status, title, content, setCookies = []) {
   response.setHeader("referrer-policy", "no-referrer");
   response.setHeader("x-content-type-options", "nosniff");
   if (setCookies.length) response.setHeader("set-cookie", setCookies);
-  response.end(`<!doctype html><html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>${escapeHtml(title)} · N09 Administration</title><style>*{box-sizing:border-box}body{margin:0;background:#f3f6f4;color:#18221e;font:16px system-ui,sans-serif;display:grid;place-items:center;min-height:100vh;padding:28px 0}.card{width:min(1100px,calc(100% - 36px));background:#fff;border:1px solid #dfe6e2;border-radius:18px;padding:34px;box-shadow:0 12px 40px #19392d14}.brand{color:#21825e;font-size:12px;font-weight:800;letter-spacing:1px}h1{font:600 31px Georgia,serif;margin:22px 0 12px}h2{font:600 21px Georgia,serif;margin:30px 0 12px}h3{margin:0 0 8px;font-size:17px}p{color:#5d6c65;line-height:1.6}.facts,.request{padding:16px;border-radius:10px;background:#f3f7f5;margin:20px 0}.facts strong,.request strong{color:#173e32}.button,button{display:inline-block;border:0;padding:12px 17px;border-radius:9px;background:#173e32;color:#fff;text-decoration:none;font-weight:bold;cursor:pointer}.button.secondary,button.secondary{background:#68756f}.actions{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:15px}.actions form{display:grid;gap:9px}.actions label{font-size:13px;font-weight:700}.actions select,.actions input{width:100%;padding:10px;border:1px solid #bdcac4;border-radius:8px;background:#fff}.note,.muted{font-size:13px;color:#6c7a74}.expired{color:#9b391f;font-weight:700}nav{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:22px}.summary{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin:24px 0}.metric{padding:18px;border:1px solid #dce6e1;border-radius:12px;background:#f8faf9}.metric strong{display:block;font-size:28px;color:#173e32}.directory{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}.entry{padding:17px;border:1px solid #dce6e1;border-radius:12px}.entry p{margin:7px 0}.pill{display:inline-block;padding:4px 8px;border-radius:999px;background:#e4f3ec;color:#176044;font-size:12px;font-weight:800}.pill.inactive{background:#f2e8e4;color:#8a3b28}.permissions{margin:8px 0 0;padding-left:19px;color:#45564f}.permissions code,code{font-size:12px;word-break:break-word}.assignment{border-left:4px solid #21825e} @media(max-width:700px){.actions,.directory,.summary{grid-template-columns:1fr}.card{padding:24px}}</style></head><body><main class="card"><div class="brand">N09 · ADMINISTRATION · NSK TECH 09</div>${content}</main></body></html>`);
+  response.end(`<!doctype html><html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>${escapeHtml(title)} · N09 Administration</title><style>*{box-sizing:border-box}body{margin:0;background:#f3f6f4;color:#18221e;font:16px system-ui,sans-serif;display:grid;place-items:center;min-height:100vh;padding:28px 0}.card{width:min(1100px,calc(100% - 36px));background:#fff;border:1px solid #dfe6e2;border-radius:18px;padding:34px;box-shadow:0 12px 40px #19392d14}.brand{color:#21825e;font-size:12px;font-weight:800;letter-spacing:1px}h1{font:600 31px Georgia,serif;margin:22px 0 12px}h2{font:600 21px Georgia,serif;margin:30px 0 12px}h3{margin:0 0 8px;font-size:17px}p{color:#5d6c65;line-height:1.6}.facts,.request{padding:16px;border-radius:10px;background:#f3f7f5;margin:20px 0}.facts strong,.request strong{color:#173e32}.button,button{display:inline-block;border:0;padding:12px 17px;border-radius:9px;background:#173e32;color:#fff;text-decoration:none;font-weight:bold;cursor:pointer}.button.secondary,button.secondary{background:#68756f}.actions{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:15px}.actions form,.grant{display:grid;gap:9px}.actions label,.grant label{font-size:13px;font-weight:700}.actions select,.actions input,.grant select,.grant input{width:100%;padding:10px;border:1px solid #bdcac4;border-radius:8px;background:#fff}.note,.muted{font-size:13px;color:#6c7a74}.expired{color:#9b391f;font-weight:700}nav{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:22px}.summary{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin:24px 0}.metric{padding:18px;border:1px solid #dce6e1;border-radius:12px;background:#f8faf9}.metric strong{display:block;font-size:28px;color:#173e32}.directory{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}.entry{padding:17px;border:1px solid #dce6e1;border-radius:12px}.entry p{margin:7px 0}.pill{display:inline-block;padding:4px 8px;border-radius:999px;background:#e4f3ec;color:#176044;font-size:12px;font-weight:800}.pill.inactive{background:#f2e8e4;color:#8a3b28}.permissions{margin:8px 0 0;padding-left:19px;color:#45564f}.permissions code,code{font-size:12px;word-break:break-word}.assignment{border-left:4px solid #21825e} @media(max-width:700px){.actions,.directory,.summary{grid-template-columns:1fr}.card{padding:24px}}</style></head><body><main class="card"><div class="brand">N09 · ADMINISTRATION · NSK TECH 09</div>${content}</main></body></html>`);
 }
 
 async function readBody(request, maxBodyBytes) {
@@ -155,9 +155,35 @@ function renderAccessAdministration(identities, applications, assignments, catal
   return `<h1>Utilisateurs et accès</h1><p>Vue centrale en lecture seule des identités, applications, catalogues publiés et affectations. Cette page n’accorde, ne modifie et ne révoque aucun droit.</p><div class="summary"><div class="metric"><strong>${activeIdentities}</strong>identités actives</div><div class="metric"><strong>${activeApplications}</strong>applications actives</div><div class="metric"><strong>${activeAssignments}</strong>affectations actives</div></div><h2>Identités</h2><div class="directory">${identityCards || '<div class="facts"><p>Aucune identité enregistrée.</p></div>'}</div><h2>Applications et catalogues</h2><div class="directory">${applicationCards || '<div class="facts"><p>Aucune application enregistrée.</p></div>'}</div><h2>Affectations</h2><div class="directory">${assignmentCards || '<div class="facts"><p>Aucune affectation enregistrée.</p></div>'}</div><nav><a class="button secondary" href="/">Retour à l’accueil</a><a class="button secondary" href="/admin/link-requests">Rattachements</a><form method="post" action="/auth/logout"><button class="secondary" type="submit">Fermer la session</button></form></nav>`;
 }
 
-function renderAccessDecisionAdministration(identities, applications, assignments, csrf) {
+function renderAccessDecisionAdministration(identities, applications, assignments, catalogs, csrf) {
   const identityById = new Map(identities.map((identity) => [identity.identityId, identity]));
   const applicationById = new Map(applications.map((application) => [application.applicationId, application]));
+  const activeIdentityOptions = identities.filter((identity) => identity.status === "active").map((identity) =>
+    `<option value="${escapeHtml(identity.identityId)}">${escapeHtml(identity.displayName)} — ${escapeHtml(identity.email)}</option>`
+  ).join("");
+  const grantCards = catalogs.filter((catalog) => catalog.applicationId !== ADMIN_APPLICATION_ID).flatMap((catalog) => {
+    const application = applicationById.get(catalog.applicationId);
+    if (!application || application.status !== "active") return [];
+    const activeScopeTypes = new Map(catalog.scopeTypes.filter((scope) => scope.status === "active")
+      .map((scope) => [scope.scope_type_id, scope]));
+    const requirements = catalog.provisioning.readiness === "application_confirmation_required"
+      ? catalog.provisioning.requirements : [];
+    return catalog.roles.filter((role) => role.status === "active").flatMap((role) =>
+      role.scopeTypes.filter((scopeType) => activeScopeTypes.has(scopeType)).map((scopeType) => {
+        const scope = activeScopeTypes.get(scopeType);
+        const scopeInput = scopeType === "global"
+          ? '<input type="hidden" name="scope_type" value="global"><p><strong>Périmètre :</strong> global</p>'
+          : `<input type="hidden" name="scope_type" value="${escapeHtml(scopeType)}"><label>${escapeHtml(scope.displayName)}<input name="scope_id" maxlength="191" required placeholder="Identifiant exact fourni par l’application"></label>`;
+        const requirementItems = requirements.map((requirement) =>
+          `<li><code>${escapeHtml(requirement.requirement_id)}</code> — ${escapeHtml(requirement.displayName)}</li>`
+        ).join("");
+        const readiness = requirementItems
+          ? `<div class="facts"><p><strong>Activation conditionnelle :</strong> l’application devra confirmer à chaque requête :</p><ul class="permissions">${requirementItems}</ul></div>`
+          : '<div class="facts"><p><strong>Activation immédiate :</strong> aucun profil applicatif supplémentaire n’est déclaré.</p></div>';
+        return `<article class="entry"><h3>${escapeHtml(application.displayName)} — ${escapeHtml(role.displayName)}</h3><p>${escapeHtml(role.description)}</p>${readiness}<form class="grant" method="post" action="/admin/access-decisions/grant"><input type="hidden" name="csrf" value="${escapeHtml(csrf)}"><input type="hidden" name="application_id" value="${escapeHtml(catalog.applicationId)}"><input type="hidden" name="catalog_version" value="${escapeHtml(catalog.catalogVersion)}"><input type="hidden" name="role_id" value="${escapeHtml(role.role_id)}"><label>Personne autorisée<select name="identity_id" required><option value="">Sélectionner…</option>${activeIdentityOptions}</select></label>${scopeInput}<label>Justification<input name="justification" minlength="20" maxlength="500" required placeholder="Pourquoi cet accès est-il nécessaire ?"></label><button type="submit">Accorder cet accès conditionnel</button></form></article>`;
+      })
+    );
+  }).join("");
   const activeAssignments = assignments.filter((assignment) => assignment.status === "active");
   const cards = activeAssignments.map((assignment) => {
     const identity = identityById.get(assignment.subjectId);
@@ -171,7 +197,7 @@ function renderAccessDecisionAdministration(identities, applications, assignment
       : `<div class="actions"><form method="post" action="/admin/access-decisions/${escapeHtml(assignment.assignmentId)}/revoke"><input type="hidden" name="csrf" value="${escapeHtml(csrf)}"><input type="hidden" name="expected_version" value="${escapeHtml(assignment.version)}"><label>Justification de la révocation<input name="justification" minlength="20" maxlength="500" required placeholder="Pourquoi cet accès doit-il être retiré ?"></label><button class="secondary" type="submit">Révoquer cet accès</button></form></div>`;
     return `<article class="entry assignment"><h2>${escapeHtml(identity?.displayName || assignment.subjectId)} → ${escapeHtml(application?.displayName || assignment.applicationId)}</h2><p><strong>${escapeHtml(assignment.roleId)}</strong> · périmètre ${escapeHtml(scope)} · version ${escapeHtml(assignment.version)}</p><ul class="permissions">${permissions}</ul>${action}</article>`;
   }).join("");
-  return `<h1>Décider les révocations d’accès</h1><p>Cette première frontière de décision retire un accès central existant. Chaque révocation exige une justification, contrôle la version affichée et écrit sa preuve dans la même transaction. Aucun accès ne peut être accordé depuis cet écran.</p><div class="facts"><p><strong>Protection de continuité :</strong> le pouvoir de décision lui-même relève d’une procédure dédiée et n’est pas révocable ici.</p></div><div class="directory">${cards || '<div class="facts"><p>Aucune affectation active.</p></div>'}</div><nav><a class="button secondary" href="/admin/access">Retour au registre</a><a class="button secondary" href="/">Retour à l’accueil</a><form method="post" action="/auth/logout"><button class="secondary" type="submit">Fermer la session</button></form></nav>`;
+  return `<h1>Décider les accès</h1><p>Un octroi ne peut utiliser qu’un rôle actif publié par l’application. Son périmètre, sa justification et ses conditions sont inscrits dans le journal d’audit. Une application qui exige un profil métier doit ensuite confirmer ses propres prérequis à chaque requête.</p><div class="facts"><p><strong>Séparation stricte :</strong> Administration accorde le droit central ; l’application conserve et vérifie le rôle métier et le périmètre local. Le pouvoir de décision central reste soumis à sa gouvernance dédiée.</p></div><h2>Accorder un accès gouverné</h2><div class="directory">${grantCards || '<div class="facts"><p>Aucun rôle applicatif actif n’est actuellement ouvert à l’octroi.</p></div>'}</div><h2>Révoquer un accès actif</h2><div class="directory">${cards || '<div class="facts"><p>Aucune affectation active.</p></div>'}</div><nav><a class="button secondary" href="/admin/access">Retour au registre</a><a class="button secondary" href="/">Retour à l’accueil</a><form method="post" action="/auth/logout"><button class="secondary" type="submit">Fermer la session</button></form></nav>`;
 }
 
 export function createHttpHandler({ repository, authenticate = async () => null, oidcConfig = null, fetchImpl = fetch, maxBodyBytes = DEFAULT_MAX_BODY_BYTES }) {
@@ -347,8 +373,10 @@ export function createHttpHandler({ repository, authenticate = async () => null,
       response.end();
       return;
     }
-    const accessDecisionRoute = url.pathname.match(/^\/admin\/access-decisions(?:\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\/revoke)?$/i);
-    if (accessDecisionRoute) {
+    const accessDecisionRoot = url.pathname === "/admin/access-decisions";
+    const accessGrantRoute = url.pathname === "/admin/access-decisions/grant";
+    const accessRevocationRoute = url.pathname.match(/^\/admin\/access-decisions\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\/revoke$/i);
+    if (accessDecisionRoot || accessGrantRoute || accessRevocationRoute) {
       let session;
       try {
         if (!oidcConfig) throw new Error("oidc_not_configured");
@@ -373,13 +401,14 @@ export function createHttpHandler({ repository, authenticate = async () => null,
         writeHtml(response, 403, "Accès refusé", '<h1>Accès refusé</h1><p>Cette identité ne possède pas la permission dédiée aux décisions d’accès. Aucun droit implicite n’est accordé.</p><a class="button" href="/">Retour</a>');
         return;
       }
-      if (!accessDecisionRoute[1] && request.method === "GET") {
+      if (accessDecisionRoot && request.method === "GET") {
         try {
-          const [identities, applications, assignments] = await Promise.all([
+          const [identities, applications, assignments, catalogs] = await Promise.all([
             repository.listIdentities(), repository.listApplications(), repository.listAllAssignments(),
+            repository.listLatestApplicationAccessCatalogs(),
           ]);
           writeHtml(response, 200, "Décisions d’accès", renderAccessDecisionAdministration(
-            identities, applications, assignments, session.csrf,
+            identities, applications, assignments, catalogs, session.csrf,
           ));
         } catch {
           console.error(JSON.stringify({ event: "access_decision_administration_unavailable", reason: "listing_repository_failure" }));
@@ -387,7 +416,32 @@ export function createHttpHandler({ repository, authenticate = async () => null,
         }
         return;
       }
-      if (accessDecisionRoute[1] && request.method === "POST") {
+      if (accessGrantRoute && request.method === "POST") {
+        try {
+          const form = await readForm(request, maxBodyBytes);
+          if (!safeEqual(form.get("csrf"), session.csrf)) throw new HttpInputError(403, "invalid_csrf");
+          await grantAccessAssignment(repository, {
+            identityId: String(form.get("identity_id") ?? "").toLowerCase(),
+            applicationId: String(form.get("application_id") ?? ""),
+            roleId: String(form.get("role_id") ?? ""),
+            scopeType: String(form.get("scope_type") ?? ""),
+            scopeId: form.has("scope_id") ? String(form.get("scope_id") ?? "").trim() : null,
+            catalogVersion: Number(form.get("catalog_version")),
+            operatorIdentityId: session.identityId,
+            justification: String(form.get("justification") ?? "").trim(),
+          });
+          redirect(response, "/admin/access-decisions");
+        } catch (error) {
+          if (error instanceof HttpInputError) {
+            writeHtml(response, error.status, "Octroi non appliqué", `<h1>Octroi non appliqué</h1><p>La demande est invalide. Aucun accès n’a été modifié.</p><p class="note">Code : ${escapeHtml(error.code)}</p><a class="button" href="/admin/access-decisions">Retour</a>`);
+          } else {
+            console.error(JSON.stringify({ event: "access_grant_failed", reason: "repository_rejected_decision" }));
+            writeHtml(response, 409, "Octroi non appliqué", '<h1>Octroi non appliqué</h1><p>Le catalogue, le rôle, le périmètre ou l’identité ne permet pas cet octroi. Aucun changement partiel n’a été conservé.</p><a class="button" href="/admin/access-decisions">Retour</a>');
+          }
+        }
+        return;
+      }
+      if (accessRevocationRoute && request.method === "POST") {
         try {
           const form = await readForm(request, maxBodyBytes);
           if (!safeEqual(form.get("csrf"), session.csrf)) throw new HttpInputError(403, "invalid_csrf");
@@ -396,7 +450,7 @@ export function createHttpHandler({ repository, authenticate = async () => null,
           if (!Number.isInteger(expectedVersion) || expectedVersion < 1) throw new HttpInputError(400, "invalid_assignment_version");
           if (justification.length < 20 || justification.length > 500) throw new HttpInputError(400, "invalid_justification");
           await revokeAccessAssignment(repository, {
-            assignmentId: accessDecisionRoute[1].toLowerCase(),
+            assignmentId: accessRevocationRoute[1].toLowerCase(),
             expectedVersion,
             operatorIdentityId: session.identityId,
             justification,
@@ -412,7 +466,7 @@ export function createHttpHandler({ repository, authenticate = async () => null,
         }
         return;
       }
-      response.setHeader("allow", accessDecisionRoute[1] ? "POST" : "GET");
+      response.setHeader("allow", accessDecisionRoot ? "GET" : "POST");
       writeJson(response, 405, { error: "method_not_allowed" });
       return;
     }

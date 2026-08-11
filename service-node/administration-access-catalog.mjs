@@ -4,7 +4,7 @@ import { ACCESS_DIRECTORY_READ_PERMISSION } from "./access-admin.mjs";
 import { ACCESS_DECISION_PERMISSION } from "./access-decision-admin.mjs";
 import { ADMIN_APPLICATION_ID, LINK_DECISION_PERMISSION } from "./identity-link-admin.mjs";
 
-export const ADMINISTRATION_ACCESS_CATALOG = Object.freeze({
+export const ADMINISTRATION_ACCESS_CATALOG_V1 = Object.freeze({
   application_id: ADMIN_APPLICATION_ID,
   catalog_version: 1,
   permissions: [
@@ -26,6 +26,21 @@ export const ADMINISTRATION_ACCESS_CATALOG = Object.freeze({
   },
 });
 
+export const ADMINISTRATION_ACCESS_CATALOG = Object.freeze({
+  ...ADMINISTRATION_ACCESS_CATALOG_V1,
+  catalog_version: 2,
+  permissions: ADMINISTRATION_ACCESS_CATALOG_V1.permissions.map((permission) =>
+    permission.permission_id === ACCESS_DECISION_PERMISSION
+      ? { ...permission, display_name: "Décider les accès applicatifs", description: "Accorder un rôle applicatif actif publié par son propriétaire ou révoquer une affectation centrale existante, avec preuve auditée." }
+      : permission
+  ),
+  roles: ADMINISTRATION_ACCESS_CATALOG_V1.roles.map((role) =>
+    role.role_id === "access-decision-administrator"
+      ? { ...role, display_name: "Responsable des accès applicatifs", description: "Accorde les rôles applicatifs actifs et décide les révocations autorisées, sans administrer les pouvoirs centraux protégés." }
+      : role
+  ),
+});
+
 export function assertAdministrationCatalogBootstrapTarget({ database, allowBootstrap }) {
   if (allowBootstrap !== "true") throw new Error("administration catalog bootstrap is not explicitly enabled");
   if (typeof database !== "string" || !database.endsWith("_preprod")) {
@@ -37,6 +52,20 @@ export async function publishAdministrationAccessCatalog(repository, {
   database, allowBootstrap, correlationId = randomUUID(),
 } = {}) {
   assertAdministrationCatalogBootstrapTarget({ database, allowBootstrap });
+  let latest = await repository.getLatestApplicationAccessCatalog(ADMIN_APPLICATION_ID);
+  if (!latest) {
+    const initial = await publishApplicationAccessCatalog({
+      repository,
+      principal: { applicationId: ADMIN_APPLICATION_ID, audience: ADMIN_APPLICATION_ID, correlationId },
+      payload: ADMINISTRATION_ACCESS_CATALOG_V1,
+      source: "administration-catalog-bootstrap",
+    });
+    if (![200, 201].includes(initial.status)) throw new Error(initial.body.error || "administration catalog publication failed");
+    latest = await repository.getLatestApplicationAccessCatalog(ADMIN_APPLICATION_ID);
+  }
+  if (latest.catalogVersion > ADMINISTRATION_ACCESS_CATALOG.catalog_version) {
+    throw new Error("administration catalog is newer than this service");
+  }
   const result = await publishApplicationAccessCatalog({
     repository,
     principal: { applicationId: ADMIN_APPLICATION_ID, audience: ADMIN_APPLICATION_ID, correlationId },

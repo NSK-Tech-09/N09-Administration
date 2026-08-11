@@ -5,7 +5,7 @@ import test from "node:test";
 import { createAuditEvent } from "./audit.mjs";
 import { ACCESS_DIRECTORY_READ_PERMISSION } from "./access-admin.mjs";
 import { ACCESS_DECISION_PERMISSION } from "./access-decision-admin.mjs";
-import { ADMINISTRATION_ACCESS_CATALOG } from "./administration-access-catalog.mjs";
+import { publishAdministrationAccessCatalog } from "./administration-access-catalog.mjs";
 import { publishApplicationAccessCatalog } from "./application-access-catalog.mjs";
 import { createLinkRequest } from "./federated-identity.mjs";
 import { createHttpHandler } from "./http.mjs";
@@ -117,6 +117,29 @@ function adminCookie(csrf = "csrf-value") {
   return `${OIDC_SESSION_COOKIE}=${seal(session, oidcConfig.sessionSecret, "oidc-session")}`;
 }
 
+const tasksWriterCatalog = {
+  application_id: "n09-suivi-taches", catalog_version: 1,
+  permissions: [
+    { permission_id: "tasks:read", display_name: "Lire", description: "Consulter les tâches du site.", status: "active" },
+    { permission_id: "tasks:write", display_name: "Écrire", description: "Modifier les tâches du site.", status: "active" },
+  ],
+  scope_types: [
+    { scope_type_id: "site", display_name: "Site", description: "Périmètre métier local.", status: "active" },
+  ],
+  roles: [
+    { role_id: "tasks-writer", display_name: "Contributeur", description: "Lecture et écriture sur un site.", status: "active", permissions: ["tasks:read", "tasks:write"], scope_types: ["site"] },
+  ],
+  provisioning: {
+    mode: "preexisting_profile_required", identity_key: "identity_id",
+    readiness: "application_confirmation_required", automatic_profile_creation: false,
+    email_matching: "forbidden",
+    requirements: [
+      { requirement_id: "application-user-profile", display_name: "Profil local", description: "Profil relié par identity_id." },
+      { requirement_id: "site-membership", display_name: "Site local", description: "Périmètre confirmé par l’application." },
+    ],
+  },
+};
+
 test("expose une santé minimale sans information interne", async () => {
   await withServer({}, async (baseUrl) => {
     const response = await fetch(`${baseUrl}/health`);
@@ -180,12 +203,10 @@ test("sépare la consultation des accès du pouvoir de décision sur les rattach
 
 test("affiche le registre en lecture seule avec identités, applications et affectations", async () => {
   const { adminRepository } = seededAdminRepository({ withAccessRead: true });
-  const publication = await publishApplicationAccessCatalog({
-    repository: adminRepository,
-    principal: { applicationId: ADMIN_APPLICATION_ID, audience: ADMIN_APPLICATION_ID },
-    payload: ADMINISTRATION_ACCESS_CATALOG,
+  const publication = await publishAdministrationAccessCatalog(adminRepository, {
+    database: "n09_admin_preprod", allowBootstrap: "true",
   });
-  assert.equal(publication.status, 201);
+  assert.equal(publication.created, true);
   await withServer({ repository: adminRepository, oidcConfig }, async (baseUrl) => {
     const response = await fetch(`${baseUrl}/admin/access`, { headers: { cookie: adminCookie() } });
     const body = await response.text();
@@ -193,7 +214,7 @@ test("affiche le registre en lecture seule avec identités, applications et affe
     assert.match(body, /Utilisateurs et accès/);
     assert.match(body, /Admin NSK/);
     assert.match(body, /N09 – Administration/);
-    assert.match(body, /Catalogue v1/);
+    assert.match(body, /Catalogue v2/);
     assert.match(body, /Responsable des rattachements/);
     assert.match(body, /access-directory-reader/);
     assert.match(body, /administration:access:read/);
@@ -244,9 +265,9 @@ test("révoque une affectation centrale avec CSRF, version et audit", async () =
     const [decisionAuthority] = adminRepository.listAssignments(adminIdentity.identityId, ADMIN_APPLICATION_ID)
       .filter((item) => item.permissions.includes(ACCESS_DECISION_PERMISSION));
     assert.equal(page.status, 200);
-    assert.match(body, /Décider les révocations d’accès/);
+    assert.match(body, /Décider les accès/);
     assert.match(body, new RegExp(assignmentId));
-    assert.match(body, /Aucun accès ne peut être accordé/);
+    assert.match(body, /Accorder un accès gouverné/);
     assert.match(body, /Pouvoir protégé/);
     assert.doesNotMatch(body, new RegExp(`/admin/access-decisions/${decisionAuthority.assignmentId}/revoke`));
 
@@ -278,6 +299,64 @@ test("révoque une affectation centrale avec CSRF, version et audit", async () =
   assert.equal(revoked.status, "revoked");
   assert.equal(revoked.version, 2);
   assert.equal(revoked.decidedBy, adminIdentity.identityId);
+  assert.equal(adminRepository.verifyAuditChain(), true);
+});
+
+test("accorde depuis l’interface uniquement un rôle actif du catalogue publié", async () => {
+  const { adminRepository } = seededAdminRepository({ withAccessDecision: true });
+  adminRepository.saveApplication({
+    applicationId: "n09-suivi-taches", displayName: "N09 – Suivi des tâches",
+    status: "active", registrationPolicy: "closed",
+  }, adminAudit("application.registered", { applicationId: "n09-suivi-taches" }));
+  const publication = await publishApplicationAccessCatalog({
+    repository: adminRepository,
+    principal: { applicationId: "n09-suivi-taches", audience: "n09-suivi-taches" },
+    payload: tasksWriterCatalog,
+  });
+  assert.equal(publication.status, 201);
+
+  await withServer({ repository: adminRepository, oidcConfig }, async (baseUrl) => {
+    const page = await fetch(`${baseUrl}/admin/access-decisions`, { headers: { cookie: adminCookie() } });
+    const body = await page.text();
+    assert.equal(page.status, 200);
+    assert.match(body, /N09 – Suivi des tâches — Contributeur/);
+    assert.match(body, /Activation conditionnelle/);
+    assert.match(body, /application-user-profile/);
+
+    const forged = await fetch(`${baseUrl}/admin/access-decisions/grant`, {
+      method: "POST", redirect: "manual", headers: {
+        cookie: adminCookie("expected-csrf"), "content-type": "application/x-www-form-urlencoded",
+      }, body: new URLSearchParams({
+        csrf: "forged-csrf", identity_id: targetIdentity.identityId,
+        application_id: "n09-suivi-taches", catalog_version: "1", role_id: "tasks-writer",
+        scope_type: "site", scope_id: "site_09",
+        justification: "Contribution nécessaire sur le site pilote validé",
+      }),
+    });
+    assert.equal(forged.status, 403);
+    assert.equal(adminRepository.listAssignments(targetIdentity.identityId, "n09-suivi-taches").length, 0);
+
+    const auditBefore = adminRepository.auditCount();
+    const response = await fetch(`${baseUrl}/admin/access-decisions/grant`, {
+      method: "POST", redirect: "manual", headers: {
+        cookie: adminCookie(), "content-type": "application/x-www-form-urlencoded",
+      }, body: new URLSearchParams({
+        csrf: "csrf-value", identity_id: targetIdentity.identityId,
+        application_id: "n09-suivi-taches", catalog_version: "1", role_id: "tasks-writer",
+        scope_type: "site", scope_id: "site_09",
+        justification: "Contribution nécessaire sur le site pilote validé",
+      }),
+    });
+    assert.equal(response.status, 303);
+    assert.equal(response.headers.get("location"), "/admin/access-decisions");
+    assert.equal(adminRepository.auditCount(), auditBefore + 1);
+  });
+  const [granted] = adminRepository.listAssignments(targetIdentity.identityId, "n09-suivi-taches");
+  assert.equal(granted.roleId, "tasks-writer");
+  assert.deepEqual(granted.permissions, ["tasks:read", "tasks:write"]);
+  assert.deepEqual(granted.conditions, ["application-user-profile", "site-membership"]);
+  assert.equal(granted.scopeType, "site");
+  assert.equal(granted.scopeId, "site_09");
   assert.equal(adminRepository.verifyAuditChain(), true);
 });
 

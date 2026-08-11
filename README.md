@@ -60,11 +60,13 @@ applications et affectations centrales. Il exige la permission exacte
 ou révocation. Le pouvoir de consulter le registre ne se confond donc jamais
 avec celui de décider un rattachement ou un droit.
 
-Une frontière séparée prépare la première décision d'accès opérationnelle : la
-révocation justifiée d'une affectation active. Elle exige
-`administration:access:decide`, contrôle la version de l'affectation, soustrait
-le pouvoir de décision lui-même à cette interface générale et ne permet encore
-aucun octroi arbitraire.
+Une frontière séparée porte les décisions d'accès opérationnelles. Elle exige
+`administration:access:decide` et permet soit de révoquer une affectation active
+avec contrôle de version, soit d'accorder uniquement un rôle actif du dernier
+catalogue publié. L'octroi fixe exactement la personne, le rôle et le périmètre,
+exige une justification et reprend comme conditions toutes les confirmations
+applicatives publiées. Le pouvoir de décision lui-même reste soustrait à cette
+interface générale.
 
 Les objets synthétiques ayant servi à la validation initiale disposent d'une
 procédure de retrait dédiée : l'affectation est révoquée, l'identité archivée et
@@ -120,6 +122,7 @@ ne contient aucun secret réel. La production reste inchangée.
 - [`docs/ADR-012-RETRAIT-DONNEES-SYNTHETIQUES.md`](docs/ADR-012-RETRAIT-DONNEES-SYNTHETIQUES.md)
 - [`docs/ADR-013-REVOCATION-CENTRALE-ACCES.md`](docs/ADR-013-REVOCATION-CENTRALE-ACCES.md)
 - [`docs/ADR-014-PUBLICATION-CATALOGUES-APPLICATIFS.md`](docs/ADR-014-PUBLICATION-CATALOGUES-APPLICATIFS.md)
+- [`docs/ADR-015-OCTROIS-APPLICATIFS-GOUVERNES.md`](docs/ADR-015-OCTROIS-APPLICATIFS-GOUVERNES.md)
 - [`docs/ETAT-PREPROD-INFOMANIAK.md`](docs/ETAT-PREPROD-INFOMANIAK.md)
 - [`docs/CONFORMITE-NSES.md`](docs/CONFORMITE-NSES.md)
 - [`docs/CONTRAT-API-INTERNE.md`](docs/CONTRAT-API-INTERNE.md)
