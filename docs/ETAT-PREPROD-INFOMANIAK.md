@@ -284,12 +284,48 @@ actives, soit exactement l'état antérieur : aucun octroi, retrait ou profil
 métier n'a été créé par ce lot. Les rôles futurs de Suivi des tâches restent
 explicitement `planned` et la création automatique par courriel reste interdite.
 
+## Octrois gouvernés et commandes de tâches déployés
+
+La PR **#36** de N09 – Administration a été fusionnée dans `main` avec le commit
+`112e18b2c71b7d968af4aee50a3420888ae0ebcf`. La release active est isolée dans
+`releases/112e18b` et son démarrage est conditionné par la réussite des tests et
+la publication du catalogue Administration version 2.
+
+Les **117 tests Node.js** réussissent sur Infomaniak. Le catalogue version 2 a
+été publié par la commande ponctuelle prévue à cet effet, puis le service a été
+redémarré explicitement. Le contrôle public confirme :
+
+- `GET https://preprod-admin.nsktech.fr/health` : `200` et
+  `{"status":"ok"}` ;
+- `GET /api/health` : `404`, conformément au contrat propre à Administration ;
+- `GET /admin/access` sans session : écran « Connexion requise » ;
+- aucun utilisateur, rattachement, octroi ou retrait créé pour la validation.
+
+La PR **#31** de N09 – Suivi des tâches a été fusionnée avec le commit
+`ba92ee1a2be208e6343d70d96ca5124b3653d322`. Son catalogue version 2 est publié
+et la décision centrale peut désormais distinguer `tasks:read` de
+`tasks:write`, avec périmètre de site et prérequis applicatifs explicites.
+
+La recette authentifiée réelle du 11 août 2026 confirme en outre :
+
+- identité Infomaniak vérifiée pour **Fred TRAVERS**, rattachée à l'identité NSK
+  `60a40cd7-f2a4-4393-8021-9f806b42b41a` ;
+- registre central accessible en lecture avec une identité active, deux
+  applications actives et quatre affectations actives ;
+- catalogues version 2 visibles pour Administration et Suivi des tâches ;
+- rôles actifs `tasks-reader` et `tasks-writer` proposés uniquement comme
+  octrois conditionnels sur un site exact ;
+- pouvoir `administration:access:decide` protégé de sa propre révocation dans
+  l'interface générale ;
+- aucune demande de rattachement en attente ;
+- aucun octroi, retrait, rattachement ou changement de donnée pendant la
+  recette.
+
 ## Prochain jalon
 
-Le prochain jalon est l'inventaire contrôlé des profils existants de N09 –
-Suivi des tâches et leur rapprochement exclusif par `identity_id`. Chaque profil,
-rôle métier et appartenance de site devra être confirmé par l'application avant
-tout nouvel octroi. La production et l'autorité locale restent inchangées tant
-que la matrice de parité et le retour arrière ne sont pas validés.
+Le prochain jalon est la preuve applicative du refus d'une commande de tâche
+sans octroi `tasks:write`, au moyen d'un scénario explicitement réversible ou
+sans mutation. Aucune tâche ni affectation réelle ne doit être créée uniquement
+pour prouver le fonctionnement.
 
 La production et les applications existantes restent inchangées.
