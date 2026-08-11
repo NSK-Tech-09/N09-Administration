@@ -50,13 +50,17 @@ un droit métier absent.
 
 ## N09 – Suivi des tâches
 
-Le pilote publie `tasks-pilot-reader` comme seul rôle central actif. Les rôles
-`tasks-reader`, `tasks-writer` et `tasks-administrator`, les permissions
-associées et le périmètre `site` sont publiés comme éléments planifiés tant que
-la parité métier n’est pas démontrée.
+Le catalogue version 2 conserve `tasks-pilot-reader` en état `deprecated` pour
+la seule continuité de l'affectation globale du pilote et active les rôles
+bornés `tasks-reader` et `tasks-writer` sur le périmètre `site`. Aucun nouvel
+octroi pilote global n'est donc possible. `tasks-administrator` et
+`tasks:admin` restent planifiés. Une activation de catalogue n'est jamais un
+octroi.
 
 Le profil `application_users`, son rôle métier et ses appartenances de sites
-restent dans Suivi des tâches. Ils doivent exister et être confirmés par
-l’application avant un futur octroi central. La liaison se fait exclusivement
-par `identity_id` : aucun rapprochement automatique par courriel et aucune
-création implicite ne sont autorisés.
+restent dans Suivi des tâches. Chaque affectation centrale porte les trois
+prérequis publiés comme conditions ; l'application ne les présente comme
+satisfaits qu'après les avoir revérifiés côté serveur pour la requête et le site
+concernés. La liaison se fait exclusivement par `identity_id` : aucun
+rapprochement automatique par courriel et aucune création implicite ne sont
+autorisés.
