@@ -1,6 +1,6 @@
 # ADR-018 — Observabilité gouvernée des notifications
 
-Statut : **implémenté et validé localement, non déployé**
+Statut : **déployé et validé en préproduction**
 
 Date : **12 août 2026**
 
@@ -72,19 +72,16 @@ toute décision ultérieure d’ordonnancement ou d’ouverture de canal.
 - absence d’action de traitement dans la console ;
 - amorçage préproduction idempotent et chaîne d’audit valide.
 
-## Déploiement prévu
+## Déploiement réalisé
 
-Le déploiement en préproduction devra respecter cet ordre :
+La release `7813eca` a été activée en préproduction le 12 août 2026 après
+sauvegarde, **147 tests réussis sur Infomaniak**, publication du catalogue
+Administration v3 et affectation auditée du rôle
+`notification-operations-reader`.
 
-1. publier et déployer le code validé ;
-2. publier le catalogue Administration v3 avec la commande contrôlée existante ;
-3. amorcer le rôle `notification-operations-reader` pour l’identité explicitement
-   autorisée ;
-4. redémarrer le service et vérifier la santé ;
-5. recetter l’accès refusé sans permission puis l’accès autorisé ;
-6. vérifier que le nombre de livraisons externes non bloquées reste nul.
-
-La production historique n’est pas modifiée par ce lot local.
+La recette authentifiée confirme l’accès de Fred TRAVERS à la vue en lecture
+seule, deux événements traités, aucune attente, aucune quarantaine et aucune
+livraison externe non bloquée. La production historique est inchangée.
 
 ## Références
 
