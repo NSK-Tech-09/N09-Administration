@@ -13,6 +13,7 @@
     "bootstrap:access-decision-admin": "node access-decision-admin-bootstrap-cli.mjs",
     "bootstrap:administration-catalog": "node administration-access-catalog-cli.mjs",
     "bootstrap:identity-link-admin": "node identity-link-admin-bootstrap-cli.mjs",
+    "bootstrap:notification-operations": "node notification-operations-admin-bootstrap-cli.mjs",
     "bootstrap:tasks-pilot": "node tasks-pilot-bootstrap-cli.mjs",
     "retire:synthetic-preprod": "node retire-synthetic-preprod-cli.mjs",
     "process:notifications": "node notification-consumer-cli.mjs",
