@@ -2,7 +2,9 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { createAuditEvent } from "./audit.mjs";
 import { createLinkRequest } from "./federated-identity.mjs";
-import { createMariaDbPool, MariaDbRepository } from "./mariadb.mjs";
+import {
+  acquireNotificationProcessingLock, createMariaDbPool, MariaDbRepository,
+} from "./mariadb.mjs";
 import { prepareApplicationAccessCatalog } from "./application-access-catalog.mjs";
 
 const identity = { identityId: "identity-1", email: "COLLEGUE@example.test", displayName: "Collègue", status: "active" };
@@ -216,6 +218,11 @@ test("agrège l’exploitation des notifications sans exposer leur contenu", asy
         internal_notification_count: 1, blocked_external_delivery_count: 2,
         resolved_at: "2026-08-12 10:02:00",
       }]];
+      if (sql.includes("FROM notification_processing_state")) return [[{
+        last_started_at: "2026-08-12 10:01:59", last_finished_at: "2026-08-12 10:02:00",
+        last_status: "succeeded", last_error_code: null, last_claimed: 2,
+        last_processed: 2, last_retried: 0, last_quarantined: 0, version: 4,
+      }]];
       throw new Error("unexpected query");
     },
   };
@@ -224,6 +231,11 @@ test("agrège l’exploitation des notifications sans exposer leur contenu", asy
   assert.equal(snapshot.events.retrying, 1);
   assert.equal(snapshot.notifications.unread, 1);
   assert.equal(snapshot.externalDeliveries.nonBlocked, 0);
+  assert.deepEqual(snapshot.processor, {
+    status: "succeeded", lastStartedAt: "2026-08-12T08:01:59.000Z",
+    lastFinishedAt: "2026-08-12T08:02:00.000Z", errorCode: null,
+    claimed: 2, processed: 2, retried: 0, quarantined: 0, version: 4,
+  });
   assert.deepEqual(snapshot.suppressions, { ownAction: 2, preferences: 1, unlinkedIdentity: 3 });
   assert.equal(snapshot.recentResolutions[0].eventId, "event_1");
   assert.deepEqual(snapshot.recentResolutions[0].suppressed, {
@@ -231,4 +243,49 @@ test("agrège l’exploitation des notifications sans exposer leur contenu", asy
   });
   assert.equal(calls.some((sql) => /title|message|email|payload_json/i.test(sql)), false);
   await assert.rejects(new MariaDbRepository(pool).getNotificationOperationsSnapshot(101), /invalid/);
+});
+
+test("conserve uniquement le dernier état borné du consommateur", async () => {
+  const calls = [];
+  const repository = new MariaDbRepository({ execute: async (sql, values) => {
+    calls.push({ sql, values }); return [{ affectedRows: 1 }];
+  } });
+  await repository.recordNotificationProcessingRun({
+    status: "succeeded", startedAt: new Date("2026-08-12T10:00:00Z"),
+    finishedAt: new Date("2026-08-12T10:00:01Z"), errorCode: null,
+    claimed: 2, processed: 2, retried: 0, quarantined: 0,
+  });
+  assert.match(calls[0].sql, /ON DUPLICATE KEY UPDATE/);
+  assert.doesNotMatch(calls[0].sql, /worker|payload|title|message|email/i);
+  await assert.rejects(repository.recordNotificationProcessingRun({
+    status: "failed", startedAt: new Date(), finishedAt: new Date(), errorCode: "secret value",
+    claimed: 0, processed: 0, retried: 0, quarantined: 0,
+  }), /invalid/);
+});
+
+test("acquiert et libère un verrou MariaDB non bloquant", async () => {
+  const calls = [];
+  const connection = {
+    execute: async (sql, values) => {
+      calls.push({ sql, values });
+      return sql.includes("GET_LOCK") ? [[{ acquired: 1 }]] : [[{ released: 1 }]];
+    },
+    release: () => calls.push("release"),
+  };
+  const lock = await acquireNotificationProcessingLock({ getConnection: async () => connection });
+  assert.ok(lock);
+  await lock.release();
+  await lock.release();
+  assert.equal(calls.filter((call) => call === "release").length, 1);
+  assert.match(calls[0].sql, /GET_LOCK\(\?, 0\)/);
+  assert.match(calls[1].sql, /RELEASE_LOCK/);
+});
+
+test("abandonne proprement un cycle déjà verrouillé", async () => {
+  let released = 0;
+  const connection = {
+    execute: async () => [[{ acquired: 0 }]], release: () => { released += 1; },
+  };
+  assert.equal(await acquireNotificationProcessingLock({ getConnection: async () => connection }), null);
+  assert.equal(released, 1);
 });
