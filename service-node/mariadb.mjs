@@ -416,7 +416,160 @@ export class MariaDbRepository {
         "SELECT identity_id, email, display_name, status FROM identities ORDER BY display_name, identity_id",
       );
     return rows.map((row) => ({
-      identityId: row.identity_id, em…1761 tokens truncated…) => ({
+      identityId: row.identity_id, email: row.email,
+      displayName: row.display_name, status: row.status,
+    }));
+  }
+
+  async getApplication(applicationId) {
+    const [rows] = await this.pool.execute(
+      "SELECT application_id, display_name, status, registration_policy FROM applications WHERE application_id = ?",
+      [applicationId],
+    );
+    const row = rows[0];
+    return row ? { applicationId: row.application_id, displayName: row.display_name, status: row.status, registrationPolicy: row.registration_policy } : null;
+  }
+
+  async listApplications() {
+    const [rows] = await this.pool.execute(
+      "SELECT application_id, display_name, status, registration_policy FROM applications ORDER BY display_name, application_id",
+    );
+    return rows.map((row) => ({
+      applicationId: row.application_id, displayName: row.display_name,
+      status: row.status, registrationPolicy: row.registration_policy,
+    }));
+  }
+
+  async getLatestApplicationAccessCatalog(applicationId) {
+    const [rows] = await this.pool.execute(
+      `SELECT * FROM application_access_catalog_versions
+       WHERE application_id = ? ORDER BY catalog_version DESC LIMIT 1`, [applicationId],
+    );
+    return mapApplicationAccessCatalog(rows[0]);
+  }
+
+  async listLatestApplicationAccessCatalogs() {
+    const [rows] = await this.pool.execute(
+      `SELECT catalog.* FROM application_access_catalog_versions catalog
+       INNER JOIN (
+         SELECT application_id, MAX(catalog_version) AS catalog_version
+         FROM application_access_catalog_versions GROUP BY application_id
+       ) latest ON latest.application_id = catalog.application_id
+         AND latest.catalog_version = catalog.catalog_version
+       ORDER BY catalog.application_id`,
+    );
+    return rows.map(mapApplicationAccessCatalog);
+  }
+
+  async saveApplicationRedirectUri(applicationId, redirectUri, auditEvent) {
+    const redirectHash = createHash("sha256").update(redirectUri, "utf8").digest("hex");
+    return this.#transaction(async (connection) => {
+      await connection.execute(
+        `INSERT INTO application_redirect_uris(application_id, redirect_uri, redirect_uri_hash, status)
+         VALUES (?, ?, ?, 'active')
+         ON DUPLICATE KEY UPDATE redirect_uri = VALUES(redirect_uri), status = 'active'`,
+        [applicationId, redirectUri, redirectHash],
+      );
+      await this.#appendAudit(connection, auditEvent);
+    });
+  }
+
+  async isApplicationRedirectUriAllowed(applicationId, redirectUri) {
+    const redirectHash = createHash("sha256").update(redirectUri, "utf8").digest("hex");
+    const [rows] = await this.pool.execute(
+      `SELECT 1 FROM application_redirect_uris
+       WHERE application_id = ? AND redirect_uri_hash = ? AND redirect_uri = ? AND status = 'active'`,
+      [applicationId, redirectHash, redirectUri],
+    );
+    return rows.length === 1;
+  }
+
+  async getApplicationRedirectUri(applicationId, redirectUri) {
+    const redirectHash = createHash("sha256").update(redirectUri, "utf8").digest("hex");
+    const [rows] = await this.pool.execute(
+      `SELECT application_id, redirect_uri, status FROM application_redirect_uris
+       WHERE application_id = ? AND redirect_uri_hash = ? AND redirect_uri = ?`,
+      [applicationId, redirectHash, redirectUri],
+    );
+    const row = rows[0];
+    return row ? { applicationId: row.application_id, redirectUri: row.redirect_uri, status: row.status } : null;
+  }
+
+  async saveApplicationLoginPolicy(applicationId, requiredPermission, auditEvent) {
+    return this.#transaction(async (connection) => {
+      await connection.execute(
+        `INSERT INTO application_login_policies(application_id, required_permission, status)
+         VALUES (?, ?, 'active')
+         ON DUPLICATE KEY UPDATE required_permission = VALUES(required_permission), status = 'active'`,
+        [applicationId, requiredPermission],
+      );
+      await this.#appendAudit(connection, auditEvent);
+    });
+  }
+
+  async getApplicationLoginPolicy(applicationId) {
+    const [rows] = await this.pool.execute(
+      `SELECT application_id, required_permission, status FROM application_login_policies
+       WHERE application_id = ?`, [applicationId],
+    );
+    const row = rows[0];
+    return row ? { applicationId: row.application_id, requiredPermission: row.required_permission, status: row.status } : null;
+  }
+
+  async saveApplicationAuthorizationCode(record, auditEvent) {
+    return this.#transaction(async (connection) => {
+      await connection.execute(
+        `INSERT INTO application_authorization_codes(
+           code_hash, identity_id, application_id, redirect_uri, code_challenge, issued_at, expires_at, consumed_at
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, NULL)`,
+        [record.codeHash, record.identityId, record.applicationId, record.redirectUri,
+         record.codeChallenge, asMariaDate(record.issuedAt), asMariaDate(record.expiresAt)],
+      );
+      await this.#appendAudit(connection, auditEvent);
+    });
+  }
+
+  async consumeApplicationAuthorizationCode({ codeHash, applicationId, redirectUri, codeChallenge, now = new Date() }, auditEvent) {
+    return this.#transaction(async (connection) => {
+      const [rows] = await connection.execute(
+        `SELECT * FROM application_authorization_codes WHERE code_hash = ? FOR UPDATE`, [codeHash],
+      );
+      const row = rows[0];
+      if (!row || row.consumed_at || row.application_id !== applicationId || row.redirect_uri !== redirectUri ||
+          row.code_challenge !== codeChallenge || new Date(row.expires_at) <= now) return null;
+      await connection.execute(
+        "UPDATE application_authorization_codes SET consumed_at = ? WHERE code_hash = ?",
+        [asMariaDate(now), codeHash],
+      );
+      await this.#appendAudit(connection, auditEvent);
+      return {
+        codeHash: row.code_hash, identityId: row.identity_id, applicationId: row.application_id,
+        redirectUri: row.redirect_uri, codeChallenge: row.code_challenge,
+        issuedAt: asIso(row.issued_at), expiresAt: asIso(row.expires_at), consumedAt: now.toISOString(),
+      };
+    });
+  }
+
+  async listAssignments(identityId, applicationId) {
+    const [rows] = await this.pool.execute(
+      `SELECT * FROM access_assignments WHERE subject_id = ? AND application_id = ?
+       ORDER BY assignment_id`, [identityId, applicationId],
+    );
+    return rows.map((row) => ({
+      assignmentId: row.assignment_id, subjectId: row.subject_id, applicationId: row.application_id,
+      roleId: row.role_id, permissions: parseJson(row.permissions_json), scopeType: row.scope_type,
+      scopeId: row.scope_id, conditions: parseJson(row.conditions_json), status: row.status,
+      validFrom: row.valid_from, validUntil: row.valid_until, reason: row.reason,
+      decidedBy: row.decided_by, inheritedFromGroup: row.inherited_from_group, version: row.version,
+    }));
+  }
+
+  async listAllAssignments() {
+    const [rows] = await this.pool.execute(
+      `SELECT * FROM access_assignments
+       ORDER BY subject_id, application_id, role_id, assignment_id`,
+    );
+    return rows.map((row) => ({
       assignmentId: row.assignment_id, subjectId: row.subject_id, applicationId: row.application_id,
       roleId: row.role_id, permissions: parseJson(row.permissions_json), scopeType: row.scope_type,
       scopeId: row.scope_id, conditions: parseJson(row.conditions_json), status: row.status,
