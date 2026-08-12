@@ -1,3 +1,4 @@
+
 # État de la préproduction Infomaniak
 
 Date du constat : **10 août 2026**  
@@ -329,3 +330,53 @@ sans mutation. Aucune tâche ni affectation réelle ne doit être créée unique
 pour prouver le fonctionnement.
 
 La production et les applications existantes restent inchangées.
+
+## Lot 38 — réception centrale des notifications validée
+
+Le **12 août 2026**, la PR **#38** a été fusionnée avec le commit
+`c5835a49e440f05104026804ef1e819e1cbe1cd3`. La release immuable
+`releases/c5835a4` a réussi ses **129 tests Node.js** sur Infomaniak. Ses
+dépendances d'exécution ont été reprises de la release précédente après
+vérification de l'identité SHA-256 de `package.json` et `pnpm-lock.yaml`, puis
+un garde-fou dédié a été posé avant la bascule.
+
+Avant migration, l'export logique
+`lot38-pre-migration-20260812T141856Z.sql.gz` a été créé dans
+`/srv/customer/backups/preprod-admin`. Il pèse **15 058 octets** et porte
+l'empreinte SHA-256
+`674ed1579edebb1377b979e7f6afc0df68a18f703eea37a37dcf1cbfb3746c90`.
+
+La table durable `notification_events` et ses deux déclencheurs
+`notification_events_no_delete` et `notification_events_payload_immutable`
+sont installés. La commande d'exécution cible désormais `releases/c5835a4` et
+vérifie les marqueurs de tests, de sauvegarde, de schéma, d'intégrité, de
+catalogue et de dépendances avant tout démarrage. Les contrôles réels
+confirment :
+
+- `GET /health` : `200` et `{"status":"ok"}` ;
+- `POST /internal/v1/notification-events` sans signature : `401` et
+  `authentication_required`, ce qui prouve l'exposition du nouveau contrat
+  sans affaiblir son authentification ;
+- réception exacte des événements `task.archived` et `task.restored` issus de
+  Suivi des tâches, chacun avec une empreinte SHA-256 de 64 caractères ;
+- état initial central `pending`, zéro tentative de traitement et aucune
+  erreur ;
+- aucun canal externe activé et aucun message envoyé.
+
+Le compte DDL partagé `6p7h3x_n09ddl` avait reçu temporairement les droits de
+lecture et d'administration sur la base Administration. Ces deux droits ont
+été retirés après validation. Il ne référence plus que
+`6p7h3x_n09_tasks_preprod`, tandis que le compte d'exécution Administration
+reste limité à sa propre base.
+
+La release précédente `releases/112e18b` et la sauvegarde vérifiée restent
+disponibles pour un retour arrière conservateur. La production est restée
+inchangée.
+
+## Prochain jalon après le lot 38
+
+Concevoir puis valider le traitement interne des deux événements centraux et
+les canaux réellement nécessaires, en maintenant les canaux externes fermés
+jusqu'à une décision explicite. La promotion en production reste interdite
+tant que la comparaison avec les comportements historiques n'est pas achevée.
+
