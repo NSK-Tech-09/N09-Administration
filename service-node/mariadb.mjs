@@ -32,6 +32,39 @@ export async function createMariaDbPool(config) {
   });
 }
 
+export async function acquireNotificationProcessingLock(
+  pool, lockName = "n09:administration:notification-processing:v1",
+) {
+  if (!pool || typeof pool.getConnection !== "function" ||
+      typeof lockName !== "string" || !/^[A-Za-z0-9._:-]{3,64}$/.test(lockName)) {
+    throw new Error("invalid notification processing lock");
+  }
+  const connection = await pool.getConnection();
+  try {
+    const [rows] = await connection.execute("SELECT GET_LOCK(?, 0) AS acquired", [lockName]);
+    if (Number(rows[0]?.acquired) !== 1) {
+      connection.release();
+      return null;
+    }
+  } catch (error) {
+    connection.release();
+    throw error;
+  }
+  let released = false;
+  return Object.freeze({
+    release: async () => {
+      if (released) return;
+      released = true;
+      try {
+        const [rows] = await connection.execute("SELECT RELEASE_LOCK(?) AS released", [lockName]);
+        if (Number(rows[0]?.released) !== 1) throw new Error("notification processing lock was lost");
+      } finally {
+        connection.release();
+      }
+    },
+  });
+}
+
 function asMariaDate(value) {
   if (!value) return null;
   return new Date(value).toISOString().replace("T", " ").replace("Z", "");
@@ -383,160 +416,7 @@ export class MariaDbRepository {
         "SELECT identity_id, email, display_name, status FROM identities ORDER BY display_name, identity_id",
       );
     return rows.map((row) => ({
-      identityId: row.identity_id, email: row.email,
-      displayName: row.display_name, status: row.status,
-    }));
-  }
-
-  async getApplication(applicationId) {
-    const [rows] = await this.pool.execute(
-      "SELECT application_id, display_name, status, registration_policy FROM applications WHERE application_id = ?",
-      [applicationId],
-    );
-    const row = rows[0];
-    return row ? { applicationId: row.application_id, displayName: row.display_name, status: row.status, registrationPolicy: row.registration_policy } : null;
-  }
-
-  async listApplications() {
-    const [rows] = await this.pool.execute(
-      "SELECT application_id, display_name, status, registration_policy FROM applications ORDER BY display_name, application_id",
-    );
-    return rows.map((row) => ({
-      applicationId: row.application_id, displayName: row.display_name,
-      status: row.status, registrationPolicy: row.registration_policy,
-    }));
-  }
-
-  async getLatestApplicationAccessCatalog(applicationId) {
-    const [rows] = await this.pool.execute(
-      `SELECT * FROM application_access_catalog_versions
-       WHERE application_id = ? ORDER BY catalog_version DESC LIMIT 1`, [applicationId],
-    );
-    return mapApplicationAccessCatalog(rows[0]);
-  }
-
-  async listLatestApplicationAccessCatalogs() {
-    const [rows] = await this.pool.execute(
-      `SELECT catalog.* FROM application_access_catalog_versions catalog
-       INNER JOIN (
-         SELECT application_id, MAX(catalog_version) AS catalog_version
-         FROM application_access_catalog_versions GROUP BY application_id
-       ) latest ON latest.application_id = catalog.application_id
-         AND latest.catalog_version = catalog.catalog_version
-       ORDER BY catalog.application_id`,
-    );
-    return rows.map(mapApplicationAccessCatalog);
-  }
-
-  async saveApplicationRedirectUri(applicationId, redirectUri, auditEvent) {
-    const redirectHash = createHash("sha256").update(redirectUri, "utf8").digest("hex");
-    return this.#transaction(async (connection) => {
-      await connection.execute(
-        `INSERT INTO application_redirect_uris(application_id, redirect_uri, redirect_uri_hash, status)
-         VALUES (?, ?, ?, 'active')
-         ON DUPLICATE KEY UPDATE redirect_uri = VALUES(redirect_uri), status = 'active'`,
-        [applicationId, redirectUri, redirectHash],
-      );
-      await this.#appendAudit(connection, auditEvent);
-    });
-  }
-
-  async isApplicationRedirectUriAllowed(applicationId, redirectUri) {
-    const redirectHash = createHash("sha256").update(redirectUri, "utf8").digest("hex");
-    const [rows] = await this.pool.execute(
-      `SELECT 1 FROM application_redirect_uris
-       WHERE application_id = ? AND redirect_uri_hash = ? AND redirect_uri = ? AND status = 'active'`,
-      [applicationId, redirectHash, redirectUri],
-    );
-    return rows.length === 1;
-  }
-
-  async getApplicationRedirectUri(applicationId, redirectUri) {
-    const redirectHash = createHash("sha256").update(redirectUri, "utf8").digest("hex");
-    const [rows] = await this.pool.execute(
-      `SELECT application_id, redirect_uri, status FROM application_redirect_uris
-       WHERE application_id = ? AND redirect_uri_hash = ? AND redirect_uri = ?`,
-      [applicationId, redirectHash, redirectUri],
-    );
-    const row = rows[0];
-    return row ? { applicationId: row.application_id, redirectUri: row.redirect_uri, status: row.status } : null;
-  }
-
-  async saveApplicationLoginPolicy(applicationId, requiredPermission, auditEvent) {
-    return this.#transaction(async (connection) => {
-      await connection.execute(
-        `INSERT INTO application_login_policies(application_id, required_permission, status)
-         VALUES (?, ?, 'active')
-         ON DUPLICATE KEY UPDATE required_permission = VALUES(required_permission), status = 'active'`,
-        [applicationId, requiredPermission],
-      );
-      await this.#appendAudit(connection, auditEvent);
-    });
-  }
-
-  async getApplicationLoginPolicy(applicationId) {
-    const [rows] = await this.pool.execute(
-      `SELECT application_id, required_permission, status FROM application_login_policies
-       WHERE application_id = ?`, [applicationId],
-    );
-    const row = rows[0];
-    return row ? { applicationId: row.application_id, requiredPermission: row.required_permission, status: row.status } : null;
-  }
-
-  async saveApplicationAuthorizationCode(record, auditEvent) {
-    return this.#transaction(async (connection) => {
-      await connection.execute(
-        `INSERT INTO application_authorization_codes(
-           code_hash, identity_id, application_id, redirect_uri, code_challenge, issued_at, expires_at, consumed_at
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, NULL)`,
-        [record.codeHash, record.identityId, record.applicationId, record.redirectUri,
-         record.codeChallenge, asMariaDate(record.issuedAt), asMariaDate(record.expiresAt)],
-      );
-      await this.#appendAudit(connection, auditEvent);
-    });
-  }
-
-  async consumeApplicationAuthorizationCode({ codeHash, applicationId, redirectUri, codeChallenge, now = new Date() }, auditEvent) {
-    return this.#transaction(async (connection) => {
-      const [rows] = await connection.execute(
-        `SELECT * FROM application_authorization_codes WHERE code_hash = ? FOR UPDATE`, [codeHash],
-      );
-      const row = rows[0];
-      if (!row || row.consumed_at || row.application_id !== applicationId || row.redirect_uri !== redirectUri ||
-          row.code_challenge !== codeChallenge || new Date(row.expires_at) <= now) return null;
-      await connection.execute(
-        "UPDATE application_authorization_codes SET consumed_at = ? WHERE code_hash = ?",
-        [asMariaDate(now), codeHash],
-      );
-      await this.#appendAudit(connection, auditEvent);
-      return {
-        codeHash: row.code_hash, identityId: row.identity_id, applicationId: row.application_id,
-        redirectUri: row.redirect_uri, codeChallenge: row.code_challenge,
-        issuedAt: asIso(row.issued_at), expiresAt: asIso(row.expires_at), consumedAt: now.toISOString(),
-      };
-    });
-  }
-
-  async listAssignments(identityId, applicationId) {
-    const [rows] = await this.pool.execute(
-      `SELECT * FROM access_assignments WHERE subject_id = ? AND application_id = ?
-       ORDER BY assignment_id`, [identityId, applicationId],
-    );
-    return rows.map((row) => ({
-      assignmentId: row.assignment_id, subjectId: row.subject_id, applicationId: row.application_id,
-      roleId: row.role_id, permissions: parseJson(row.permissions_json), scopeType: row.scope_type,
-      scopeId: row.scope_id, conditions: parseJson(row.conditions_json), status: row.status,
-      validFrom: row.valid_from, validUntil: row.valid_until, reason: row.reason,
-      decidedBy: row.decided_by, inheritedFromGroup: row.inherited_from_group, version: row.version,
-    }));
-  }
-
-  async listAllAssignments() {
-    const [rows] = await this.pool.execute(
-      `SELECT * FROM access_assignments
-       ORDER BY subject_id, application_id, role_id, assignment_id`,
-    );
-    return rows.map((row) => ({
+      identityId: row.identity_id, em…1761 tokens truncated…) => ({
       assignmentId: row.assignment_id, subjectId: row.subject_id, applicationId: row.application_id,
       roleId: row.role_id, permissions: parseJson(row.permissions_json), scopeType: row.scope_type,
       scopeId: row.scope_id, conditions: parseJson(row.conditions_json), status: row.status,
@@ -759,12 +639,41 @@ export class MariaDbRepository {
     return Number(rows[0]?.count ?? 0);
   }
 
+  async recordNotificationProcessingRun({
+    status, startedAt, finishedAt, errorCode, claimed, processed, retried, quarantined,
+  }) {
+    const validErrorCode = typeof errorCode === "string" && /^[a-z][a-z0-9_:-]{0,79}$/.test(errorCode);
+    if (!["succeeded", "failed"].includes(status) || !(startedAt instanceof Date) ||
+        !(finishedAt instanceof Date) || finishedAt < startedAt ||
+        (status === "failed") !== validErrorCode || (status === "succeeded" && errorCode !== null)) {
+      throw new Error("invalid notification processing outcome");
+    }
+    const counts = [claimed, processed, retried, quarantined].map(Number);
+    if (counts.some((value) => !Number.isInteger(value) || value < 0 || value > 100)) {
+      throw new Error("invalid notification processing counts");
+    }
+    await this.pool.execute(
+      `INSERT INTO notification_processing_state(
+         consumer_id, last_started_at, last_finished_at, last_status, last_error_code,
+         last_claimed, last_processed, last_retried, last_quarantined, version
+       ) VALUES ('internal-materializer-v1', ?, ?, ?, ?, ?, ?, ?, ?, 1)
+       ON DUPLICATE KEY UPDATE
+         last_started_at = VALUES(last_started_at), last_finished_at = VALUES(last_finished_at),
+         last_status = VALUES(last_status), last_error_code = VALUES(last_error_code),
+         last_claimed = VALUES(last_claimed), last_processed = VALUES(last_processed),
+         last_retried = VALUES(last_retried), last_quarantined = VALUES(last_quarantined),
+         version = version + 1`,
+      [asMariaDate(startedAt), asMariaDate(finishedAt), status, errorCode,
+       counts[0], counts[1], counts[2], counts[3]],
+    );
+  }
+
   async getNotificationOperationsSnapshot(limit = 50) {
     const safeLimit = Number(limit);
     if (!Number.isInteger(safeLimit) || safeLimit < 1 || safeLimit > 100) {
       throw new Error("invalid notification operations limit");
     }
-    const [eventRows, notificationRows, deliveryRows, suppressionRows, recentRows] = await Promise.all([
+    const [eventRows, notificationRows, deliveryRows, suppressionRows, recentRows, processorRows] = await Promise.all([
       this.pool.execute(
         `SELECT COUNT(*) AS total,
            COALESCE(SUM(status = 'pending'), 0) AS pending,
@@ -808,11 +717,18 @@ export class MariaDbRepository {
          ORDER BY resolved_at DESC, source_application_id, source_event_id
          LIMIT ${safeLimit}`,
       ),
+      this.pool.execute(
+        `SELECT last_started_at, last_finished_at, last_status, last_error_code,
+           last_claimed, last_processed, last_retried, last_quarantined, version
+         FROM notification_processing_state
+         WHERE consumer_id = 'internal-materializer-v1'`,
+      ),
     ]);
     const events = eventRows[0][0] ?? {};
     const notifications = notificationRows[0][0] ?? {};
     const deliveries = deliveryRows[0][0] ?? {};
     const suppressions = suppressionRows[0][0] ?? {};
+    const processor = processorRows[0][0] ?? null;
     const number = (value) => Number(value ?? 0);
     return {
       events: {
@@ -833,6 +749,14 @@ export class MariaDbRepository {
         ownAction: number(suppressions.own_action), preferences: number(suppressions.preferences),
         unlinkedIdentity: number(suppressions.unlinked_identity),
       },
+      processor: processor ? {
+        status: processor.last_status, lastStartedAt: asIso(processor.last_started_at),
+        lastFinishedAt: asIso(processor.last_finished_at), errorCode: processor.last_error_code,
+        claimed: number(processor.last_claimed), processed: number(processor.last_processed),
+        retried: number(processor.last_retried), quarantined: number(processor.last_quarantined),
+        version: number(processor.version),
+      } : { status: "never_run", lastStartedAt: null, lastFinishedAt: null, errorCode: null,
+        claimed: 0, processed: 0, retried: 0, quarantined: 0, version: 0 },
       recentResolutions: recentRows[0].map((row) => ({
         sourceApplicationId: row.source_application_id, eventId: row.source_event_id,
         policyVersion: row.policy_version, suppressed: parseJson(row.suppressed_json),
