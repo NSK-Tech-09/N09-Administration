@@ -3,6 +3,7 @@ import { publishApplicationAccessCatalog } from "./application-access-catalog.mj
 import { ACCESS_DIRECTORY_READ_PERMISSION } from "./access-admin.mjs";
 import { ACCESS_DECISION_PERMISSION } from "./access-decision-admin.mjs";
 import { ADMIN_APPLICATION_ID, LINK_DECISION_PERMISSION } from "./identity-link-admin.mjs";
+import { NOTIFICATION_OPERATIONS_READ_PERMISSION } from "./notification-operations-admin.mjs";
 
 export const ADMINISTRATION_ACCESS_CATALOG_V1 = Object.freeze({
   application_id: ADMIN_APPLICATION_ID,
@@ -26,7 +27,7 @@ export const ADMINISTRATION_ACCESS_CATALOG_V1 = Object.freeze({
   },
 });
 
-export const ADMINISTRATION_ACCESS_CATALOG = Object.freeze({
+export const ADMINISTRATION_ACCESS_CATALOG_V2 = Object.freeze({
   ...ADMINISTRATION_ACCESS_CATALOG_V1,
   catalog_version: 2,
   permissions: ADMINISTRATION_ACCESS_CATALOG_V1.permissions.map((permission) =>
@@ -39,6 +40,31 @@ export const ADMINISTRATION_ACCESS_CATALOG = Object.freeze({
       ? { ...role, display_name: "Responsable des accès applicatifs", description: "Accorde les rôles applicatifs actifs et décide les révocations autorisées, sans administrer les pouvoirs centraux protégés." }
       : role
   ),
+});
+
+export const ADMINISTRATION_ACCESS_CATALOG = Object.freeze({
+  ...ADMINISTRATION_ACCESS_CATALOG_V2,
+  catalog_version: 3,
+  permissions: [
+    ...ADMINISTRATION_ACCESS_CATALOG_V2.permissions,
+    {
+      permission_id: NOTIFICATION_OPERATIONS_READ_PERMISSION,
+      display_name: "Consulter l’exploitation des notifications",
+      description: "Consulter en lecture seule la file, les résolutions, les quarantaines et le blocage des canaux externes.",
+      status: "active",
+    },
+  ],
+  roles: [
+    ...ADMINISTRATION_ACCESS_CATALOG_V2.roles,
+    {
+      role_id: "notification-operations-reader",
+      display_name: "Lecteur de l’exploitation des notifications",
+      description: "Diagnostique le centre de notifications sans traiter un événement ni ouvrir un canal externe.",
+      status: "active",
+      permissions: [NOTIFICATION_OPERATIONS_READ_PERMISSION],
+      scope_types: ["global"],
+    },
+  ],
 });
 
 export function assertAdministrationCatalogBootstrapTarget({ database, allowBootstrap }) {
@@ -61,6 +87,18 @@ export async function publishAdministrationAccessCatalog(repository, {
       source: "administration-catalog-bootstrap",
     });
     if (![200, 201].includes(initial.status)) throw new Error(initial.body.error || "administration catalog publication failed");
+    latest = await repository.getLatestApplicationAccessCatalog(ADMIN_APPLICATION_ID);
+  }
+  if (latest.catalogVersion === 1) {
+    const transition = await publishApplicationAccessCatalog({
+      repository,
+      principal: { applicationId: ADMIN_APPLICATION_ID, audience: ADMIN_APPLICATION_ID, correlationId },
+      payload: ADMINISTRATION_ACCESS_CATALOG_V2,
+      source: "administration-catalog-bootstrap",
+    });
+    if (![200, 201].includes(transition.status)) {
+      throw new Error(transition.body.error || "administration catalog v2 publication failed");
+    }
     latest = await repository.getLatestApplicationAccessCatalog(ADMIN_APPLICATION_ID);
   }
   if (latest.catalogVersion > ADMINISTRATION_ACCESS_CATALOG.catalog_version) {

@@ -759,6 +759,90 @@ export class MariaDbRepository {
     return Number(rows[0]?.count ?? 0);
   }
 
+  async getNotificationOperationsSnapshot(limit = 50) {
+    const safeLimit = Number(limit);
+    if (!Number.isInteger(safeLimit) || safeLimit < 1 || safeLimit > 100) {
+      throw new Error("invalid notification operations limit");
+    }
+    const [eventRows, notificationRows, deliveryRows, suppressionRows, recentRows] = await Promise.all([
+      this.pool.execute(
+        `SELECT COUNT(*) AS total,
+           COALESCE(SUM(status = 'pending'), 0) AS pending,
+           COALESCE(SUM(status = 'processing'), 0) AS processing,
+           COALESCE(SUM(status = 'retry'), 0) AS retrying,
+           COALESCE(SUM(status = 'processed'), 0) AS processed,
+           COALESCE(SUM(status = 'quarantined'), 0) AS quarantined,
+           MIN(CASE WHEN status IN ('pending', 'retry') THEN available_at END) AS oldest_available_at,
+           MAX(received_at) AS last_received_at,
+           MAX(processed_at) AS last_processed_at
+         FROM notification_events`,
+      ),
+      this.pool.execute(
+        `SELECT COUNT(*) AS total,
+           COALESCE(SUM(read_at IS NULL AND archived_at IS NULL), 0) AS unread,
+           COALESCE(SUM(archived_at IS NOT NULL), 0) AS archived
+         FROM notifications`,
+      ),
+      this.pool.execute(
+        `SELECT COUNT(*) AS total,
+           COALESCE(SUM(status = 'blocked'), 0) AS blocked,
+           COALESCE(SUM(status <> 'blocked'), 0) AS non_blocked,
+           COALESCE(SUM(status = 'pending'), 0) AS pending,
+           COALESCE(SUM(status = 'processing'), 0) AS processing,
+           COALESCE(SUM(status = 'retry'), 0) AS retrying,
+           COALESCE(SUM(status = 'delivered'), 0) AS delivered,
+           COALESCE(SUM(status = 'quarantined'), 0) AS quarantined
+         FROM notification_external_deliveries`,
+      ),
+      this.pool.execute(
+        `SELECT
+           COALESCE(SUM(CAST(JSON_UNQUOTE(JSON_EXTRACT(suppressed_json, '$.own_action')) AS UNSIGNED)), 0) AS own_action,
+           COALESCE(SUM(CAST(JSON_UNQUOTE(JSON_EXTRACT(suppressed_json, '$.preferences')) AS UNSIGNED)), 0) AS preferences,
+           COALESCE(SUM(CAST(JSON_UNQUOTE(JSON_EXTRACT(suppressed_json, '$.unlinked_identity')) AS UNSIGNED)), 0) AS unlinked_identity
+         FROM notification_resolutions`,
+      ),
+      this.pool.execute(
+        `SELECT source_application_id, source_event_id, policy_version, suppressed_json,
+           internal_notification_count, blocked_external_delivery_count, resolved_at
+         FROM notification_resolutions
+         ORDER BY resolved_at DESC, source_application_id, source_event_id
+         LIMIT ${safeLimit}`,
+      ),
+    ]);
+    const events = eventRows[0][0] ?? {};
+    const notifications = notificationRows[0][0] ?? {};
+    const deliveries = deliveryRows[0][0] ?? {};
+    const suppressions = suppressionRows[0][0] ?? {};
+    const number = (value) => Number(value ?? 0);
+    return {
+      events: {
+        total: number(events.total), pending: number(events.pending), processing: number(events.processing),
+        retrying: number(events.retrying), processed: number(events.processed), quarantined: number(events.quarantined),
+        oldestAvailableAt: asIso(events.oldest_available_at), lastReceivedAt: asIso(events.last_received_at),
+        lastProcessedAt: asIso(events.last_processed_at),
+      },
+      notifications: {
+        total: number(notifications.total), unread: number(notifications.unread), archived: number(notifications.archived),
+      },
+      externalDeliveries: {
+        total: number(deliveries.total), blocked: number(deliveries.blocked), nonBlocked: number(deliveries.non_blocked),
+        pending: number(deliveries.pending), processing: number(deliveries.processing), retrying: number(deliveries.retrying),
+        delivered: number(deliveries.delivered), quarantined: number(deliveries.quarantined),
+      },
+      suppressions: {
+        ownAction: number(suppressions.own_action), preferences: number(suppressions.preferences),
+        unlinkedIdentity: number(suppressions.unlinked_identity),
+      },
+      recentResolutions: recentRows[0].map((row) => ({
+        sourceApplicationId: row.source_application_id, eventId: row.source_event_id,
+        policyVersion: row.policy_version, suppressed: parseJson(row.suppressed_json),
+        internalNotificationCount: number(row.internal_notification_count),
+        blockedExternalDeliveryCount: number(row.blocked_external_delivery_count),
+        resolvedAt: asIso(row.resolved_at),
+      })),
+    };
+  }
+
   async markNotificationRead({ identityId, notificationId, readAt }) {
     const [result] = await this.pool.execute(
       `UPDATE notifications SET read_at = ?

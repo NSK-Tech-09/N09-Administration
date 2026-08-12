@@ -12,6 +12,7 @@ import { createHttpHandler } from "./http.mjs";
 import { ADMIN_APPLICATION_ID, LINK_DECISION_PERMISSION } from "./identity-link-admin.mjs";
 import { createInternalClientAuthenticator, INTERNAL_CLIENT_HEADERS, signInternalRequest } from "./internal-client-auth.mjs";
 import { OIDC_SESSION_COOKIE, seal } from "./oidc.mjs";
+import { NOTIFICATION_OPERATIONS_READ_PERMISSION } from "./notification-operations-admin.mjs";
 import { TransactionalMemoryRepository } from "./repository.mjs";
 
 const identity = { identityId: "identity-1", status: "active" };
@@ -64,6 +65,7 @@ function seededAdminRepository({
   withPermission = true,
   withAccessRead = false,
   withAccessDecision = false,
+  withNotificationOperations = false,
   subject = "provider-subject-secret",
 } = {}) {
   const adminRepository = new TransactionalMemoryRepository();
@@ -97,6 +99,15 @@ function seededAdminRepository({
       roleId: "access-decision-administrator", permissions: [ACCESS_DECISION_PERMISSION], scopeType: null,
       scopeId: null, conditions: [], status: "active", validFrom: null, validUntil: null,
       reason: "Test des décisions d’accès", decidedBy: adminIdentity.identityId,
+      inheritedFromGroup: null, version: 1,
+    }, adminAudit("assignment.created", { subjectId: adminIdentity.identityId, applicationId: ADMIN_APPLICATION_ID }));
+  }
+  if (withNotificationOperations) {
+    adminRepository.saveAssignment({
+      assignmentId: randomUUID(), subjectId: adminIdentity.identityId, applicationId: ADMIN_APPLICATION_ID,
+      roleId: "notification-operations-reader", permissions: [NOTIFICATION_OPERATIONS_READ_PERMISSION],
+      scopeType: null, scopeId: null, conditions: [], status: "active", validFrom: null, validUntil: null,
+      reason: "Test de l’exploitation des notifications", decidedBy: adminIdentity.identityId,
       inheritedFromGroup: null, version: 1,
     }, adminAudit("assignment.created", { subjectId: adminIdentity.identityId, applicationId: ADMIN_APPLICATION_ID }));
   }
@@ -146,6 +157,54 @@ test("expose une santé minimale sans information interne", async () => {
     assert.equal(response.status, 200);
     assert.deepEqual(await response.json(), { status: "ok" });
     assert.equal(response.headers.get("cache-control"), "no-store");
+  });
+});
+
+test("protège la console d’exploitation par une permission dédiée", async () => {
+  const { adminRepository } = seededAdminRepository({ withAccessRead: true });
+  adminRepository.getNotificationOperationsSnapshot = async () => { throw new Error("must not be read"); };
+  await withServer({ repository: adminRepository, oidcConfig }, async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/admin/notification-operations`, {
+      headers: { cookie: adminCookie() },
+    });
+    assert.equal(response.status, 403);
+    assert.match(await response.text(), /permission dédiée à l’exploitation des notifications/);
+  });
+});
+
+test("présente la file et les suppressions sans coordonnée personnelle ni action", async () => {
+  const { adminRepository } = seededAdminRepository({ withNotificationOperations: true });
+  adminRepository.getNotificationOperationsSnapshot = async () => ({
+    events: {
+      total: 2, pending: 0, processing: 0, retrying: 0, processed: 2, quarantined: 0,
+      oldestAvailableAt: null, lastReceivedAt: "2026-08-12T10:00:00.000Z",
+      lastProcessedAt: "2026-08-12T10:02:00.000Z",
+    },
+    notifications: { total: 0, unread: 0, archived: 0 },
+    externalDeliveries: {
+      total: 0, blocked: 0, nonBlocked: 0, pending: 0, processing: 0,
+      retrying: 0, delivered: 0, quarantined: 0,
+    },
+    suppressions: { ownAction: 2, preferences: 0, unlinkedIdentity: 0 },
+    recentResolutions: [{
+      sourceApplicationId: "n09-suivi-taches", eventId: "event_reference_1",
+      policyVersion: "tasks-notification-policy-v1",
+      suppressed: { own_action: 1, preferences: 0, unlinked_identity: 0 },
+      internalNotificationCount: 0, blockedExternalDeliveryCount: 0,
+      resolvedAt: "2026-08-12T10:02:00.000Z",
+    }],
+  });
+  await withServer({ repository: adminRepository, oidcConfig }, async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/admin/notification-operations`, {
+      headers: { cookie: adminCookie() },
+    });
+    const body = await response.text();
+    assert.equal(response.status, 200);
+    assert.match(body, /Exploitation des notifications/);
+    assert.match(body, /action propre 2/);
+    assert.match(body, /Tous bloqués/);
+    assert.doesNotMatch(body, /admin@example\.test|candidate@example\.test|password|secret/i);
+    assert.doesNotMatch(body, /method="post" action="\/admin\/notification-operations/);
   });
 });
 
@@ -214,7 +273,7 @@ test("affiche le registre en lecture seule avec identités, applications et affe
     assert.match(body, /Utilisateurs et accès/);
     assert.match(body, /Admin NSK/);
     assert.match(body, /N09 – Administration/);
-    assert.match(body, /Catalogue v2/);
+    assert.match(body, /Catalogue v3/);
     assert.match(body, /Responsable des rattachements/);
     assert.match(body, /access-directory-reader/);
     assert.match(body, /administration:access:read/);

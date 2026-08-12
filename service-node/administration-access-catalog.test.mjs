@@ -20,12 +20,13 @@ function repositoryWithAdministration() {
   return repository;
 }
 
-test("décrit les trois pouvoirs existants et borne l’octroi aux rôles publiés", () => {
+test("décrit les quatre pouvoirs séparés et borne l’octroi aux rôles publiés", () => {
   assert.deepEqual(ADMINISTRATION_ACCESS_CATALOG.roles.map((item) => item.role_id).sort(), [
     "access-decision-administrator", "access-directory-reader", "identity-link-administrator",
+    "notification-operations-reader",
   ]);
   assert.equal(ADMINISTRATION_ACCESS_CATALOG.provisioning.mode, "central_identity_only");
-  assert.equal(ADMINISTRATION_ACCESS_CATALOG.catalog_version, 2);
+  assert.equal(ADMINISTRATION_ACCESS_CATALOG.catalog_version, 3);
   assert.match(ADMINISTRATION_ACCESS_CATALOG.permissions
     .find((item) => item.permission_id === "administration:access:decide").description, /Accorder un rôle applicatif actif/);
 });
@@ -43,6 +44,6 @@ test("borne la publication à la préproduction et la rend idempotente", async (
   });
   assert.equal(first.created, true);
   assert.equal(second.created, false);
-  assert.equal(repository.getLatestApplicationAccessCatalog(ADMIN_APPLICATION_ID).catalogVersion, 2);
+  assert.equal(repository.getLatestApplicationAccessCatalog(ADMIN_APPLICATION_ID).catalogVersion, 3);
   assert.equal(repository.verifyAuditChain(), true);
 });

@@ -9,6 +9,7 @@ import {
   ACCESS_DECISION_PERMISSION, authorizeAccessDecisionAdministration, grantAccessAssignment, revokeAccessAssignment,
 } from "./access-decision-admin.mjs";
 import { ADMIN_APPLICATION_ID, authorizeIdentityLinkAdministration } from "./identity-link-admin.mjs";
+import { authorizeNotificationOperationsAdministration } from "./notification-operations-admin.mjs";
 import {
   exchangeApplicationLoginCode, issueApplicationLoginCode, validateAuthorizationRequest,
 } from "./application-login.mjs";
@@ -214,6 +215,18 @@ function renderNotifications(notifications, unreadCount, csrf) {
   return `<h1>Centre de notifications</h1><p>Ce centre interne est le canal de référence. Lire une notification ne la supprime pas et aucun canal externe n’est activé par cette page.</p><div class="summary"><div class="metric"><strong>${escapeHtml(unreadCount)}</strong>non lue${unreadCount > 1 ? "s" : ""}</div><div class="metric"><strong>${escapeHtml(notifications.length)}</strong>affichée${notifications.length > 1 ? "s" : ""}</div></div><nav>${allRead}<a class="button secondary" href="/">Retour à l’accueil</a></nav><div class="directory">${cards || '<div class="facts"><p>Aucune notification pour le moment.</p></div>'}</div>`;
 }
 
+function renderNotificationOperations(snapshot) {
+  const actionable = snapshot.events.pending + snapshot.events.processing + snapshot.events.retrying;
+  const externalState = snapshot.externalDeliveries.nonBlocked === 0
+    ? '<span class="pill">Tous bloqués</span>'
+    : `<span class="pill inactive">${escapeHtml(snapshot.externalDeliveries.nonBlocked)} non bloquée${snapshot.externalDeliveries.nonBlocked > 1 ? "s" : ""}</span>`;
+  const resolutionCards = snapshot.recentResolutions.map((resolution) => {
+    const suppressed = resolution.suppressed || {};
+    return `<article class="entry"><h3>${escapeHtml(resolution.sourceApplicationId)}</h3><p><strong>${escapeHtml(resolution.internalNotificationCount)}</strong> notification${resolution.internalNotificationCount > 1 ? "s" : ""} interne${resolution.internalNotificationCount > 1 ? "s" : ""} · <strong>${escapeHtml(resolution.blockedExternalDeliveryCount)}</strong> livraison${resolution.blockedExternalDeliveryCount > 1 ? "s" : ""} externe${resolution.blockedExternalDeliveryCount > 1 ? "s" : ""} bloquée${resolution.blockedExternalDeliveryCount > 1 ? "s" : ""}</p><p>Écartées : action propre ${escapeHtml(suppressed.own_action || 0)} · préférences ${escapeHtml(suppressed.preferences || 0)} · identité non liée ${escapeHtml(suppressed.unlinked_identity || 0)}</p><p class="muted">Politique : <code>${escapeHtml(resolution.policyVersion)}</code><br>Événement : <code>${escapeHtml(resolution.eventId)}</code><br>Résolu le ${escapeHtml(formatDate(resolution.resolvedAt))}</p></article>`;
+  }).join("");
+  return `<h1>Exploitation des notifications</h1><p>Vue centrale en lecture seule de la file et de ses résolutions. Cette page ne traite aucun événement, ne modifie aucune préférence et n’ouvre aucun canal externe.</p><div class="summary"><div class="metric"><strong>${escapeHtml(actionable)}</strong>à traiter ou en cours</div><div class="metric"><strong>${escapeHtml(snapshot.events.processed)}</strong>événements traités</div><div class="metric"><strong>${escapeHtml(snapshot.notifications.total)}</strong>notifications internes</div><div class="metric"><strong>${escapeHtml(snapshot.events.quarantined)}</strong>événements en quarantaine</div><div class="metric"><strong>${escapeHtml(snapshot.notifications.unread)}</strong>notifications non lues</div><div class="metric"><strong>${escapeHtml(snapshot.externalDeliveries.blocked)}</strong>livraisons externes bloquées</div></div><div class="facts"><p><strong>Canaux externes :</strong> ${externalState}<br><strong>Suppressions cumulées :</strong> action propre ${escapeHtml(snapshot.suppressions.ownAction)} · préférences ${escapeHtml(snapshot.suppressions.preferences)} · identité non liée ${escapeHtml(snapshot.suppressions.unlinkedIdentity)}</p><p class="muted">Dernier événement reçu : ${snapshot.events.lastReceivedAt ? escapeHtml(formatDate(snapshot.events.lastReceivedAt)) : "aucun"} · dernier traitement : ${snapshot.events.lastProcessedAt ? escapeHtml(formatDate(snapshot.events.lastProcessedAt)) : "aucun"}</p></div><h2>Résolutions récentes</h2><div class="directory">${resolutionCards || '<div class="facts"><p>Aucune résolution enregistrée.</p></div>'}</div><nav><a class="button secondary" href="/">Retour à l’accueil</a><a class="button secondary" href="/notifications">Centre personnel</a><form method="post" action="/auth/logout"><button class="secondary" type="submit">Fermer la session</button></form></nav>`;
+}
+
 export function createHttpHandler({ repository, authenticate = async () => null, oidcConfig = null, fetchImpl = fetch, maxBodyBytes = DEFAULT_MAX_BODY_BYTES }) {
   if (!repository) throw new Error("repository is required");
   if (typeof authenticate !== "function") throw new Error("authenticate must be a function");
@@ -285,6 +298,10 @@ export function createHttpHandler({ repository, authenticate = async () => null,
         try {
           const decision = await authorizeAccessDecisionAdministration(repository, session.identityId);
           if (decision.allowed) administrationLinks.push('<a class="button" href="/admin/access-decisions">Décider les révocations</a>');
+        } catch { /* no administrative affordance on repository failure */ }
+        try {
+          const decision = await authorizeNotificationOperationsAdministration(repository, session.identityId);
+          if (decision.allowed) administrationLinks.push('<a class="button" href="/admin/notification-operations">Exploiter les notifications</a>');
         } catch { /* no administrative affordance on repository failure */ }
         if (typeof repository.countUnreadNotifications === "function") {
           try {
@@ -441,6 +458,45 @@ export function createHttpHandler({ repository, authenticate = async () => null,
       }
       response.setHeader("allow", notificationsRoot ? "GET" : "POST");
       writeJson(response, 405, { error: "method_not_allowed" });
+      return;
+    }
+    if (url.pathname === "/admin/notification-operations") {
+      if (request.method !== "GET") {
+        response.setHeader("allow", "GET");
+        writeJson(response, 405, { error: "method_not_allowed" });
+        return;
+      }
+      let session;
+      try {
+        if (!oidcConfig) throw new Error("oidc_not_configured");
+        session = open(parseCookies(request.headers.cookie).get(OIDC_SESSION_COOKIE), oidcConfig.sessionSecret, "oidc-session");
+      } catch {
+        writeHtml(response, 401, "Connexion requise", '<h1>Connexion requise</h1><p>Une session NSK valide est nécessaire.</p><a class="button" href="/">Se connecter</a>');
+        return;
+      }
+      if (session.status !== "authenticated" || !session.identityId || !session.csrf) {
+        writeHtml(response, 401, "Nouvelle connexion requise", '<h1>Nouvelle connexion requise</h1><p>Ferme puis renouvelle ta session afin d’accéder à l’administration sécurisée.</p><a class="button" href="/">Retour</a>');
+        return;
+      }
+      let access;
+      try {
+        access = await authorizeNotificationOperationsAdministration(repository, session.identityId);
+      } catch {
+        console.error(JSON.stringify({ event: "notification_operations_unavailable", reason: "authorization_repository_failure" }));
+        writeHtml(response, 503, "Exploitation indisponible", '<h1>Exploitation momentanément indisponible</h1><p>Le droit de consultation ne peut pas être vérifié.</p><a class="button" href="/">Retour</a>');
+        return;
+      }
+      if (!access.allowed) {
+        writeHtml(response, 403, "Accès refusé", '<h1>Accès refusé</h1><p>Cette identité ne possède pas la permission dédiée à l’exploitation des notifications.</p><a class="button" href="/">Retour</a>');
+        return;
+      }
+      try {
+        const snapshot = await repository.getNotificationOperationsSnapshot();
+        writeHtml(response, 200, "Exploitation des notifications", renderNotificationOperations(snapshot));
+      } catch {
+        console.error(JSON.stringify({ event: "notification_operations_unavailable", reason: "snapshot_repository_failure" }));
+        writeHtml(response, 503, "Exploitation indisponible", '<h1>Exploitation momentanément indisponible</h1><p>La file de notifications n’a pas pu être consultée. Aucun état n’a été modifié.</p><a class="button" href="/">Retour</a>');
+      }
       return;
     }
     const accessDecisionRoot = url.pathname === "/admin/access-decisions";

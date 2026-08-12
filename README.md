@@ -95,6 +95,12 @@ interne idempotent et conserve les demandes de canaux externes dans l’état
 sans suppression ni action sensible ; voir
 `docs/ADR-017-MATERIALISATION-CENTRE-NOTIFICATIONS.md`.
 
+Une console d’exploitation gouvernée est également prête localement. Elle rend
+visibles la file, les reprises, les quarantaines, les motifs de suppression et
+le blocage des canaux externes sans imposer un accès MariaDB. Sa permission est
+distincte des autres pouvoirs centraux et la page ne contient aucune action de
+traitement ; voir `docs/ADR-018-OBSERVABILITE-NOTIFICATIONS.md`.
+
 ## Prérequis et démarrage local
 
 - Python 3.11 ou supérieur ;
@@ -138,6 +144,7 @@ ne contient aucun secret réel. La production reste inchangée.
 - [`docs/ADR-015-OCTROIS-APPLICATIFS-GOUVERNES.md`](docs/ADR-015-OCTROIS-APPLICATIFS-GOUVERNES.md)
 - [`docs/ADR-016-RECEPTION-CENTRALE-NOTIFICATIONS.md`](docs/ADR-016-RECEPTION-CENTRALE-NOTIFICATIONS.md)
 - [`docs/ADR-017-MATERIALISATION-CENTRE-NOTIFICATIONS.md`](docs/ADR-017-MATERIALISATION-CENTRE-NOTIFICATIONS.md)
+- [`docs/ADR-018-OBSERVABILITE-NOTIFICATIONS.md`](docs/ADR-018-OBSERVABILITE-NOTIFICATIONS.md)
 - [`docs/ETAT-PREPROD-INFOMANIAK.md`](docs/ETAT-PREPROD-INFOMANIAK.md)
 - [`docs/CONFORMITE-NSES.md`](docs/CONFORMITE-NSES.md)
 - [`docs/CONTRAT-API-INTERNE.md`](docs/CONTRAT-API-INTERNE.md)
