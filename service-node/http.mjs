@@ -2,6 +2,7 @@ import { randomUUID, timingSafeEqual } from "node:crypto";
 import { evaluateAccessRequestAsync } from "./api.mjs";
 import { createAuditEvent } from "./audit.mjs";
 import { publishApplicationAccessCatalog } from "./application-access-catalog.mjs";
+import { receiveNotificationEvents } from "./notification-ingress.mjs";
 import { createLinkRequest } from "./federated-identity.mjs";
 import { authorizeAccessAdministration } from "./access-admin.mjs";
 import {
@@ -592,6 +593,26 @@ export function createHttpHandler({ repository, authenticate = async () => null,
       }
       response.setHeader("allow", adminRoute[1] ? "POST" : "GET");
       writeJson(response, 405, { error: "method_not_allowed" });
+      return;
+    }
+    if (url.pathname === "/internal/v1/notification-events") {
+      if (request.method !== "POST") {
+        response.setHeader("allow", "POST");
+        writeJson(response, 405, { error: "method_not_allowed" });
+        return;
+      }
+      let correlationId = randomUUID();
+      try {
+        const { payload, rawBody } = await readJson(request, maxBodyBytes);
+        const authenticated = await authenticate(request, { rawBody });
+        correlationId = authenticated?.correlationId || correlationId;
+        const principal = authenticated ? { ...authenticated, correlationId } : null;
+        const result = await receiveNotificationEvents({ repository, principal, payload });
+        writeJson(response, result.status, result.body, correlationId);
+      } catch (error) {
+        if (error instanceof HttpInputError) writeJson(response, error.status, { error: error.code }, correlationId);
+        else writeJson(response, 503, { error: "notification_ingress_unavailable" }, correlationId);
+      }
       return;
     }
     if (url.pathname === "/internal/v1/application-access-catalogs") {

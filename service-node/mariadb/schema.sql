@@ -124,6 +124,48 @@ CREATE TABLE IF NOT EXISTS access_assignments (
   INDEX assignments_subject_application (subject_id, application_id)
 ) ENGINE=InnoDB;
 
+CREATE TABLE IF NOT EXISTS notification_events (
+  source_application_id VARCHAR(100) NOT NULL,
+  source_event_id VARCHAR(64) NOT NULL,
+  event_type VARCHAR(100) NOT NULL,
+  event_hash CHAR(64) NOT NULL,
+  task_id VARCHAR(64) NOT NULL,
+  site_id VARCHAR(64) NOT NULL,
+  actor_id VARCHAR(64),
+  aggregate_id VARCHAR(64) NOT NULL,
+  payload_json JSON NOT NULL,
+  occurred_at DATETIME(6) NOT NULL,
+  received_at DATETIME(6) NOT NULL,
+  status VARCHAR(32) NOT NULL,
+  processing_attempts INT UNSIGNED NOT NULL DEFAULT 0,
+  available_at DATETIME(6) NOT NULL,
+  claimed_at DATETIME(6),
+  claimed_by VARCHAR(128),
+  processed_at DATETIME(6),
+  last_error_code VARCHAR(80),
+  PRIMARY KEY (source_application_id, source_event_id),
+  CONSTRAINT notification_events_application_fk
+    FOREIGN KEY (source_application_id) REFERENCES applications(application_id),
+  CONSTRAINT notification_events_status CHECK (
+    status IN ('pending', 'processing', 'retry', 'processed', 'quarantined')
+  ),
+  CONSTRAINT notification_events_claim CHECK (
+    (status = 'processing' AND claimed_at IS NOT NULL AND claimed_by IS NOT NULL)
+    OR (status <> 'processing' AND claimed_at IS NULL AND claimed_by IS NULL)
+  ),
+  CONSTRAINT notification_events_completion CHECK (
+    (status = 'processed' AND processed_at IS NOT NULL)
+    OR (status <> 'processed' AND processed_at IS NULL)
+  ),
+  CONSTRAINT notification_events_error CHECK (
+    (status IN ('retry', 'quarantined') AND last_error_code IS NOT NULL)
+    OR (status NOT IN ('retry', 'quarantined') AND last_error_code IS NULL)
+  ),
+  INDEX notification_events_available (status, available_at, occurred_at),
+  INDEX notification_events_task (source_application_id, task_id, occurred_at),
+  INDEX notification_events_site (source_application_id, site_id, occurred_at)
+) ENGINE=InnoDB;
+
 CREATE TABLE IF NOT EXISTS audit_events (
   sequence BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
   event_id CHAR(36) NOT NULL UNIQUE,
@@ -157,3 +199,25 @@ SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'audit events are immutable';
 CREATE TRIGGER IF NOT EXISTS audit_events_no_delete
 BEFORE DELETE ON audit_events FOR EACH ROW
 SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'audit events are immutable';
+
+CREATE TRIGGER IF NOT EXISTS notification_events_no_delete
+BEFORE DELETE ON notification_events FOR EACH ROW
+SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'notification events are retained';
+
+CREATE TRIGGER IF NOT EXISTS notification_events_payload_immutable
+BEFORE UPDATE ON notification_events FOR EACH ROW
+BEGIN
+  IF NEW.source_application_id <> OLD.source_application_id
+    OR NEW.source_event_id <> OLD.source_event_id
+    OR NEW.event_type <> OLD.event_type
+    OR NEW.event_hash <> OLD.event_hash
+    OR NEW.task_id <> OLD.task_id
+    OR NEW.site_id <> OLD.site_id
+    OR NOT (NEW.actor_id <=> OLD.actor_id)
+    OR NEW.aggregate_id <> OLD.aggregate_id
+    OR NOT (NEW.payload_json <=> OLD.payload_json)
+    OR NEW.occurred_at <> OLD.occurred_at
+    OR NEW.received_at <> OLD.received_at THEN
+    SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'notification event payload is immutable';
+  END IF;
+END;
