@@ -186,6 +186,11 @@ test("présente la file et les suppressions sans coordonnée personnelle ni acti
       retrying: 0, delivered: 0, quarantined: 0,
     },
     suppressions: { ownAction: 2, preferences: 0, unlinkedIdentity: 0 },
+    processor: {
+      status: "succeeded", lastStartedAt: "2026-08-12T10:01:59.000Z",
+      lastFinishedAt: "2026-08-12T10:02:00.000Z", errorCode: null,
+      claimed: 2, processed: 2, retried: 0, quarantined: 0, version: 4,
+    },
     recentResolutions: [{
       sourceApplicationId: "n09-suivi-taches", eventId: "event_reference_1",
       policyVersion: "tasks-notification-policy-v1",
@@ -203,6 +208,8 @@ test("présente la file et les suppressions sans coordonnée personnelle ni acti
     assert.match(body, /Exploitation des notifications/);
     assert.match(body, /action propre 2/);
     assert.match(body, /Tous bloqués/);
+    assert.match(body, /Dernier cycle réussi/);
+    assert.match(body, /pris 2 · traités 2 · repris 0 · quarantaines 0/);
     assert.doesNotMatch(body, /admin@example\.test|candidate@example\.test|password|secret/i);
     assert.doesNotMatch(body, /method="post" action="\/admin\/notification-operations/);
   });

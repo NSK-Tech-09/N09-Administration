@@ -101,6 +101,13 @@ le blocage des canaux externes sans imposer un accès MariaDB. Sa permission est
 distincte des autres pouvoirs centraux et la page ne contient aucune action de
 traitement ; voir `docs/ADR-018-OBSERVABILITE-NOTIFICATIONS.md`.
 
+Le traitement interne peut désormais être ordonnancé par un planificateur
+standard. Chaque invocation reste ponctuelle, refuse tout environnement autre
+que la préproduction, exige la fermeture explicite des canaux externes et prend
+un verrou singleton dans MariaDB. La console conserve seulement l’état borné du
+dernier cycle, sans charge métier ni identité technique ; voir
+`docs/ADR-019-TRAITEMENT-AUTONOME-NOTIFICATIONS.md`.
+
 ## Prérequis et démarrage local
 
 - Python 3.11 ou supérieur ;
@@ -145,6 +152,7 @@ ne contient aucun secret réel. La production reste inchangée.
 - [`docs/ADR-016-RECEPTION-CENTRALE-NOTIFICATIONS.md`](docs/ADR-016-RECEPTION-CENTRALE-NOTIFICATIONS.md)
 - [`docs/ADR-017-MATERIALISATION-CENTRE-NOTIFICATIONS.md`](docs/ADR-017-MATERIALISATION-CENTRE-NOTIFICATIONS.md)
 - [`docs/ADR-018-OBSERVABILITE-NOTIFICATIONS.md`](docs/ADR-018-OBSERVABILITE-NOTIFICATIONS.md)
+- [`docs/ADR-019-TRAITEMENT-AUTONOME-NOTIFICATIONS.md`](docs/ADR-019-TRAITEMENT-AUTONOME-NOTIFICATIONS.md)
 - [`docs/ETAT-PREPROD-INFOMANIAK.md`](docs/ETAT-PREPROD-INFOMANIAK.md)
 - [`docs/CONFORMITE-NSES.md`](docs/CONFORMITE-NSES.md)
 - [`docs/CONTRAT-API-INTERNE.md`](docs/CONTRAT-API-INTERNE.md)

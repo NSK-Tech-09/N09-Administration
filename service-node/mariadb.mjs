@@ -32,6 +32,39 @@ export async function createMariaDbPool(config) {
   });
 }
 
+export async function acquireNotificationProcessingLock(
+  pool, lockName = "n09:administration:notification-processing:v1",
+) {
+  if (!pool || typeof pool.getConnection !== "function" ||
+      typeof lockName !== "string" || !/^[A-Za-z0-9._:-]{3,64}$/.test(lockName)) {
+    throw new Error("invalid notification processing lock");
+  }
+  const connection = await pool.getConnection();
+  try {
+    const [rows] = await connection.execute("SELECT GET_LOCK(?, 0) AS acquired", [lockName]);
+    if (Number(rows[0]?.acquired) !== 1) {
+      connection.release();
+      return null;
+    }
+  } catch (error) {
+    connection.release();
+    throw error;
+  }
+  let released = false;
+  return Object.freeze({
+    release: async () => {
+      if (released) return;
+      released = true;
+      try {
+        const [rows] = await connection.execute("SELECT RELEASE_LOCK(?) AS released", [lockName]);
+        if (Number(rows[0]?.released) !== 1) throw new Error("notification processing lock was lost");
+      } finally {
+        connection.release();
+      }
+    },
+  });
+}
+
 function asMariaDate(value) {
   if (!value) return null;
   return new Date(value).toISOString().replace("T", " ").replace("Z", "");
@@ -759,12 +792,41 @@ export class MariaDbRepository {
     return Number(rows[0]?.count ?? 0);
   }
 
+  async recordNotificationProcessingRun({
+    status, startedAt, finishedAt, errorCode, claimed, processed, retried, quarantined,
+  }) {
+    const validErrorCode = typeof errorCode === "string" && /^[a-z][a-z0-9_:-]{0,79}$/.test(errorCode);
+    if (!["succeeded", "failed"].includes(status) || !(startedAt instanceof Date) ||
+        !(finishedAt instanceof Date) || finishedAt < startedAt ||
+        (status === "failed") !== validErrorCode || (status === "succeeded" && errorCode !== null)) {
+      throw new Error("invalid notification processing outcome");
+    }
+    const counts = [claimed, processed, retried, quarantined].map(Number);
+    if (counts.some((value) => !Number.isInteger(value) || value < 0 || value > 100)) {
+      throw new Error("invalid notification processing counts");
+    }
+    await this.pool.execute(
+      `INSERT INTO notification_processing_state(
+         consumer_id, last_started_at, last_finished_at, last_status, last_error_code,
+         last_claimed, last_processed, last_retried, last_quarantined, version
+       ) VALUES ('internal-materializer-v1', ?, ?, ?, ?, ?, ?, ?, ?, 1)
+       ON DUPLICATE KEY UPDATE
+         last_started_at = VALUES(last_started_at), last_finished_at = VALUES(last_finished_at),
+         last_status = VALUES(last_status), last_error_code = VALUES(last_error_code),
+         last_claimed = VALUES(last_claimed), last_processed = VALUES(last_processed),
+         last_retried = VALUES(last_retried), last_quarantined = VALUES(last_quarantined),
+         version = version + 1`,
+      [asMariaDate(startedAt), asMariaDate(finishedAt), status, errorCode,
+       counts[0], counts[1], counts[2], counts[3]],
+    );
+  }
+
   async getNotificationOperationsSnapshot(limit = 50) {
     const safeLimit = Number(limit);
     if (!Number.isInteger(safeLimit) || safeLimit < 1 || safeLimit > 100) {
       throw new Error("invalid notification operations limit");
     }
-    const [eventRows, notificationRows, deliveryRows, suppressionRows, recentRows] = await Promise.all([
+    const [eventRows, notificationRows, deliveryRows, suppressionRows, recentRows, processorRows] = await Promise.all([
       this.pool.execute(
         `SELECT COUNT(*) AS total,
            COALESCE(SUM(status = 'pending'), 0) AS pending,
@@ -808,11 +870,18 @@ export class MariaDbRepository {
          ORDER BY resolved_at DESC, source_application_id, source_event_id
          LIMIT ${safeLimit}`,
       ),
+      this.pool.execute(
+        `SELECT last_started_at, last_finished_at, last_status, last_error_code,
+           last_claimed, last_processed, last_retried, last_quarantined, version
+         FROM notification_processing_state
+         WHERE consumer_id = 'internal-materializer-v1'`,
+      ),
     ]);
     const events = eventRows[0][0] ?? {};
     const notifications = notificationRows[0][0] ?? {};
     const deliveries = deliveryRows[0][0] ?? {};
     const suppressions = suppressionRows[0][0] ?? {};
+    const processor = processorRows[0][0] ?? null;
     const number = (value) => Number(value ?? 0);
     return {
       events: {
@@ -833,6 +902,14 @@ export class MariaDbRepository {
         ownAction: number(suppressions.own_action), preferences: number(suppressions.preferences),
         unlinkedIdentity: number(suppressions.unlinked_identity),
       },
+      processor: processor ? {
+        status: processor.last_status, lastStartedAt: asIso(processor.last_started_at),
+        lastFinishedAt: asIso(processor.last_finished_at), errorCode: processor.last_error_code,
+        claimed: number(processor.last_claimed), processed: number(processor.last_processed),
+        retried: number(processor.last_retried), quarantined: number(processor.last_quarantined),
+        version: number(processor.version),
+      } : { status: "never_run", lastStartedAt: null, lastFinishedAt: null, errorCode: null,
+        claimed: 0, processed: 0, retried: 0, quarantined: 0, version: 0 },
       recentResolutions: recentRows[0].map((row) => ({
         sourceApplicationId: row.source_application_id, eventId: row.source_event_id,
         policyVersion: row.policy_version, suppressed: parseJson(row.suppressed_json),
