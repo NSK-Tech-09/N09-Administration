@@ -1,6 +1,6 @@
 # ADR-017 — Matérialisation centrale et centre de notifications
 
-Statut : **implémenté et validé localement, non déployé**
+Statut : **déployé et validé en préproduction**
 
 Date : **12 août 2026**
 
@@ -89,14 +89,12 @@ droit, jamais exécuter la décision depuis un courriel.
 - validation du schéma additif et de l’absence de secret dans les tables ;
 - `git diff --check` réussit sur le périmètre du lot.
 
-## Déploiement contrôlé à venir
+## Déploiement contrôlé réalisé
 
-Le déploiement devra être réalisé dans cet ordre : sauvegarde vérifiée de la base
-Administration, création du secret directionnel, application du schéma additif,
-déploiement des deux services, vérification du contrat signé, activation ponctuelle
-du consommateur, contrôle des résolutions et notifications, puis fermeture de la
-garde. Le nombre de livraisons externes non bloquées devra rester strictement nul.
+Le contrat signé, le schéma additif, la matérialisation et le centre interne ont
+été déployés et validés en préproduction le 12 août 2026. Les deux événements de
+recette ont été résolus sans destinataire éligible, conformément à la politique,
+et aucune livraison externe non bloquée n’a été créée.
 
-Une recette humaine vérifiera ensuite le centre, le compteur et la lecture. La
-production historique reste inchangée et toute promotion exige une décision
-distincte.
+La fonctionnalité reste incluse dans la release active `7813eca`. La production
+historique est inchangée et toute promotion exige une décision distincte.
