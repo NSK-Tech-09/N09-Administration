@@ -192,3 +192,43 @@ test("reconnaît une résolution identique et refuse toute dérive", async () =>
   );
   assert.equal(conflict.calls.includes("rollback"), true);
 });
+
+test("agrège l’exploitation des notifications sans exposer leur contenu", async () => {
+  const calls = [];
+  const pool = {
+    execute: async (sql) => {
+      calls.push(sql);
+      if (sql.includes("FROM notification_events")) return [[{
+        total: 5, pending: 1, processing: 1, retrying: 1, processed: 2, quarantined: 0,
+        oldest_available_at: "2026-08-12 10:00:00", last_received_at: "2026-08-12 10:01:00",
+        last_processed_at: "2026-08-12 10:02:00",
+      }]];
+      if (sql.includes("FROM notifications")) return [[{ total: 2, unread: 1, archived: 0 }]];
+      if (sql.includes("FROM notification_external_deliveries")) return [[{
+        total: 2, blocked: 2, non_blocked: 0, pending: 0, processing: 0,
+        retrying: 0, delivered: 0, quarantined: 0,
+      }]];
+      if (sql.includes("JSON_EXTRACT")) return [[{ own_action: 2, preferences: 1, unlinked_identity: 3 }]];
+      if (sql.includes("ORDER BY resolved_at DESC")) return [[{
+        source_application_id: "n09-suivi-taches", source_event_id: "event_1",
+        policy_version: "tasks-notification-policy-v1",
+        suppressed_json: JSON.stringify({ own_action: 1, preferences: 0, unlinked_identity: 0 }),
+        internal_notification_count: 1, blocked_external_delivery_count: 2,
+        resolved_at: "2026-08-12 10:02:00",
+      }]];
+      throw new Error("unexpected query");
+    },
+  };
+  const snapshot = await new MariaDbRepository(pool).getNotificationOperationsSnapshot(20);
+  assert.equal(snapshot.events.pending, 1);
+  assert.equal(snapshot.events.retrying, 1);
+  assert.equal(snapshot.notifications.unread, 1);
+  assert.equal(snapshot.externalDeliveries.nonBlocked, 0);
+  assert.deepEqual(snapshot.suppressions, { ownAction: 2, preferences: 1, unlinkedIdentity: 3 });
+  assert.equal(snapshot.recentResolutions[0].eventId, "event_1");
+  assert.deepEqual(snapshot.recentResolutions[0].suppressed, {
+    own_action: 1, preferences: 0, unlinked_identity: 0,
+  });
+  assert.equal(calls.some((sql) => /title|message|email|payload_json/i.test(sql)), false);
+  await assert.rejects(new MariaDbRepository(pool).getNotificationOperationsSnapshot(101), /invalid/);
+});
