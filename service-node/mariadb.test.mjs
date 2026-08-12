@@ -109,3 +109,86 @@ test("persiste une version de catalogue et son audit dans la même transaction",
   assert.equal(calls.at(-2), "commit");
   assert.equal(calls.at(-1), "release");
 });
+
+function notificationMaterializationInput(resolutionHash = "b".repeat(64)) {
+  const event = {
+    sourceApplicationId: "n09-suivi-taches", eventId: "event_abcdef0123456789abcd",
+    eventHash: "a".repeat(64), occurredAt: "2026-08-12T10:00:00.000Z",
+  };
+  const createdAt = new Date("2026-08-12T10:02:00.000Z");
+  return {
+    event, policyVersion: "tasks-notification-policy-v1", resolutionHash,
+    suppressed: { own_action: 0, preferences: 0, unlinked_identity: 0 },
+    notifications: [{
+      notificationId: "c".repeat(64), recipientIdentityId: "00000000-0000-4000-8000-000000000001",
+      category: "task_activity", importance: "information", title: "Tâche archivée",
+      message: "Une tâche a été archivée.", contextApplicationId: "n09-suivi-taches",
+      contextResourceType: "task", contextResourceId: "task_1",
+      occurredAt: event.occurredAt, createdAt,
+    }],
+    externalDeliveries: [{
+      deliveryId: "d".repeat(64), notificationId: "c".repeat(64), channel: "email",
+      status: "blocked", blockedReason: "channel_not_enabled", createdAt,
+    }],
+    resolvedAt: createdAt,
+    auditEvent: createAuditEvent({
+      action: "notification.event_materialized", result: "success", source: "tests",
+      correlationId: "notification-correlation", applicationId: "n09-suivi-taches",
+      newValue: { source_event_id: event.eventId, resolution_hash: resolutionHash },
+    }),
+  };
+}
+
+test("matérialise résolution, notification, blocage externe et audit dans une transaction", async () => {
+  const calls = [];
+  const connection = {
+    beginTransaction: async () => calls.push("begin"), commit: async () => calls.push("commit"),
+    rollback: async () => calls.push("rollback"), release: () => calls.push("release"),
+    execute: async (sql, values = []) => {
+      calls.push({ sql, values });
+      if (sql.includes("FROM notification_resolutions")) return [[]];
+      if (sql.includes("FROM notification_events")) return [[{ event_hash: "a".repeat(64), status: "processing" }]];
+      if (sql.includes("FROM identities WHERE status = 'active'")) {
+        return [[{ identity_id: "00000000-0000-4000-8000-000000000001" }]];
+      }
+      if (sql.startsWith("SELECT current_hash")) return [[{ current_hash: "" }]];
+      return [{ affectedRows: 1 }];
+    },
+  };
+  const repository = new MariaDbRepository({ getConnection: async () => connection });
+  const result = await repository.materializeNotificationResolution(notificationMaterializationInput());
+  assert.deepEqual(result, { created: true, notifications: 1, externalDeliveriesBlocked: 1 });
+  assert.ok(calls.some((call) => typeof call === "object" && call.sql.includes("INSERT INTO notification_resolutions")));
+  assert.ok(calls.some((call) => typeof call === "object" && call.sql.includes("INSERT INTO notifications")));
+  assert.ok(calls.some((call) => typeof call === "object" && call.sql.includes("INSERT INTO notification_external_deliveries")));
+  assert.equal(calls.filter((call) => typeof call === "object" && call.sql.includes("INSERT INTO audit_events")).length, 1);
+  assert.equal(calls.at(-2), "commit");
+});
+
+test("reconnaît une résolution identique et refuse toute dérive", async () => {
+  const pool = (storedHash) => {
+    const calls = [];
+    const connection = {
+      beginTransaction: async () => calls.push("begin"), commit: async () => calls.push("commit"),
+      rollback: async () => calls.push("rollback"), release: () => calls.push("release"),
+      execute: async (sql, values = []) => {
+        calls.push({ sql, values });
+        if (sql.includes("FROM notification_resolutions")) return [[{
+          resolution_hash: storedHash, internal_notification_count: 1, blocked_external_delivery_count: 1,
+        }]];
+        throw new Error("no write expected");
+      },
+    };
+    return { calls, getConnection: async () => connection };
+  };
+  const same = pool("b".repeat(64));
+  const result = await new MariaDbRepository(same).materializeNotificationResolution(notificationMaterializationInput());
+  assert.deepEqual(result, { created: false, notifications: 1, externalDeliveriesBlocked: 1 });
+  assert.equal(same.calls.includes("commit"), true);
+  const conflict = pool("e".repeat(64));
+  await assert.rejects(
+    new MariaDbRepository(conflict).materializeNotificationResolution(notificationMaterializationInput()),
+    (error) => error.code === "notification_resolution_conflict",
+  );
+  assert.equal(conflict.calls.includes("rollback"), true);
+});

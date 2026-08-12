@@ -35,3 +35,22 @@ test("la boite de notification conserve la charge et borne les transitions", () 
   const table = schema.match(/CREATE TABLE IF NOT EXISTS notification_events[\s\S]*?ENGINE=InnoDB;/)?.[0] ?? "";
   assert.doesNotMatch(table, /email|password|credential|access_token|refresh_token/i);
 });
+
+test("le centre interne sépare matérialisation et canaux externes bloqués", () => {
+  assert.match(schema, /CREATE TABLE IF NOT EXISTS notification_resolutions/);
+  assert.match(schema, /CREATE TABLE IF NOT EXISTS notifications/);
+  assert.match(schema, /CREATE TABLE IF NOT EXISTS notification_external_deliveries/);
+  assert.match(schema, /UNIQUE KEY notifications_event_recipient/);
+  assert.match(schema, /notifications_recipient_unread/);
+  assert.match(schema, /status IN \('blocked', 'pending', 'processing', 'retry', 'delivered', 'quarantined'\)/);
+  assert.match(schema, /status = 'blocked' AND blocked_reason IS NOT NULL/);
+  assert.match(schema, /notification_external_delivery_claim/);
+  assert.match(schema, /notification_external_delivery_completion/);
+  assert.match(schema, /notification_external_delivery_error/);
+  assert.match(schema, /notification_resolutions_no_update/);
+  assert.match(schema, /notification_resolutions_no_delete/);
+  assert.match(schema, /notifications_no_delete/);
+  assert.match(schema, /notifications_payload_immutable/);
+  const notificationTable = schema.match(/CREATE TABLE IF NOT EXISTS notifications[\s\S]*?ENGINE=InnoDB;/)?.[0] ?? "";
+  assert.doesNotMatch(notificationTable, /email|password|secret|token/i);
+});

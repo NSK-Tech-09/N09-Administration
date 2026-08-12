@@ -166,6 +166,117 @@ CREATE TABLE IF NOT EXISTS notification_events (
   INDEX notification_events_site (source_application_id, site_id, occurred_at)
 ) ENGINE=InnoDB;
 
+CREATE TABLE IF NOT EXISTS notification_resolutions (
+  source_application_id VARCHAR(100) NOT NULL,
+  source_event_id VARCHAR(64) NOT NULL,
+  policy_version VARCHAR(100) NOT NULL,
+  resolution_hash CHAR(64) NOT NULL,
+  suppressed_json JSON NOT NULL,
+  internal_notification_count INT UNSIGNED NOT NULL,
+  blocked_external_delivery_count INT UNSIGNED NOT NULL,
+  resolved_at DATETIME(6) NOT NULL,
+  PRIMARY KEY (source_application_id, source_event_id),
+  CONSTRAINT notification_resolutions_event_fk FOREIGN KEY (source_application_id, source_event_id)
+    REFERENCES notification_events(source_application_id, source_event_id),
+  CONSTRAINT notification_resolutions_counts CHECK (
+    internal_notification_count <= 1000 AND blocked_external_delivery_count <= 5000
+  )
+) ENGINE=InnoDB;
+
+CREATE TABLE IF NOT EXISTS notifications (
+  notification_id CHAR(64) PRIMARY KEY,
+  source_application_id VARCHAR(100) NOT NULL,
+  source_event_id VARCHAR(64) NOT NULL,
+  recipient_identity_id CHAR(36) NOT NULL,
+  category VARCHAR(80) NOT NULL,
+  importance VARCHAR(32) NOT NULL,
+  title VARCHAR(200) NOT NULL,
+  message VARCHAR(1000) NOT NULL,
+  context_application_id VARCHAR(100) NOT NULL,
+  context_resource_type VARCHAR(80) NOT NULL,
+  context_resource_id VARCHAR(128) NOT NULL,
+  occurred_at DATETIME(6) NOT NULL,
+  created_at DATETIME(6) NOT NULL,
+  read_at DATETIME(6),
+  archived_at DATETIME(6),
+  UNIQUE KEY notifications_event_recipient (source_application_id, source_event_id, recipient_identity_id),
+  CONSTRAINT notifications_resolution_fk FOREIGN KEY (source_application_id, source_event_id)
+    REFERENCES notification_resolutions(source_application_id, source_event_id),
+  CONSTRAINT notifications_recipient_fk FOREIGN KEY (recipient_identity_id) REFERENCES identities(identity_id),
+  CONSTRAINT notifications_context_application_fk FOREIGN KEY (context_application_id) REFERENCES applications(application_id),
+  CONSTRAINT notifications_importance CHECK (importance IN ('information', 'action', 'lifecycle', 'security')),
+  INDEX notifications_recipient_created (recipient_identity_id, created_at),
+  INDEX notifications_recipient_unread (recipient_identity_id, read_at, created_at)
+) ENGINE=InnoDB;
+
+CREATE TABLE IF NOT EXISTS notification_external_deliveries (
+  delivery_id CHAR(64) PRIMARY KEY,
+  notification_id CHAR(64) NOT NULL,
+  channel VARCHAR(32) NOT NULL,
+  status VARCHAR(32) NOT NULL,
+  blocked_reason VARCHAR(80),
+  processing_attempts INT UNSIGNED NOT NULL DEFAULT 0,
+  available_at DATETIME(6),
+  claimed_at DATETIME(6),
+  claimed_by VARCHAR(128),
+  delivered_at DATETIME(6),
+  last_error_code VARCHAR(80),
+  created_at DATETIME(6) NOT NULL,
+  UNIQUE KEY notification_external_delivery_channel (notification_id, channel),
+  CONSTRAINT notification_external_delivery_notification_fk FOREIGN KEY (notification_id)
+    REFERENCES notifications(notification_id),
+  CONSTRAINT notification_external_delivery_channel CHECK (channel IN ('email', 'telegram', 'push', 'sms', 'whatsapp')),
+  CONSTRAINT notification_external_delivery_status CHECK (status IN ('blocked', 'pending', 'processing', 'retry', 'delivered', 'quarantined')),
+  CONSTRAINT notification_external_delivery_block CHECK (
+    (status = 'blocked' AND blocked_reason IS NOT NULL) OR (status <> 'blocked' AND blocked_reason IS NULL)
+  ),
+  CONSTRAINT notification_external_delivery_claim CHECK (
+    (status = 'processing' AND claimed_at IS NOT NULL AND claimed_by IS NOT NULL)
+    OR (status <> 'processing' AND claimed_at IS NULL AND claimed_by IS NULL)
+  ),
+  CONSTRAINT notification_external_delivery_completion CHECK (
+    (status = 'delivered' AND delivered_at IS NOT NULL)
+    OR (status <> 'delivered' AND delivered_at IS NULL)
+  ),
+  CONSTRAINT notification_external_delivery_error CHECK (
+    (status IN ('retry', 'quarantined') AND last_error_code IS NOT NULL)
+    OR (status NOT IN ('retry', 'quarantined') AND last_error_code IS NULL)
+  ),
+  INDEX notification_external_delivery_available (status, available_at, created_at)
+) ENGINE=InnoDB;
+
+CREATE TRIGGER IF NOT EXISTS notification_resolutions_no_update
+BEFORE UPDATE ON notification_resolutions FOR EACH ROW
+SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'notification resolutions are immutable';
+
+CREATE TRIGGER IF NOT EXISTS notification_resolutions_no_delete
+BEFORE DELETE ON notification_resolutions FOR EACH ROW
+SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'notification resolutions are retained';
+
+CREATE TRIGGER IF NOT EXISTS notifications_no_delete
+BEFORE DELETE ON notifications FOR EACH ROW
+SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'notifications require an explicit retention policy';
+
+CREATE TRIGGER IF NOT EXISTS notifications_payload_immutable
+BEFORE UPDATE ON notifications FOR EACH ROW
+BEGIN
+  IF NEW.notification_id <> OLD.notification_id
+    OR NEW.source_application_id <> OLD.source_application_id
+    OR NEW.source_event_id <> OLD.source_event_id
+    OR NEW.recipient_identity_id <> OLD.recipient_identity_id
+    OR NEW.category <> OLD.category
+    OR NEW.importance <> OLD.importance
+    OR NEW.title <> OLD.title
+    OR NEW.message <> OLD.message
+    OR NEW.context_application_id <> OLD.context_application_id
+    OR NEW.context_resource_type <> OLD.context_resource_type
+    OR NEW.context_resource_id <> OLD.context_resource_id
+    OR NEW.occurred_at <> OLD.occurred_at
+    OR NEW.created_at <> OLD.created_at THEN
+    SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'notification payload is immutable';
+  END IF;
+END;
+
 CREATE TABLE IF NOT EXISTS audit_events (
   sequence BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
   event_id CHAR(36) NOT NULL UNIQUE,

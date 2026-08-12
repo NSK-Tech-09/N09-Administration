@@ -88,6 +88,13 @@ centrale durable et auditée. La répétition identique est idempotente, un conf
 de contenu est refusé, les échecs sont repris sous bail puis mis en quarantaine.
 Aucun canal externe ni secret de messagerie n'est activé par ce lot.
 
+La matérialisation centrale est maintenant validée localement. Administration
+demande à l’application émettrice une résolution métier signée, crée le centre
+interne idempotent et conserve les demandes de canaux externes dans l’état
+`blocked`. Une interface personnelle expose le compteur et les états lu/non lu,
+sans suppression ni action sensible ; voir
+`docs/ADR-017-MATERIALISATION-CENTRE-NOTIFICATIONS.md`.
+
 ## Prérequis et démarrage local
 
 - Python 3.11 ou supérieur ;
@@ -130,6 +137,7 @@ ne contient aucun secret réel. La production reste inchangée.
 - [`docs/ADR-014-PUBLICATION-CATALOGUES-APPLICATIFS.md`](docs/ADR-014-PUBLICATION-CATALOGUES-APPLICATIFS.md)
 - [`docs/ADR-015-OCTROIS-APPLICATIFS-GOUVERNES.md`](docs/ADR-015-OCTROIS-APPLICATIFS-GOUVERNES.md)
 - [`docs/ADR-016-RECEPTION-CENTRALE-NOTIFICATIONS.md`](docs/ADR-016-RECEPTION-CENTRALE-NOTIFICATIONS.md)
+- [`docs/ADR-017-MATERIALISATION-CENTRE-NOTIFICATIONS.md`](docs/ADR-017-MATERIALISATION-CENTRE-NOTIFICATIONS.md)
 - [`docs/ETAT-PREPROD-INFOMANIAK.md`](docs/ETAT-PREPROD-INFOMANIAK.md)
 - [`docs/CONFORMITE-NSES.md`](docs/CONFORMITE-NSES.md)
 - [`docs/CONTRAT-API-INTERNE.md`](docs/CONTRAT-API-INTERNE.md)
