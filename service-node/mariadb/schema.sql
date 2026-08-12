@@ -225,7 +225,7 @@ CREATE TABLE IF NOT EXISTS notification_external_deliveries (
   UNIQUE KEY notification_external_delivery_channel (notification_id, channel),
   CONSTRAINT notification_external_delivery_notification_fk FOREIGN KEY (notification_id)
     REFERENCES notifications(notification_id),
-  CONSTRAINT notification_external_delivery_channel CHECK (channel IN ('email', 'telegram', 'push', 'sms', 'whatsapp')),
+  CONSTRAINT notification_external_delivery_channel_value CHECK (channel IN ('email', 'telegram', 'push', 'sms', 'whatsapp')),
   CONSTRAINT notification_external_delivery_status CHECK (status IN ('blocked', 'pending', 'processing', 'retry', 'delivered', 'quarantined')),
   CONSTRAINT notification_external_delivery_block CHECK (
     (status = 'blocked' AND blocked_reason IS NOT NULL) OR (status <> 'blocked' AND blocked_reason IS NULL)

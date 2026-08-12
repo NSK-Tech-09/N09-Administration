@@ -44,6 +44,9 @@ test("le centre interne sépare matérialisation et canaux externes bloqués", (
   assert.match(schema, /notifications_recipient_unread/);
   assert.match(schema, /status IN \('blocked', 'pending', 'processing', 'retry', 'delivered', 'quarantined'\)/);
   assert.match(schema, /status = 'blocked' AND blocked_reason IS NOT NULL/);
+  assert.match(schema, /UNIQUE KEY notification_external_delivery_channel \(notification_id, channel\)/);
+  assert.match(schema, /CONSTRAINT notification_external_delivery_channel_value CHECK/);
+  assert.doesNotMatch(schema, /CONSTRAINT notification_external_delivery_channel CHECK/);
   assert.match(schema, /notification_external_delivery_claim/);
   assert.match(schema, /notification_external_delivery_completion/);
   assert.match(schema, /notification_external_delivery_error/);
