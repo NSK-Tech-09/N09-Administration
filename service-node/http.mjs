@@ -201,6 +201,19 @@ function renderAccessDecisionAdministration(identities, applications, assignment
   return `<h1>Décider les accès</h1><p>Un octroi ne peut utiliser qu’un rôle actif publié par l’application. Son périmètre, sa justification et ses conditions sont inscrits dans le journal d’audit. Une application qui exige un profil métier doit ensuite confirmer ses propres prérequis à chaque requête.</p><div class="facts"><p><strong>Séparation stricte :</strong> Administration accorde le droit central ; l’application conserve et vérifie le rôle métier et le périmètre local. Le pouvoir de décision central reste soumis à sa gouvernance dédiée.</p></div><h2>Accorder un accès gouverné</h2><div class="directory">${grantCards || '<div class="facts"><p>Aucun rôle applicatif actif n’est actuellement ouvert à l’octroi.</p></div>'}</div><h2>Révoquer un accès actif</h2><div class="directory">${cards || '<div class="facts"><p>Aucune affectation active.</p></div>'}</div><nav><a class="button secondary" href="/admin/access">Retour au registre</a><a class="button secondary" href="/">Retour à l’accueil</a><form method="post" action="/auth/logout"><button class="secondary" type="submit">Fermer la session</button></form></nav>`;
 }
 
+function renderNotifications(notifications, unreadCount, csrf) {
+  const cards = notifications.map((notification) => {
+    const unread = !notification.readAt;
+    const readAction = unread
+      ? `<form method="post" action="/notifications/${escapeHtml(notification.notificationId)}/read"><input type="hidden" name="csrf" value="${escapeHtml(csrf)}"><button class="secondary" type="submit">Marquer comme lue</button></form>`
+      : '<span class="pill">Lue</span>';
+    return `<article class="entry notification${unread ? " unread" : ""}"><p><span class="pill${unread ? "" : " inactive"}">${unread ? "Non lue" : "Lue"}</span> · ${escapeHtml(notification.sourceApplicationName)}</p><h3>${escapeHtml(notification.title)}</h3><p>${escapeHtml(notification.message)}</p><p class="muted">${escapeHtml(formatDate(notification.occurredAt))} · ${escapeHtml(notification.contextResourceType)} <code>${escapeHtml(notification.contextResourceId)}</code></p>${readAction}</article>`;
+  }).join("");
+  const allRead = unreadCount > 0
+    ? `<form method="post" action="/notifications/read-all"><input type="hidden" name="csrf" value="${escapeHtml(csrf)}"><button type="submit">Tout marquer comme lu</button></form>` : "";
+  return `<h1>Centre de notifications</h1><p>Ce centre interne est le canal de référence. Lire une notification ne la supprime pas et aucun canal externe n’est activé par cette page.</p><div class="summary"><div class="metric"><strong>${escapeHtml(unreadCount)}</strong>non lue${unreadCount > 1 ? "s" : ""}</div><div class="metric"><strong>${escapeHtml(notifications.length)}</strong>affichée${notifications.length > 1 ? "s" : ""}</div></div><nav>${allRead}<a class="button secondary" href="/">Retour à l’accueil</a></nav><div class="directory">${cards || '<div class="facts"><p>Aucune notification pour le moment.</p></div>'}</div>`;
+}
+
 export function createHttpHandler({ repository, authenticate = async () => null, oidcConfig = null, fetchImpl = fetch, maxBodyBytes = DEFAULT_MAX_BODY_BYTES }) {
   if (!repository) throw new Error("repository is required");
   if (typeof authenticate !== "function") throw new Error("authenticate must be a function");
@@ -273,6 +286,12 @@ export function createHttpHandler({ repository, authenticate = async () => null,
           const decision = await authorizeAccessDecisionAdministration(repository, session.identityId);
           if (decision.allowed) administrationLinks.push('<a class="button" href="/admin/access-decisions">Décider les révocations</a>');
         } catch { /* no administrative affordance on repository failure */ }
+        if (typeof repository.countUnreadNotifications === "function") {
+          try {
+            const unread = await repository.countUnreadNotifications(session.identityId);
+            administrationLinks.unshift(`<a class="button" href="/notifications">Notifications${unread ? ` (${escapeHtml(unread)})` : ""}</a>`);
+          } catch { /* no notification affordance on repository failure */ }
+        }
       }
       const content = session
         ? `<h1>Identité Infomaniak vérifiée</h1><p>Bienvenue <strong>${escapeHtml(session.displayName)}</strong>. La preuve cryptographique est valide.</p><div class="facts"><p>État NSK : <strong>${session.status === "authenticated" ? "rattachée" : "rattachement requis"}</strong></p>${requestReference}<p>${session.status === "authenticated" ? "Le compte NSK est reconnu ; les droits restent contrôlés séparément." : "Aucun compte, rôle ou droit n’a été créé automatiquement. Une décision humaine reste obligatoire."}</p></div><nav>${administrationLinks.join("")}<form method="post" action="/auth/logout"><button class="secondary" type="submit">Fermer la session</button></form></nav>`
@@ -372,6 +391,56 @@ export function createHttpHandler({ repository, authenticate = async () => null,
       response.setHeader("location", "/");
       response.setHeader("set-cookie", cookie(OIDC_SESSION_COOKIE, "", { maxAge: 0 }));
       response.end();
+      return;
+    }
+    const notificationsRoot = url.pathname === "/notifications";
+    const notificationsReadAll = url.pathname === "/notifications/read-all";
+    const notificationRead = url.pathname.match(/^\/notifications\/([0-9a-f]{64})\/read$/i);
+    if (notificationsRoot || notificationsReadAll || notificationRead) {
+      let session;
+      try {
+        if (!oidcConfig) throw new Error("oidc_not_configured");
+        session = open(parseCookies(request.headers.cookie).get(OIDC_SESSION_COOKIE), oidcConfig.sessionSecret, "oidc-session");
+      } catch {
+        writeHtml(response, 401, "Connexion requise", '<h1>Connexion requise</h1><p>Une session NSK valide est nécessaire pour consulter tes notifications.</p><a class="button" href="/">Se connecter</a>');
+        return;
+      }
+      if (session.status !== "authenticated" || !session.identityId || !session.csrf) {
+        writeHtml(response, 401, "Nouvelle connexion requise", '<h1>Nouvelle connexion requise</h1><p>Renouvelle ta session afin d’accéder à tes notifications.</p><a class="button" href="/">Retour</a>');
+        return;
+      }
+      if (notificationsRoot && request.method === "GET") {
+        try {
+          const [notifications, unreadCount] = await Promise.all([
+            repository.listNotifications(session.identityId),
+            repository.countUnreadNotifications(session.identityId),
+          ]);
+          writeHtml(response, 200, "Notifications", renderNotifications(notifications, unreadCount, session.csrf));
+        } catch {
+          writeHtml(response, 503, "Notifications indisponibles", '<h1>Notifications momentanément indisponibles</h1><p>Aucun état de lecture n’a été modifié.</p><a class="button" href="/">Retour</a>');
+        }
+        return;
+      }
+      if ((notificationsReadAll || notificationRead) && request.method === "POST") {
+        try {
+          const form = await readForm(request, maxBodyBytes);
+          if (!safeEqual(form.get("csrf"), session.csrf)) throw new HttpInputError(403, "invalid_csrf");
+          if (notificationsReadAll) {
+            await repository.markAllNotificationsRead({ identityId: session.identityId, readAt: new Date() });
+          } else {
+            await repository.markNotificationRead({
+              identityId: session.identityId, notificationId: notificationRead[1].toLowerCase(), readAt: new Date(),
+            });
+          }
+          redirect(response, "/notifications");
+        } catch (error) {
+          const status = error instanceof HttpInputError ? error.status : 503;
+          writeHtml(response, status, "Lecture non modifiée", '<h1>Lecture non modifiée</h1><p>Aucun état de notification n’a été changé.</p><a class="button" href="/notifications">Retour</a>');
+        }
+        return;
+      }
+      response.setHeader("allow", notificationsRoot ? "GET" : "POST");
+      writeJson(response, 405, { error: "method_not_allowed" });
       return;
     }
     const accessDecisionRoot = url.pathname === "/admin/access-decisions";

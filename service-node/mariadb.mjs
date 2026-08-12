@@ -647,6 +647,138 @@ export class MariaDbRepository {
     return mapNotificationEvent(rows[0]);
   }
 
+  async materializeNotificationResolution({
+    event, policyVersion, resolutionHash, suppressed, notifications, externalDeliveries, resolvedAt, auditEvent,
+  }) {
+    return this.#transaction(async (connection) => {
+      const [existing] = await connection.execute(
+        `SELECT resolution_hash, internal_notification_count, blocked_external_delivery_count
+         FROM notification_resolutions
+         WHERE source_application_id = ? AND source_event_id = ? FOR UPDATE`,
+        [event.sourceApplicationId, event.eventId],
+      );
+      if (existing.length) {
+        if (existing[0].resolution_hash !== resolutionHash) {
+          throw Object.assign(new Error("notification resolution conflict"), { code: "notification_resolution_conflict" });
+        }
+        return {
+          created: false,
+          notifications: Number(existing[0].internal_notification_count),
+          externalDeliveriesBlocked: Number(existing[0].blocked_external_delivery_count),
+        };
+      }
+      const [events] = await connection.execute(
+        `SELECT event_hash, status FROM notification_events
+         WHERE source_application_id = ? AND source_event_id = ? FOR UPDATE`,
+        [event.sourceApplicationId, event.eventId],
+      );
+      if (!events.length || events[0].event_hash !== event.eventHash || events[0].status !== "processing") {
+        throw Object.assign(new Error("notification event is not owned for processing"), { code: "notification_event_unavailable" });
+      }
+      const recipientIds = [...new Set(notifications.map((notification) => notification.recipientIdentityId))];
+      if (recipientIds.length) {
+        const placeholders = recipientIds.map(() => "?").join(", ");
+        const [identities] = await connection.execute(
+          `SELECT identity_id FROM identities WHERE status = 'active' AND identity_id IN (${placeholders}) FOR UPDATE`,
+          recipientIds,
+        );
+        const activeIds = new Set(identities.map((identity) => identity.identity_id));
+        if (recipientIds.some((identityId) => !activeIds.has(identityId))) {
+          throw Object.assign(new Error("notification recipient identity is unavailable"), { code: "recipient_identity_unavailable" });
+        }
+      }
+      await connection.execute(
+        `INSERT INTO notification_resolutions(
+           source_application_id, source_event_id, policy_version, resolution_hash, suppressed_json,
+           internal_notification_count, blocked_external_delivery_count, resolved_at
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        [event.sourceApplicationId, event.eventId, policyVersion, resolutionHash, JSON.stringify(suppressed),
+         notifications.length, externalDeliveries.length, asMariaDate(resolvedAt)],
+      );
+      for (const notification of notifications) {
+        await connection.execute(
+          `INSERT INTO notifications(
+             notification_id, source_application_id, source_event_id, recipient_identity_id,
+             category, importance, title, message, context_application_id, context_resource_type,
+             context_resource_id, occurred_at, created_at, read_at, archived_at
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL)`,
+          [notification.notificationId, event.sourceApplicationId, event.eventId,
+           notification.recipientIdentityId, notification.category, notification.importance,
+           notification.title, notification.message, notification.contextApplicationId,
+           notification.contextResourceType, notification.contextResourceId,
+           asMariaDate(notification.occurredAt), asMariaDate(notification.createdAt)],
+        );
+      }
+      for (const delivery of externalDeliveries) {
+        await connection.execute(
+          `INSERT INTO notification_external_deliveries(
+             delivery_id, notification_id, channel, status, blocked_reason,
+             processing_attempts, available_at, claimed_at, claimed_by, delivered_at, last_error_code, created_at
+           ) VALUES (?, ?, ?, 'blocked', ?, 0, NULL, NULL, NULL, NULL, NULL, ?)`,
+          [delivery.deliveryId, delivery.notificationId, delivery.channel,
+           delivery.blockedReason, asMariaDate(delivery.createdAt)],
+        );
+      }
+      await this.#appendAudit(connection, auditEvent);
+      return { created: true, notifications: notifications.length, externalDeliveriesBlocked: externalDeliveries.length };
+    });
+  }
+
+  async listNotifications(identityId, limit = 100) {
+    const safeLimit = Number(limit);
+    if (!Number.isInteger(safeLimit) || safeLimit < 1 || safeLimit > 200) throw new Error("invalid notification list limit");
+    const [rows] = await this.pool.execute(
+      `SELECT n.notification_id, n.source_application_id, a.display_name AS source_application_name,
+         n.category, n.importance, n.title, n.message, n.context_application_id,
+         n.context_resource_type, n.context_resource_id, n.occurred_at, n.created_at,
+         n.read_at, n.archived_at
+       FROM notifications n
+       JOIN identities i ON i.identity_id = n.recipient_identity_id AND i.status = 'active'
+       JOIN applications a ON a.application_id = n.source_application_id
+       WHERE n.recipient_identity_id = ? AND n.archived_at IS NULL
+       ORDER BY n.occurred_at DESC, n.notification_id DESC LIMIT ${safeLimit}`,
+      [identityId],
+    );
+    return rows.map((row) => ({
+      notificationId: row.notification_id, sourceApplicationId: row.source_application_id,
+      sourceApplicationName: row.source_application_name, category: row.category,
+      importance: row.importance, title: row.title, message: row.message,
+      contextApplicationId: row.context_application_id, contextResourceType: row.context_resource_type,
+      contextResourceId: row.context_resource_id, occurredAt: asIso(row.occurred_at),
+      createdAt: asIso(row.created_at), readAt: asIso(row.read_at), archivedAt: asIso(row.archived_at),
+    }));
+  }
+
+  async countUnreadNotifications(identityId) {
+    const [rows] = await this.pool.execute(
+      `SELECT COUNT(*) AS count FROM notifications n
+       JOIN identities i ON i.identity_id = n.recipient_identity_id AND i.status = 'active'
+       WHERE n.recipient_identity_id = ? AND n.read_at IS NULL AND n.archived_at IS NULL`,
+      [identityId],
+    );
+    return Number(rows[0]?.count ?? 0);
+  }
+
+  async markNotificationRead({ identityId, notificationId, readAt }) {
+    const [result] = await this.pool.execute(
+      `UPDATE notifications SET read_at = ?
+       WHERE notification_id = ? AND recipient_identity_id = ? AND read_at IS NULL AND archived_at IS NULL
+         AND EXISTS (SELECT 1 FROM identities i WHERE i.identity_id = ? AND i.status = 'active')`,
+      [asMariaDate(readAt), notificationId, identityId, identityId],
+    );
+    return { changed: result.affectedRows === 1 };
+  }
+
+  async markAllNotificationsRead({ identityId, readAt }) {
+    const [result] = await this.pool.execute(
+      `UPDATE notifications SET read_at = ?
+       WHERE recipient_identity_id = ? AND read_at IS NULL AND archived_at IS NULL
+         AND EXISTS (SELECT 1 FROM identities i WHERE i.identity_id = ? AND i.status = 'active')`,
+      [asMariaDate(readAt), identityId, identityId],
+    );
+    return { changed: Number(result.affectedRows) };
+  }
+
   async verifyAuditChain() {
     const [rows] = await this.pool.execute(
       "SELECT event_payload_json, previous_hash, event_hash FROM audit_events ORDER BY sequence",
