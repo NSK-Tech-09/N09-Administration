@@ -57,3 +57,12 @@ test("le centre interne sépare matérialisation et canaux externes bloqués", (
   const notificationTable = schema.match(/CREATE TABLE IF NOT EXISTS notifications[\s\S]*?ENGINE=InnoDB;/)?.[0] ?? "";
   assert.doesNotMatch(notificationTable, /email|password|secret|token/i);
 });
+
+test("l'état du consommateur reste singleton, borné et sans charge métier", () => {
+  assert.match(schema, /CREATE TABLE IF NOT EXISTS notification_processing_state/);
+  assert.match(schema, /consumer_id = 'internal-materializer-v1'/);
+  assert.match(schema, /last_status IN \('succeeded', 'failed'\)/);
+  assert.match(schema, /last_finished_at >= last_started_at/);
+  const table = schema.match(/CREATE TABLE IF NOT EXISTS notification_processing_state[\s\S]*?ENGINE=InnoDB;/)?.[0] ?? "";
+  assert.doesNotMatch(table, /payload|title|message|email|address|secret|token/i);
+});
