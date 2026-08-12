@@ -245,6 +245,30 @@ CREATE TABLE IF NOT EXISTS notification_external_deliveries (
   INDEX notification_external_delivery_available (status, available_at, created_at)
 ) ENGINE=InnoDB;
 
+CREATE TABLE IF NOT EXISTS notification_processing_state (
+  consumer_id VARCHAR(64) PRIMARY KEY,
+  last_started_at DATETIME(6) NOT NULL,
+  last_finished_at DATETIME(6) NOT NULL,
+  last_status VARCHAR(32) NOT NULL,
+  last_error_code VARCHAR(80),
+  last_claimed INT UNSIGNED NOT NULL,
+  last_processed INT UNSIGNED NOT NULL,
+  last_retried INT UNSIGNED NOT NULL,
+  last_quarantined INT UNSIGNED NOT NULL,
+  version BIGINT UNSIGNED NOT NULL,
+  CONSTRAINT notification_processing_state_consumer CHECK (consumer_id = 'internal-materializer-v1'),
+  CONSTRAINT notification_processing_state_status CHECK (last_status IN ('succeeded', 'failed')),
+  CONSTRAINT notification_processing_state_time CHECK (last_finished_at >= last_started_at),
+  CONSTRAINT notification_processing_state_error CHECK (
+    (last_status = 'failed' AND last_error_code IS NOT NULL)
+    OR (last_status = 'succeeded' AND last_error_code IS NULL)
+  ),
+  CONSTRAINT notification_processing_state_counts CHECK (
+    last_claimed <= 100 AND last_processed <= 100
+    AND last_retried <= 100 AND last_quarantined <= 100
+  )
+) ENGINE=InnoDB;
+
 CREATE TRIGGER IF NOT EXISTS notification_resolutions_no_update
 BEFORE UPDATE ON notification_resolutions FOR EACH ROW
 SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'notification resolutions are immutable';
