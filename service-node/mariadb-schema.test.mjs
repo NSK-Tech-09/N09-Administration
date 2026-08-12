@@ -24,3 +24,14 @@ test("le catalogue applicatif conserve chaque version sans secret", () => {
   const catalogTable = schema.match(/CREATE TABLE IF NOT EXISTS application_access_catalog_versions[\s\S]*?ENGINE=InnoDB;/)?.[0] ?? "";
   assert.doesNotMatch(catalogTable, /secret|certificate|token/i);
 });
+
+test("la boite de notification conserve la charge et borne les transitions", () => {
+  assert.match(schema, /CREATE TABLE IF NOT EXISTS notification_events/);
+  assert.match(schema, /PRIMARY KEY \(source_application_id, source_event_id\)/);
+  assert.match(schema, /status IN \('pending', 'processing', 'retry', 'processed', 'quarantined'\)/);
+  assert.match(schema, /notification_events_no_delete/);
+  assert.match(schema, /notification_events_payload_immutable/);
+  assert.match(schema, /notification event payload is immutable/);
+  const table = schema.match(/CREATE TABLE IF NOT EXISTS notification_events[\s\S]*?ENGINE=InnoDB;/)?.[0] ?? "";
+  assert.doesNotMatch(table, /email|password|credential|access_token|refresh_token/i);
+});

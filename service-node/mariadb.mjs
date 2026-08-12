@@ -4,6 +4,7 @@ import { externalPrincipalKey } from "./federated-identity.mjs";
 import {
   ApplicationAccessCatalogError, applicationAccessCatalogHash, assertCompatibleCatalogEvolution,
 } from "./application-access-catalog.mjs";
+import { NotificationIngressError } from "./notification-ingress.mjs";
 
 function required(config, name) {
   const value = config[name];
@@ -63,6 +64,20 @@ function mapApplicationAccessCatalog(row) {
     catalogHash: row.catalog_hash, roles: parseJson(row.roles_json),
     permissions: parseJson(row.permissions_json), scopeTypes: parseJson(row.scope_types_json),
     provisioning: parseJson(row.provisioning_json), publishedAt: asIso(row.published_at),
+  };
+}
+
+function mapNotificationEvent(row) {
+  if (!row) return null;
+  return {
+    sourceApplicationId: row.source_application_id, eventId: row.source_event_id,
+    eventType: row.event_type, eventHash: row.event_hash, taskId: row.task_id,
+    siteId: row.site_id, actorId: row.actor_id, aggregateId: row.aggregate_id,
+    payload: parseJson(row.payload_json), occurredAt: asIso(row.occurred_at),
+    receivedAt: asIso(row.received_at), status: row.status,
+    processingAttempts: Number(row.processing_attempts), availableAt: asIso(row.available_at),
+    claimedAt: asIso(row.claimed_at), claimedBy: row.claimed_by,
+    processedAt: asIso(row.processed_at), lastErrorCode: row.last_error_code,
   };
 }
 
@@ -528,6 +543,108 @@ export class MariaDbRepository {
       validFrom: row.valid_from, validUntil: row.valid_until, reason: row.reason,
       decidedBy: row.decided_by, inheritedFromGroup: row.inherited_from_group, version: row.version,
     }));
+  }
+
+  async receiveNotificationEvents(events, audits) {
+    return this.#transaction(async (connection) => {
+      let created = 0;
+      let alreadyPresent = 0;
+      for (const event of events) {
+        const [rows] = await connection.execute(
+          `SELECT event_hash FROM notification_events
+           WHERE source_application_id = ? AND source_event_id = ? FOR UPDATE`,
+          [event.sourceApplicationId, event.eventId],
+        );
+        if (rows.length) {
+          if (rows[0].event_hash !== event.eventHash) {
+            throw new NotificationIngressError("notification_event_identity_conflict", 409);
+          }
+          alreadyPresent += 1;
+          continue;
+        }
+        const audit = audits.get(event.eventId);
+        if (!audit) throw new Error("notification audit event is required");
+        await connection.execute(
+          `INSERT INTO notification_events(
+             source_application_id, source_event_id, event_type, event_hash,
+             task_id, site_id, actor_id, aggregate_id, payload_json,
+             occurred_at, received_at, status, processing_attempts, available_at
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', 0, ?)`,
+          [event.sourceApplicationId, event.eventId, event.eventType, event.eventHash,
+           event.taskId, event.siteId, event.actorId, event.aggregateId,
+           JSON.stringify(event.payload), asMariaDate(event.occurredAt),
+           asMariaDate(event.receivedAt), asMariaDate(event.receivedAt)],
+        );
+        await this.#appendAudit(connection, audit);
+        created += 1;
+      }
+      return { created, alreadyPresent };
+    });
+  }
+
+  async claimNotificationEvents({ workerId, limit, now, leaseMs }) {
+    return this.#transaction(async (connection) => {
+      const safeLimit = Number(limit);
+      if (!Number.isInteger(safeLimit) || safeLimit < 1 || safeLimit > 100) throw new Error("invalid notification claim limit");
+      const staleBefore = new Date(now.valueOf() - leaseMs);
+      const [rows] = await connection.execute(
+        `SELECT * FROM notification_events
+         WHERE ((status IN ('pending', 'retry') AND available_at <= ?)
+           OR (status = 'processing' AND claimed_at <= ?))
+         ORDER BY available_at, occurred_at, source_application_id, source_event_id
+         LIMIT ${safeLimit} FOR UPDATE SKIP LOCKED`,
+        [asMariaDate(now), asMariaDate(staleBefore)],
+      );
+      const claimed = [];
+      for (const row of rows) {
+        await connection.execute(
+          `UPDATE notification_events SET status = 'processing',
+             processing_attempts = processing_attempts + 1,
+             claimed_at = ?, claimed_by = ?, last_error_code = NULL
+           WHERE source_application_id = ? AND source_event_id = ?`,
+          [asMariaDate(now), workerId, row.source_application_id, row.source_event_id],
+        );
+        claimed.push(mapNotificationEvent({
+          ...row, status: "processing", processing_attempts: Number(row.processing_attempts) + 1,
+          claimed_at: now, claimed_by: workerId, last_error_code: null,
+        }));
+      }
+      return claimed;
+    });
+  }
+
+  async completeNotificationEvent({ sourceApplicationId, eventId, workerId, processedAt }) {
+    const [result] = await this.pool.execute(
+      `UPDATE notification_events SET status = 'processed', claimed_at = NULL,
+         claimed_by = NULL, processed_at = ?, last_error_code = NULL
+       WHERE source_application_id = ? AND source_event_id = ?
+         AND status = 'processing' AND claimed_by = ?`,
+      [asMariaDate(processedAt), sourceApplicationId, eventId, workerId],
+    );
+    if (result.affectedRows !== 1) throw new Error("notification lease is not owned by worker");
+  }
+
+  async failNotificationEvent({
+    sourceApplicationId, eventId, workerId, availableAt, errorCode, quarantined,
+  }) {
+    const [result] = await this.pool.execute(
+      `UPDATE notification_events SET status = ?, available_at = ?, claimed_at = NULL,
+         claimed_by = NULL, processed_at = NULL, last_error_code = ?
+       WHERE source_application_id = ? AND source_event_id = ?
+         AND status = 'processing' AND claimed_by = ?`,
+      [quarantined ? "quarantined" : "retry", asMariaDate(availableAt), errorCode,
+       sourceApplicationId, eventId, workerId],
+    );
+    if (result.affectedRows !== 1) throw new Error("notification lease is not owned by worker");
+  }
+
+  async getNotificationEvent(sourceApplicationId, eventId) {
+    const [rows] = await this.pool.execute(
+      `SELECT * FROM notification_events
+       WHERE source_application_id = ? AND source_event_id = ?`,
+      [sourceApplicationId, eventId],
+    );
+    return mapNotificationEvent(rows[0]);
   }
 
   async verifyAuditChain() {

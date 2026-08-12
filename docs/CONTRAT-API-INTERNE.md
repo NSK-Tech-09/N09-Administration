@@ -65,3 +65,26 @@ refusés.
 Une publication réussie et nouvelle est enregistrée avec son empreinte SHA-256
 et son événement d’audit dans la même transaction. Aucun secret, certificat ou
 jeton ne fait partie du catalogue.
+
+## Réception des événements de notification
+
+`POST /internal/v1/notification-events` utilise la même preuve technique signée.
+L'application authentifiée ne peut remettre que ses propres événements. Le
+corps porte `contract_version: 1` et un tableau `events` non vide ; la limite
+HTTP générale reste fixée à 64 Kio.
+
+Chaque événement contient exactement `event_id`, `event_type`, `task_id`,
+`site_id`, `actor_id`, `aggregate_id`, `payload` et `occurred_at`. La charge est
+bornée, ne contient aucune coordonnée de destination ni secret et ne remplace
+pas les préférences métier conservées par l'application émettrice.
+
+- première remise valide : `202`, avec le nombre `accepted` ;
+- répétition strictement identique : `200`, comptée dans `already_present` ;
+- absence d'authentification : `401` ;
+- audience étrangère : `403` ;
+- application absente : `404` ;
+- application inactive ou identifiant déjà associé à un autre contenu : `409`.
+
+La réception crée un événement central `pending` et son audit dans une seule
+transaction. La remise ne déclenche directement aucun courriel, message ou
+notification push.

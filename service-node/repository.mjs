@@ -3,6 +3,7 @@ import { eventHash, verifyAuditChain } from "./audit.mjs";
 import {
   ApplicationAccessCatalogError, applicationAccessCatalogHash, assertCompatibleCatalogEvolution,
 } from "./application-access-catalog.mjs";
+import { NotificationIngressError } from "./notification-ingress.mjs";
 
 function cloneMap(map) {
   return new Map([...map].map(([key, value]) => [key, structuredClone(value)]));
@@ -18,6 +19,7 @@ export class TransactionalMemoryRepository {
   #applicationLoginPolicies = new Map();
   #applicationAuthorizationCodes = new Map();
   #assignments = new Map();
+  #notificationEvents = new Map();
   #auditEntries = [];
 
   #transaction(operation) {
@@ -31,6 +33,7 @@ export class TransactionalMemoryRepository {
       applicationLoginPolicies: cloneMap(this.#applicationLoginPolicies),
       applicationAuthorizationCodes: cloneMap(this.#applicationAuthorizationCodes),
       assignments: cloneMap(this.#assignments),
+      notificationEvents: cloneMap(this.#notificationEvents),
       auditEntries: structuredClone(this.#auditEntries),
     };
     const result = operation(state);
@@ -43,6 +46,7 @@ export class TransactionalMemoryRepository {
     this.#applicationLoginPolicies = state.applicationLoginPolicies;
     this.#applicationAuthorizationCodes = state.applicationAuthorizationCodes;
     this.#assignments = state.assignments;
+    this.#notificationEvents = state.notificationEvents;
     this.#auditEntries = state.auditEntries;
     return result;
   }
@@ -307,6 +311,98 @@ export class TransactionalMemoryRepository {
         left.roleId.localeCompare(right.roleId)
       )
       .map((item) => structuredClone(item));
+  }
+
+  receiveNotificationEvents(events, audits) {
+    return this.#transaction((state) => {
+      let created = 0;
+      let alreadyPresent = 0;
+      for (const event of events) {
+        const key = `${event.sourceApplicationId}\n${event.eventId}`;
+        const existing = state.notificationEvents.get(key);
+        if (existing) {
+          if (existing.eventHash !== event.eventHash) {
+            throw new NotificationIngressError("notification_event_identity_conflict", 409);
+          }
+          alreadyPresent += 1;
+          continue;
+        }
+        const audit = audits.get(event.eventId);
+        if (!audit) throw new Error("notification audit event is required");
+        state.notificationEvents.set(key, {
+          ...structuredClone(event), status: "pending", processingAttempts: 0,
+          availableAt: event.receivedAt, claimedAt: null, claimedBy: null,
+          processedAt: null, lastErrorCode: null,
+        });
+        this.#appendAudit(state, audit);
+        created += 1;
+      }
+      return { created, alreadyPresent };
+    });
+  }
+
+  claimNotificationEvents({ workerId, limit, now, leaseMs }) {
+    return this.#transaction((state) => {
+      const staleBefore = new Date(now.valueOf() - leaseMs);
+      const eligible = [...state.notificationEvents.entries()]
+        .filter(([, event]) =>
+          ((event.status === "pending" || event.status === "retry") && new Date(event.availableAt) <= now) ||
+          (event.status === "processing" && new Date(event.claimedAt) <= staleBefore)
+        )
+        .sort(([, left], [, right]) =>
+          String(left.availableAt).localeCompare(String(right.availableAt)) ||
+          String(left.occurredAt).localeCompare(String(right.occurredAt)) ||
+          left.eventId.localeCompare(right.eventId)
+        )
+        .slice(0, limit);
+      return eligible.map(([key, event]) => {
+        const claimed = {
+          ...event, status: "processing", processingAttempts: event.processingAttempts + 1,
+          claimedAt: now.toISOString(), claimedBy: workerId, lastErrorCode: null,
+        };
+        state.notificationEvents.set(key, claimed);
+        return structuredClone(claimed);
+      });
+    });
+  }
+
+  completeNotificationEvent({ sourceApplicationId, eventId, workerId, processedAt }) {
+    return this.#transaction((state) => {
+      const key = `${sourceApplicationId}\n${eventId}`;
+      const event = state.notificationEvents.get(key);
+      if (!event || event.status !== "processing" || event.claimedBy !== workerId) {
+        throw new Error("notification lease is not owned by worker");
+      }
+      state.notificationEvents.set(key, {
+        ...event, status: "processed", claimedAt: null, claimedBy: null,
+        processedAt: processedAt.toISOString(), lastErrorCode: null,
+      });
+    });
+  }
+
+  failNotificationEvent({
+    sourceApplicationId, eventId, workerId, availableAt, errorCode, quarantined,
+  }) {
+    return this.#transaction((state) => {
+      const key = `${sourceApplicationId}\n${eventId}`;
+      const event = state.notificationEvents.get(key);
+      if (!event || event.status !== "processing" || event.claimedBy !== workerId) {
+        throw new Error("notification lease is not owned by worker");
+      }
+      state.notificationEvents.set(key, {
+        ...event, status: quarantined ? "quarantined" : "retry",
+        availableAt: availableAt.toISOString(), claimedAt: null, claimedBy: null,
+        processedAt: null, lastErrorCode: errorCode,
+      });
+    });
+  }
+
+  getNotificationEvent(sourceApplicationId, eventId) {
+    return structuredClone(this.#notificationEvents.get(`${sourceApplicationId}\n${eventId}`) ?? null);
+  }
+
+  listNotificationEvents() {
+    return [...this.#notificationEvents.values()].map((event) => structuredClone(event));
   }
 
   auditCount() {
