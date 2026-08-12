@@ -409,7 +409,81 @@ export class MariaDbRepository {
 
   async getLatestApplicationAccessCatalog(applicationId) {
     const [rows] = await this.pool.execute(
-      `SELECT * FROM application_access_catalog_versio…828 tokens truncated…nt) {
+      `SELECT * FROM application_access_catalog_versions
+       WHERE application_id = ? ORDER BY catalog_version DESC LIMIT 1`, [applicationId],
+    );
+    return mapApplicationAccessCatalog(rows[0]);
+  }
+
+  async listLatestApplicationAccessCatalogs() {
+    const [rows] = await this.pool.execute(
+      `SELECT catalog.* FROM application_access_catalog_versions catalog
+       INNER JOIN (
+         SELECT application_id, MAX(catalog_version) AS catalog_version
+         FROM application_access_catalog_versions GROUP BY application_id
+       ) latest ON latest.application_id = catalog.application_id
+         AND latest.catalog_version = catalog.catalog_version
+       ORDER BY catalog.application_id`,
+    );
+    return rows.map(mapApplicationAccessCatalog);
+  }
+
+  async saveApplicationRedirectUri(applicationId, redirectUri, auditEvent) {
+    const redirectHash = createHash("sha256").update(redirectUri, "utf8").digest("hex");
+    return this.#transaction(async (connection) => {
+      await connection.execute(
+        `INSERT INTO application_redirect_uris(application_id, redirect_uri, redirect_uri_hash, status)
+         VALUES (?, ?, ?, 'active')
+         ON DUPLICATE KEY UPDATE redirect_uri = VALUES(redirect_uri), status = 'active'`,
+        [applicationId, redirectUri, redirectHash],
+      );
+      await this.#appendAudit(connection, auditEvent);
+    });
+  }
+
+  async isApplicationRedirectUriAllowed(applicationId, redirectUri) {
+    const redirectHash = createHash("sha256").update(redirectUri, "utf8").digest("hex");
+    const [rows] = await this.pool.execute(
+      `SELECT 1 FROM application_redirect_uris
+       WHERE application_id = ? AND redirect_uri_hash = ? AND redirect_uri = ? AND status = 'active'`,
+      [applicationId, redirectHash, redirectUri],
+    );
+    return rows.length === 1;
+  }
+
+  async getApplicationRedirectUri(applicationId, redirectUri) {
+    const redirectHash = createHash("sha256").update(redirectUri, "utf8").digest("hex");
+    const [rows] = await this.pool.execute(
+      `SELECT application_id, redirect_uri, status FROM application_redirect_uris
+       WHERE application_id = ? AND redirect_uri_hash = ? AND redirect_uri = ?`,
+      [applicationId, redirectHash, redirectUri],
+    );
+    const row = rows[0];
+    return row ? { applicationId: row.application_id, redirectUri: row.redirect_uri, status: row.status } : null;
+  }
+
+  async saveApplicationLoginPolicy(applicationId, requiredPermission, auditEvent) {
+    return this.#transaction(async (connection) => {
+      await connection.execute(
+        `INSERT INTO application_login_policies(application_id, required_permission, status)
+         VALUES (?, ?, 'active')
+         ON DUPLICATE KEY UPDATE required_permission = VALUES(required_permission), status = 'active'`,
+        [applicationId, requiredPermission],
+      );
+      await this.#appendAudit(connection, auditEvent);
+    });
+  }
+
+  async getApplicationLoginPolicy(applicationId) {
+    const [rows] = await this.pool.execute(
+      `SELECT application_id, required_permission, status FROM application_login_policies
+       WHERE application_id = ?`, [applicationId],
+    );
+    const row = rows[0];
+    return row ? { applicationId: row.application_id, requiredPermission: row.required_permission, status: row.status } : null;
+  }
+
+  async saveApplicationAuthorizationCode(record, auditEvent) {
     return this.#transaction(async (connection) => {
       await connection.execute(
         `INSERT INTO application_authorization_codes(
