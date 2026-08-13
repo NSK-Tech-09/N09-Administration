@@ -1,6 +1,6 @@
 # Lot 49 — Déploiement progressif des sessions opposables en préproduction
 
-Statut : **palier `issue` déployé et recetté en préproduction ; paliers `enforce` non ouverts**
+Statut : **paliers `issue` et `enforce` déployés et recettés en préproduction**
 
 Date de préparation : **13 août 2026**
 
@@ -341,20 +341,20 @@ retour de version.
 | Tests sur Infomaniak | 194 Node.js + 63 Python | 211 Node.js + build frontal `node-core` |
 | Schéma | registre existant contrôlé | migration `014_central_session_revocation_queue`, 7 colonnes, 2 index et contrainte de cohérence |
 | Mode préparatoire | `observe` | `issue` central |
-| Mode opposable | non ouvert | non ouvert |
+| Mode opposable | `enforce` | `enforce` central |
 | Santé publique | `/health` : `200`, `status=ok` | `/api/health` : `200`, commit cible, schéma 014, écriture centralement gardée |
-| Session réelle | Administration active en observation | émission, accès, révocation, puis réémission validés |
-| Audit et chaîne | chaîne valide ; 4 créations, 1 expiration et 1 révocation constatées | événements portés par Administration |
-| File de révocation | sans objet | zéro dette après révocation nominale ; worker périodique actif |
+| Session réelle | émission, accès, déconnexion centrale, puis réémission validés | émission, accès, révocation nominale et différée, puis réémission validés |
+| Audit et chaîne | chaîne valide ; 8 créations, 2 expirations et 4 révocations constatées | événements portés par Administration |
+| File de révocation | sans objet | passage contrôlé de 0 à 1 pendant la panne, puis retour automatique à 0 après rejeu confirmé |
 | Retour arrière à blanc | release `958f356` et environnement daté conservés | release `c0edcdd` et environnement daté conservés |
 | Production inchangée | aucune mutation de production | aucune mutation de production |
 
 ## Avancement réel du 13 août 2026
 
-Le palier préparatoire `issue` est déployé et recetté. Les paliers opposables
-`enforce` restent volontairement fermés : leur ouverture change la politique
-d'accès en mode fail-closed et requiert une décision humaine distincte après
-lecture des preuves ci-dessous.
+Le palier préparatoire `issue`, puis les deux paliers opposables `enforce`, sont
+déployés et recettés. Leur ouverture a été explicitement autorisée après
+lecture des preuves du palier préparatoire et exécutée séquentiellement, avec
+retour arrière prêt avant chaque redémarrage.
 
 - point de retour Administration contrôlé : `releases/958f356`, sept marqueurs
   présents, santé `200`, environnement `preprod`, mode historique `observe`,
@@ -416,13 +416,64 @@ lecture des preuves ci-dessous.
   retour à l'écran de connexion et **zéro** ligne dans la file locale ;
 - nouvelle connexion effectuée après la révocation : une session Tâches active
   a été réémise et laissée utilisable ; Administration conserve une session
-  active en mode `observe` ;
+  active en mode `observe` à ce stade ;
 - chaîne d'audit recalculée après la recette : `audit_chain_valid=true` ; le
   registre contient alors quatre événements `application_session.created`, un
   événement `application_session.expired` et un événement
   `application_session.revoked`, sans donnée sensible consignée dans la preuve ;
 - anciennes releases, sauvegardes et commandes de retour arrière conservées ;
   aucun secret, cookie ou identifiant complet de session n'a été consigné.
+
+### Ouverture des paliers opposables
+
+- copie Administration créée avant le premier verrou :
+  `.env.pre-lot49-tasks-enforce-20260813T104246Z` ; seule la valeur
+  `N09_TASKS_SESSION_MODE` est passée de `issue` à `enforce` ;
+- redémarrage contrôlé : le journal a confirmé
+  `administration_session_mode=observe` et `tasks_session_mode=enforce` ;
+- recette Tâches nominale : session centrale reconnue, identité rattachée,
+  droits recalculés et **165 tâches** accessibles ;
+- appels sans cookie puis avec un cookie volontairement altéré : refus `401`
+  dans les deux cas ;
+- déconnexion nominale : retour à l'écran de connexion, révocation centrale
+  immédiate, puis nouvelle session saine ;
+- panne centrale bornée réalisée en arrêtant uniquement le processus
+  Administration de préproduction : actualisation refusée avec le message
+  `Identité centrale indisponible` et détail protégé non livré ;
+- déconnexion Tâches pendant cette panne : cookie local effacé, retour à la
+  connexion et file durable passée à `QUEUE_PENDING=1` ;
+- après remise en service d'Administration et santé `200`, le worker périodique
+  a confirmé la révocation et ramené la file à `QUEUE_PENDING=0`, sans action
+  manuelle ni suppression de preuve ; une nouvelle session Tâches saine a
+  ensuite été émise ;
+- copie Administration créée avant le second verrou :
+  `.env.pre-lot49-admin-enforce-20260813T104929Z` ; seule la valeur
+  `N09_ADMIN_SESSION_MODE` est passée de `observe` à `enforce` ;
+- second redémarrage contrôlé : le journal a confirmé simultanément
+  `administration_session_mode=enforce` et `tasks_session_mode=enforce` ;
+- santé Administration `200` ; accès sans preuve et avec preuve altérée refusés
+  en `401` ;
+- authentification Infomaniak réelle, identité NSK rattachée, page centrale des
+  utilisateurs et accès lisible avec **1 identité active**, **2 applications
+  actives** et **6 affectations actives** ;
+- déconnexion Administration confirmée avant effacement du cookie, retour à
+  l'accueil non authentifié, puis nouvelle session réelle émise et laissée
+  active ;
+- les variantes de panne du registre propre à Administration — création en
+  `503` sans cookie autonome, déconnexion en `503` avec conservation du cookie
+  — restent couvertes par les tests exécutés dans la release immuable. Aucune
+  coupure volontaire de la base partagée n'a été provoquée pour les rejouer en
+  réel, afin de ne pas élargir le périmètre de risque ;
+- contrôle final du registre : `n09-administration` total `4`, actif `1` ;
+  `n09-suivi-taches` total `4`, actif `1` ;
+- contrôle final de l'audit : `application_session.created=8`,
+  `application_session.expired=2`, `application_session.revoked=4` et
+  `audit_chain_valid=true` ;
+- santés finales : Administration `status=ok` ; Tâches `status=ok`, commit
+  `0d1915de91fc15f9a966b1ccc79ef5655f821b02`, schéma
+  `014_central_session_revocation_queue` et écriture `centrally_gated` ;
+- production, Énergie, releases antérieures, sauvegardes et notifications
+  externes sont restées inchangées.
 
 ## Références
 
