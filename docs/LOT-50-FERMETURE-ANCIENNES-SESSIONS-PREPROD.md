@@ -1,6 +1,7 @@
+
 # Lot 50 — Fermeture des anciennes sessions en préproduction
 
-Statut : **implémenté et validé localement ; déploiement préproduction à exécuter**
+Statut : **déployé et recetté en préproduction**
 
 Date : **13 août 2026**
 
@@ -78,6 +79,39 @@ autonome.
 - aucune résurrection après simulation du retour arrière ;
 - aucun secret dans les traces ;
 - production et N09 – Énergie inchangées.
+
+## Avancement réel du 13 août 2026
+
+- commits canoniques déployés : Administration
+  `75339e533cd0139b3338e4f29c431e79c58429b4` dans `releases/75339e5` et
+  Suivi des tâches `184141b56b7321f8ec4ca71fdd98ae4605df34d9` dans
+  `releases/184141b` ;
+- sauvegarde Administration vérifiée :
+  `lot50-51-pre-deploy-data-20260813T115307Z.sql.gz`, **23 734 octets**,
+  SHA-256 `68379788dabfcd69e13f1b22cadcb254742a045e7af4f4192ba0f93ba249605b` ;
+- sauvegarde Suivi des tâches vérifiée :
+  `lot50-pre-deploy-data-20260813T115325Z.sql.gz`, **112 839 octets**,
+  SHA-256 `a0149f207b30a44b287aa6ca05378dbf73600c958dbff1ff153f2bb0c9f2ac4f` ;
+- **205 tests Node.js** et **63 tests Python** réussis pour Administration ;
+  **213 tests Node.js** réussis pour Suivi des tâches ;
+- les deux secrets de session ont été renouvelés indépendamment, sans être
+  affichés ni copiés dans une preuve ; les anciens réglages
+  `N09_SESSION_SHADOW_*` ont été retirés de la configuration active
+  Administration ;
+- les deux services ont été redémarrés en mode `enforce` et répondent `200` ;
+  Suivi des tâches annonce le commit exact, le schéma
+  `014_central_session_revocation_queue` et l'écriture `centrally_gated` ;
+- l'ancienne session Administration a été refusée, puis une nouvelle
+  authentification Infomaniak a abouti ; la nouvelle session Tâches donne accès
+  aux **165 tâches** selon les droits recalculés ;
+- l'audit central reste valide après la recette : **11 créations**, **2
+  expirations** et **5 révocations** ;
+- la file locale de révocation Tâches contient **0** élément en attente ;
+- état laissé utilisable : une session active Administration et une session
+  active Suivi des tâches ;
+- les releases et fichiers d'environnement précédents restent disponibles pour
+  un retour applicatif sans restauration des anciens secrets ;
+- production et N09 – Énergie n'ont pas été modifiées.
 
 ## Références
 

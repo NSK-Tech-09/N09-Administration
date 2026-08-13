@@ -1,6 +1,7 @@
+
 # Lot 51 — Gestion personnelle des sessions
 
-Statut : **implémenté et validé localement ; publication et déploiement préproduction à exécuter après le lot 50**
+Statut : **publié, déployé et recetté en préproduction après le lot 50**
 
 Date : **13 août 2026**
 
@@ -96,6 +97,29 @@ d'indisponibilité du registre, l'accès demeure fermé conformément à `ADR-02
 - chaque fermeture est auditée atomiquement et la chaîne reste valide ;
 - aucun identifiant technique ni secret n'apparaît dans la page ou l'audit ;
 - production et N09 – Énergie restent inchangées.
+
+## Avancement réel du 13 août 2026
+
+La page `/account/sessions` est déployée dans la release Administration
+`releases/75339e5`. La recette réelle a confirmé :
+
+- présentation de la session Administration courante et de la session distante
+  Suivi des tâches, sans cookie, secret, adresse réseau ni identifiant technique
+  de session ;
+- fermeture individuelle de la session Suivi des tâches depuis Administration,
+  sans effet sur la session courante ;
+- passage immédiat de la cible à l'état « Fermée », puis refus effectif par
+  Suivi des tâches au prochain contrôle serveur ;
+- recréation d'une session Tâches saine et accès nominal aux données ;
+- chaîne d'audit valide après la mutation et file de révocation Tâches vide ;
+- état final composé d'une session active par application.
+
+La fermeture groupée atomique, les refus de cible étrangère ou altérée et les
+concurrences restent validés par la suite automatisée de la release immuable.
+Leur recette avec plusieurs navigateurs indépendants n'a pas été simulée avec
+des données artificielles : aucun second navigateur de contrôle n'était
+disponible pendant l'opération. Cette limite de preuve n'affecte pas la recette
+individuelle réelle, mais reste à compléter avant une promotion en production.
 
 ## Références
 

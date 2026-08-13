@@ -1,4 +1,5 @@
 
+
 # État de la préproduction Infomaniak
 
 Date du constat : **10 août 2026**  
@@ -380,3 +381,29 @@ les canaux réellement nécessaires, en maintenant les canaux externes fermés
 jusqu'à une décision explicite. La promotion en production reste interdite
 tant que la comparaison avec les comportements historiques n'est pas achevée.
 
+## Lots 50 et 51 — sessions anciennes fermées et gestion personnelle déployée
+
+Le **13 août 2026**, les lots 50 et 51 ont été déployés conjointement en
+préproduction depuis le commit canonique Administration
+`75339e533cd0139b3338e4f29c431e79c58429b4`. La release immuable
+`releases/75339e5` a réussi **205 tests Node.js** et **63 tests Python** sur
+Infomaniak. La sauvegarde préalable vérifiée porte l'empreinte SHA-256
+`68379788dabfcd69e13f1b22cadcb254742a045e7af4f4192ba0f93ba249605b`.
+
+Le secret de session a été renouvelé sans affichage, les anciens réglages de
+session d'observation ont été retirés et les modes Administration et Suivi des
+tâches restent tous deux `enforce`. Après redémarrage, `/health` répond `200`
+avec `status=ok`.
+
+La rotation a correctement invalidé l'ancienne session. Une nouvelle
+authentification Infomaniak a créé une session Administration saine. L'écran
+« Mes sessions » a ensuite recensé la session courante et une session Suivi des
+tâches distincte. Cette dernière a été fermée à distance puis refusée par
+l'application cible dès la requête suivante, avant d'être recréée proprement.
+
+L'état final contrôlé contient une session active par application. La chaîne
+d'audit est valide avec **11 créations**, **2 expirations** et **5 révocations**.
+La fermeture groupée reste prouvée par les tests automatisés ; sa recette avec
+plusieurs navigateurs indépendants devra être complétée avant la promotion en
+production. Aucune mutation n'a été effectuée en production ni dans N09 –
+Énergie.
