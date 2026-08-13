@@ -119,13 +119,14 @@ function seededAdminRepository({
   return { adminRepository, linkRequest };
 }
 
-function adminCookie(csrf = "csrf-value", shadowSession = null) {
+function adminCookie(csrf = "csrf-value", centralSession = null, sessionVersion = 2) {
   const session = {
     issuer: "https://login.infomaniak.com", subject: "admin-provider-subject",
     identityId: adminIdentity.identityId, displayName: adminIdentity.displayName,
     status: "authenticated", csrf, expiresAt: Date.now() + 60_000,
   };
-  if (shadowSession) session.shadowSession = shadowSession;
+  if (sessionVersion !== null) session.sessionVersion = sessionVersion;
+  if (centralSession) session.centralSession = centralSession;
   return `${OIDC_SESSION_COOKIE}=${seal(session, oidcConfig.sessionSecret, "oidc-session")}`;
 }
 
@@ -238,8 +239,24 @@ test("ne révèle pas la preuve externe dans l'état de session public", async (
   });
 });
 
+test("refuse un ancien cookie non versionné sans consulter le registre central", async () => {
+  let assessments = 0;
+  const administrationSessionAuthority = {
+    mode: "enforce",
+    assess: async () => { assessments += 1; return { allowed: true, reasonCode: "session_active" }; },
+  };
+  await withServer({ oidcConfig, administrationSessionAuthority }, async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/auth/session`, {
+      headers: { cookie: adminCookie("csrf-value", null, null) },
+    });
+    assert.equal(response.status, 401);
+    assert.deepEqual(await response.json(), { authenticated: false });
+  });
+  assert.equal(assessments, 0);
+});
+
 test("observe la session centrale sans rendre son résultat opposable", async () => {
-  const shadowSession = {
+  const centralSession = {
     sessionId: "b14ad8d3-b14b-4f2e-8f0b-c79dfc1fd702",
     secret: "B".repeat(43),
   };
@@ -254,13 +271,13 @@ test("observe la session centrale sans rendre son résultat opposable", async ()
   };
   await withServer({ oidcConfig, administrationSessionAuthority }, async (baseUrl) => {
     const response = await fetch(`${baseUrl}/auth/session`, {
-      headers: { cookie: adminCookie("csrf-value", shadowSession) },
+      headers: { cookie: adminCookie("csrf-value", centralSession) },
     });
     assert.equal(response.status, 200);
     assert.equal((await response.json()).authenticated, true);
     await new Promise((resolve) => setImmediate(resolve));
   });
-  assert.deepEqual(observations, [{ credential: shadowSession, identityId: adminIdentity.identityId }]);
+  assert.deepEqual(observations, [{ credential: centralSession, identityId: adminIdentity.identityId }]);
 });
 
 test("ferme l'accès HTTP lorsque la session Administration centrale est refusée", async () => {
@@ -652,14 +669,14 @@ test("inscrit une nouvelle session rattachée en observation dans le cookie chif
   };
   const { adminRepository } = seededAdminRepository();
   adminRepository.findExternalIdentity = async () => ({ identityId: adminIdentity.identityId, status: "active" });
-  const shadowSession = {
+  const centralSession = {
     sessionId: "b14ad8d3-b14b-4f2e-8f0b-c79dfc1fd702",
     secret: "B".repeat(43),
   };
   const enrolled = [];
   const administrationSessionAuthority = {
     mode: "observe",
-    issue: async (input) => { enrolled.push(input); return shadowSession; },
+    issue: async (input) => { enrolled.push(input); return centralSession; },
     observe: async () => ({ outcome: "active" }),
   };
   await withServer({ repository: adminRepository, oidcConfig, fetchImpl, administrationSessionAuthority }, async (baseUrl) => {
@@ -673,7 +690,8 @@ test("inscrit une nouvelle session rattachée en observation dans le cookie chif
     assert.equal(callback.status, 303);
     const sealedSession = callback.headers.get("set-cookie").match(/n09_oidc_session=([^;,]+)/)?.[1];
     const session = open(sealedSession, oidcConfig.sessionSecret, "oidc-session");
-    assert.deepEqual(session.centralSession, shadowSession);
+    assert.equal(session.sessionVersion, 2);
+    assert.deepEqual(session.centralSession, centralSession);
     assert.equal(session.identityId, adminIdentity.identityId);
   });
   assert.deepEqual(enrolled, [{ identityId: adminIdentity.identityId }]);

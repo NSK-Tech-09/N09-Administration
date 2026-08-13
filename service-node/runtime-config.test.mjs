@@ -82,7 +82,11 @@ test("prépare l'observation puis l'opposabilité des sessions Administration en
   assert.throws(() => administrationSessionConfigFromEnvironment({
     N09_ADMIN_SESSION_IDLE_TTL_MS: "300000", N09_ADMIN_SESSION_TOUCH_INTERVAL_MS: "300000",
   }), /lifetime/);
-  assert.equal(administrationSessionConfigFromEnvironment({
+  assert.deepEqual(administrationSessionConfigFromEnvironment({
     N09_ENVIRONMENT: "preprod", N09_SESSION_SHADOW_MODE: "observe",
-  }).mode, "observe");
+    N09_SESSION_SHADOW_IDLE_TTL_MS: "600000",
+  }), {
+    mode: "disabled", applicationId: "n09-administration",
+    idleTtlMs: 1_800_000, absoluteTtlMs: 28_800_000, touchIntervalMs: 300_000,
+  });
 });

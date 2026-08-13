@@ -39,8 +39,7 @@ export function httpConfigFromEnvironment(environment) {
 }
 
 export function administrationSessionConfigFromEnvironment(environment) {
-  const legacyMode = environment.N09_SESSION_SHADOW_MODE?.trim();
-  const mode = environment.N09_ADMIN_SESSION_MODE?.trim() || legacyMode || "disabled";
+  const mode = environment.N09_ADMIN_SESSION_MODE?.trim() || "disabled";
   if (!["disabled", "observe", "enforce"].includes(mode)) {
     throw new Error("N09_ADMIN_SESSION_MODE must be disabled, observe or enforce");
   }
@@ -48,17 +47,17 @@ export function administrationSessionConfigFromEnvironment(environment) {
     throw new Error("Administration application sessions are restricted to preprod");
   }
   const idleTtlMs = positiveInteger(
-    environment.N09_ADMIN_SESSION_IDLE_TTL_MS ?? environment.N09_SESSION_SHADOW_IDLE_TTL_MS,
+    environment.N09_ADMIN_SESSION_IDLE_TTL_MS,
     30 * 60_000,
     "N09_ADMIN_SESSION_IDLE_TTL_MS",
   );
   const absoluteTtlMs = positiveInteger(
-    environment.N09_ADMIN_SESSION_ABSOLUTE_TTL_MS ?? environment.N09_SESSION_SHADOW_ABSOLUTE_TTL_MS,
+    environment.N09_ADMIN_SESSION_ABSOLUTE_TTL_MS,
     8 * 60 * 60_000,
     "N09_ADMIN_SESSION_ABSOLUTE_TTL_MS",
   );
   const touchIntervalMs = positiveInteger(
-    environment.N09_ADMIN_SESSION_TOUCH_INTERVAL_MS ?? environment.N09_SESSION_SHADOW_TOUCH_INTERVAL_MS,
+    environment.N09_ADMIN_SESSION_TOUCH_INTERVAL_MS,
     5 * 60_000,
     "N09_ADMIN_SESSION_TOUCH_INTERVAL_MS",
   );
@@ -67,8 +66,6 @@ export function administrationSessionConfigFromEnvironment(environment) {
   }
   return Object.freeze({ mode, applicationId: "n09-administration", idleTtlMs, absoluteTtlMs, touchIntervalMs });
 }
-
-export const applicationSessionShadowConfigFromEnvironment = administrationSessionConfigFromEnvironment;
 
 export function tasksApplicationSessionConfigFromEnvironment(environment) {
   const mode = environment.N09_TASKS_SESSION_MODE?.trim() || "disabled";

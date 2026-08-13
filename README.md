@@ -122,6 +122,12 @@ releases immuables, paliers `issue` puis `enforce`, recettes et retours arrière
 sans suppression de preuve ; voir
 `docs/LOT-49-DEPLOIEMENT-SESSIONS-OPPOSABLES-PREPROD.md`.
 
+Le lot 50 ferme localement la compatibilité avec les anciens cookies : format
+versionné obligatoire, disparition de l'ancien champ et des anciens réglages,
+preuve centrale obligatoire dans les deux applications et retour arrière sans
+résurrection. Son déploiement imposera une nouvelle connexion en préproduction ;
+voir `docs/LOT-50-FERMETURE-ANCIENNES-SESSIONS-PREPROD.md`.
+
 ## Prérequis et démarrage local
 
 - Python 3.11 ou supérieur ;
@@ -173,6 +179,7 @@ ne contient aucun secret réel. La production reste inchangée.
 - [`docs/LOT-47-OPPOSABILITE-SESSIONS-SUIVI-TACHES.md`](docs/LOT-47-OPPOSABILITE-SESSIONS-SUIVI-TACHES.md)
 - [`docs/LOT-48-OPPOSABILITE-SESSIONS-ADMINISTRATION.md`](docs/LOT-48-OPPOSABILITE-SESSIONS-ADMINISTRATION.md)
 - [`docs/LOT-49-DEPLOIEMENT-SESSIONS-OPPOSABLES-PREPROD.md`](docs/LOT-49-DEPLOIEMENT-SESSIONS-OPPOSABLES-PREPROD.md)
+- [`docs/LOT-50-FERMETURE-ANCIENNES-SESSIONS-PREPROD.md`](docs/LOT-50-FERMETURE-ANCIENNES-SESSIONS-PREPROD.md)
 - [`docs/ETAT-PREPROD-INFOMANIAK.md`](docs/ETAT-PREPROD-INFOMANIAK.md)
 - [`docs/CONFORMITE-NSES.md`](docs/CONFORMITE-NSES.md)
 - [`docs/CONTRAT-API-INTERNE.md`](docs/CONTRAT-API-INTERNE.md)
