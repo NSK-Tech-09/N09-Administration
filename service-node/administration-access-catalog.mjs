@@ -5,6 +5,7 @@ import { ACCESS_DECISION_PERMISSION } from "./access-decision-admin.mjs";
 import { ADMIN_APPLICATION_ID, LINK_DECISION_PERMISSION } from "./identity-link-admin.mjs";
 import { NOTIFICATION_OPERATIONS_READ_PERMISSION } from "./notification-operations-admin.mjs";
 import { SESSION_REVOCATION_PERMISSION } from "./operator-session-management.mjs";
+import { IDENTITY_SUSPENSION_PERMISSION } from "./identity-state-management.mjs";
 
 export const ADMINISTRATION_ACCESS_CATALOG_V1 = Object.freeze({
   application_id: ADMIN_APPLICATION_ID,
@@ -68,7 +69,7 @@ export const ADMINISTRATION_ACCESS_CATALOG_V3 = Object.freeze({
   ],
 });
 
-export const ADMINISTRATION_ACCESS_CATALOG = Object.freeze({
+export const ADMINISTRATION_ACCESS_CATALOG_V4 = Object.freeze({
   ...ADMINISTRATION_ACCESS_CATALOG_V3,
   catalog_version: 4,
   permissions: [
@@ -88,6 +89,31 @@ export const ADMINISTRATION_ACCESS_CATALOG = Object.freeze({
       description: "Consulte les sessions actives et peut en révoquer une sans accéder à leurs secrets ni administrer les autres pouvoirs centraux.",
       status: "active",
       permissions: [SESSION_REVOCATION_PERMISSION],
+      scope_types: ["global"],
+    },
+  ],
+});
+
+export const ADMINISTRATION_ACCESS_CATALOG = Object.freeze({
+  ...ADMINISTRATION_ACCESS_CATALOG_V4,
+  catalog_version: 5,
+  permissions: [
+    ...ADMINISTRATION_ACCESS_CATALOG_V4.permissions,
+    {
+      permission_id: IDENTITY_SUSPENSION_PERMISSION,
+      display_name: "Suspendre une identité",
+      description: "Suspendre une identité NSK active et révoquer atomiquement toutes ses sessions actives, avec justification et audit.",
+      status: "active",
+    },
+  ],
+  roles: [
+    ...ADMINISTRATION_ACCESS_CATALOG_V4.roles,
+    {
+      role_id: "identity-suspension-administrator",
+      display_name: "Responsable du cycle de vie des identités",
+      description: "Suspend une identité active sans administrer ses facteurs ni contourner les autres pouvoirs centraux.",
+      status: "active",
+      permissions: [IDENTITY_SUSPENSION_PERMISSION],
       scope_types: ["global"],
     },
   ],
@@ -136,6 +162,18 @@ export async function publishAdministrationAccessCatalog(repository, {
     });
     if (![200, 201].includes(transition.status)) {
       throw new Error(transition.body.error || "administration catalog v3 publication failed");
+    }
+    latest = await repository.getLatestApplicationAccessCatalog(ADMIN_APPLICATION_ID);
+  }
+  if (latest.catalogVersion === 3) {
+    const transition = await publishApplicationAccessCatalog({
+      repository,
+      principal: { applicationId: ADMIN_APPLICATION_ID, audience: ADMIN_APPLICATION_ID, correlationId },
+      payload: ADMINISTRATION_ACCESS_CATALOG_V4,
+      source: "administration-catalog-bootstrap",
+    });
+    if (![200, 201].includes(transition.status)) {
+      throw new Error(transition.body.error || "administration catalog v4 publication failed");
     }
     latest = await repository.getLatestApplicationAccessCatalog(ADMIN_APPLICATION_ID);
   }

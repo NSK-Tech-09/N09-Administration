@@ -458,3 +458,46 @@ test("verrouille et révoque un groupe de sessions dans une seule transaction", 
   assert.equal(calls.filter((call) => call === "commit").length, 1);
   assert.equal(calls.at(-1), "release");
 });
+
+test("suspend l’identité et révoque ses sessions MariaDB dans une transaction unique", async () => {
+  const active = persistedSession();
+  const suspended = { ...identity, status: "suspended" };
+  const revoked = revokeApplicationSession(active, {
+    revokedByIdentityId: identity.identityId,
+    reason: "Suspension gouvernée après contrôle humain",
+    now: new Date("2026-08-13T04:20:00Z"),
+  });
+  const correlationId = "identity-suspension-atomic";
+  const identityAuditEvent = createAuditEvent({
+    action: "identity.suspended", result: "success", source: "tests", correlationId,
+    actorId: identity.identityId, subjectId: identity.identityId,
+    previousValue: { status: "active" }, newValue: { status: "suspended", revoked_sessions: 1 },
+    justification: "Suspension gouvernée après contrôle humain",
+  });
+  const sessionAuditEvent = createApplicationSessionAuditEvent({
+    record: revoked, action: "application_session.revoked", actorId: identity.identityId,
+    correlationId, justification: "Suspension gouvernée après contrôle humain",
+  });
+  const calls = [];
+  const connection = {
+    beginTransaction: async () => calls.push("begin"), commit: async () => calls.push("commit"),
+    rollback: async () => calls.push("rollback"), release: () => calls.push("release"),
+    execute: async (sql, values = []) => {
+      calls.push({ sql, values });
+      if (sql.startsWith("SELECT status FROM identities")) return [[{ status: "active" }]];
+      if (sql.includes("FROM application_sessions") && sql.includes("FOR UPDATE")) return [[sessionRow(active)]];
+      if (sql.startsWith("SELECT current_hash")) return [[{ current_hash: "" }]];
+      return [{ affectedRows: 1 }];
+    },
+  };
+  await new MariaDbRepository({ getConnection: async () => connection }).suspendIdentityAndRevokeSessions({
+    identity: suspended, expectedStatus: "active", observedAt: new Date("2026-08-13T04:20:00Z"), identityAuditEvent,
+    closures: [{ record: revoked, expectedVersion: active.version, auditEvent: sessionAuditEvent }],
+  });
+  assert.equal(calls.filter((call) => typeof call === "object" && call.sql.includes("UPDATE identities SET status = 'suspended'")).length, 1);
+  assert.equal(calls.filter((call) => typeof call === "object" && call.sql.includes("SET revoked_at")).length, 1);
+  assert.equal(calls.filter((call) => typeof call === "object" && call.sql.includes("INSERT INTO audit_events")).length, 2);
+  assert.equal(calls.filter((call) => call === "begin").length, 1);
+  assert.equal(calls.filter((call) => call === "commit").length, 1);
+  assert.equal(calls.at(-1), "release");
+});

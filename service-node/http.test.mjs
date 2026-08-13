@@ -420,7 +420,7 @@ test("affiche le registre en lecture seule avec identités, applications et affe
     assert.match(body, /Utilisateurs et accès/);
     assert.match(body, /Admin NSK/);
     assert.match(body, /N09 – Administration/);
-    assert.match(body, /Catalogue v4/);
+    assert.match(body, /Catalogue v5/);
     assert.match(body, /Responsable des rattachements/);
     assert.match(body, /access-directory-reader/);
     assert.match(body, /administration:access:read/);
