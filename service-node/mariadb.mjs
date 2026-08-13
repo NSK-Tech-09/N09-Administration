@@ -605,6 +605,85 @@ export class MariaDbRepository {
     return rows.map(mapApplicationSession);
   }
 
+  async suspendIdentityAndRevokeSessions({ identity, expectedStatus, observedAt, identityAuditEvent, closures }) {
+    if (identity.status !== "suspended" || expectedStatus !== "active" ||
+        identityAuditEvent?.action !== "identity.suspended" ||
+        identityAuditEvent.subject_id !== identity.identityId) {
+      throw new Error("invalid identity suspension bundle");
+    }
+    const decisionTime = new Date(observedAt);
+    if (!Number.isFinite(decisionTime.valueOf())) throw new Error("invalid identity suspension time");
+    if (!Array.isArray(closures)) throw new Error("application session closures are required");
+    if (identityAuditEvent.previous_value?.status !== expectedStatus ||
+        identityAuditEvent.new_value?.status !== "suspended" ||
+        identityAuditEvent.new_value?.revoked_sessions !== closures.length) {
+      throw new Error("identity suspension audit does not match bundle");
+    }
+    const sessionIds = new Set();
+    for (const { record, auditEvent } of closures) {
+      if (record.identityId !== identity.identityId || auditEvent?.action !== "application_session.revoked") {
+        throw new Error("identity suspension session scope mismatch");
+      }
+      if (auditEvent.actor_id !== identityAuditEvent.actor_id ||
+          auditEvent.correlation_id !== identityAuditEvent.correlation_id ||
+          auditEvent.justification !== identityAuditEvent.justification ||
+          record.revocationReason !== identityAuditEvent.justification) {
+        throw new Error("identity suspension audit correlation mismatch");
+      }
+      assertApplicationSessionAudit(record, auditEvent, "application_session.revoked");
+      if (sessionIds.has(record.sessionId)) throw new Error("duplicate application session closure");
+      sessionIds.add(record.sessionId);
+    }
+    const ordered = [...closures].sort((left, right) => left.record.sessionId.localeCompare(right.record.sessionId));
+    return this.#transaction(async (connection) => {
+      const [identities] = await connection.execute(
+        "SELECT status FROM identities WHERE identity_id = ? FOR UPDATE", [identity.identityId],
+      );
+      if (identities.length !== 1 || identities[0].status !== expectedStatus) throw new Error("stale identity status");
+      const [activeRows] = await connection.execute(
+        `SELECT * FROM application_sessions
+         WHERE identity_id = ? AND revoked_at IS NULL AND idle_expires_at > ? AND absolute_expires_at > ?
+         ORDER BY session_id FOR UPDATE`,
+        [identity.identityId, asMariaDate(decisionTime), asMariaDate(decisionTime)],
+      );
+      const activeSessions = new Map(activeRows.map((row) => {
+        const record = mapApplicationSession(row);
+        return [record.sessionId, record];
+      }));
+      if (activeSessions.size !== ordered.length || ordered.some(({ record }) => !activeSessions.has(record.sessionId))) {
+        throw new Error("identity active session set changed");
+      }
+      for (const { record, expectedVersion } of ordered) {
+        const previous = activeSessions.get(record.sessionId);
+        if (!previous || previous.identityId !== identity.identityId || previous.version !== expectedVersion ||
+            record.version !== expectedVersion + 1) throw new Error("stale application session version");
+        assertApplicationSessionImmutableContext(previous, record);
+        if (previous.lastSeenAt !== record.lastSeenAt || previous.idleExpiresAt !== record.idleExpiresAt ||
+            previous.revokedAt || !record.revokedAt || !record.revocationReason) {
+          throw new Error("invalid application session revocation");
+        }
+      }
+      const [identityResult] = await connection.execute(
+        "UPDATE identities SET status = 'suspended' WHERE identity_id = ? AND status = ?",
+        [identity.identityId, expectedStatus],
+      );
+      if (identityResult.affectedRows !== 1) throw new Error("stale identity status");
+      await this.#appendAudit(connection, identityAuditEvent);
+      for (const { record, expectedVersion, auditEvent } of ordered) {
+        const [result] = await connection.execute(
+          `UPDATE application_sessions
+           SET revoked_at = ?, revoked_by_identity_id = ?, revocation_reason = ?, version = ?
+           WHERE session_id = ? AND identity_id = ? AND version = ? AND revoked_at IS NULL`,
+          [asMariaDate(record.revokedAt), record.revokedByIdentityId, record.revocationReason,
+           record.version, record.sessionId, identity.identityId, expectedVersion],
+        );
+        if (result.affectedRows !== 1) throw new Error("stale application session version");
+        await this.#appendAudit(connection, auditEvent);
+      }
+      return { identity: structuredClone(identity), revokedSessions: ordered.length };
+    });
+  }
+
   async listAllApplicationSessions() {
     const [rows] = await this.pool.execute(
       `SELECT * FROM application_sessions

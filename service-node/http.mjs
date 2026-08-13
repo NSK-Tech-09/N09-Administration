@@ -15,6 +15,9 @@ import {
   authorizeSessionRevocationAdministration, OperatorSessionError,
 } from "./operator-session-management.mjs";
 import {
+  authorizeIdentitySuspensionAdministration, IdentityStateError,
+} from "./identity-state-management.mjs";
+import {
   exchangeApplicationLoginCode, issueApplicationLoginCode, validateAuthorizationRequest,
 } from "./application-login.mjs";
 import {
@@ -105,6 +108,11 @@ function validOperatorTarget(target) {
   return target && uuid.test(String(target.targetIdentityId ?? "")) &&
     uuid.test(String(target.targetSessionId ?? "")) &&
     Number.isSafeInteger(target.expectedVersion) && target.expectedVersion > 0;
+}
+
+function validIdentityStateTarget(target) {
+  const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  return target && uuid.test(String(target.targetIdentityId ?? "")) && target.expectedStatus === "active";
 }
 
 function redirect(response, location) {
@@ -255,6 +263,17 @@ function renderOperatorSessions(sessions, csrf, actionToken) {
   return `<h1>Sessions actives de l’écosystème</h1><p>Cette console permet uniquement la révocation motivée d’une session active. Elle ne révèle ni cookie, ni secret, ni adresse réseau, ni identifiant technique.</p><div class="summary"><div class="metric"><strong>${escapeHtml(sessions.length)}</strong>session${sessions.length > 1 ? "s" : ""} active${sessions.length > 1 ? "s" : ""}</div></div><div class="facts"><p><strong>Périmètre :</strong> administration globale explicitement attribuée par la permission dédiée <code>administration:sessions:revoke</code>.</p><p><strong>Garde-fou :</strong> la session opérateur courante ne peut pas être fermée depuis cette console.</p></div><div class="directory">${cards || '<div class="facts"><p>Aucune session active enregistrée.</p></div>'}</div><nav><a class="button secondary" href="/">Retour à l’accueil</a><a class="button secondary" href="/account/sessions">Mes sessions</a></nav>`;
 }
 
+function renderIdentityStateAdministration(identities, csrf, actionToken) {
+  const cards = identities.map((identity) => {
+    const sessions = `${identity.activeSessionCount} session${identity.activeSessionCount > 1 ? "s" : ""} active${identity.activeSessionCount > 1 ? "s" : ""}`;
+    const action = identity.current
+      ? '<p class="muted">Ta propre identité ne peut pas être suspendue depuis cette console.</p>'
+      : `<form class="grant" method="post" action="/admin/identities/suspend"><input type="hidden" name="csrf" value="${escapeHtml(csrf)}"><input type="hidden" name="target" value="${escapeHtml(actionToken(identity))}"><label>Justification de la suspension<input name="justification" minlength="20" maxlength="500" required placeholder="Pourquoi cette identité doit-elle être suspendue ?"></label><button class="secondary" type="submit">Suspendre l’identité et fermer ses sessions</button></form>`;
+    return `<article class="entry"><p><span class="pill">Identité active</span> · ${escapeHtml(sessions)}</p><h3>${escapeHtml(identity.displayName)}</h3><p>${escapeHtml(identity.email)}</p>${action}</article>`;
+  }).join("");
+  return `<h1>Cycle de vie des identités</h1><p>Cette console suspend une identité active et ferme toutes ses sessions actives dans une seule opération auditée. Elle ne supprime ni la personne, ni ses affectations, ni son histoire.</p><div class="facts"><p><strong>Refus par défaut :</strong> seule la permission dédiée <code>administration:identities:suspend</code> ouvre cette action.</p><p><strong>Atomicité :</strong> si une session change pendant la décision, aucune suspension partielle n’est conservée.</p></div><div class="directory">${cards || '<div class="facts"><p>Aucune identité active enregistrée.</p></div>'}</div><nav><a class="button secondary" href="/">Retour à l’accueil</a><a class="button secondary" href="/admin/sessions">Sessions actives</a></nav>`;
+}
+
 function renderNotificationOperations(snapshot) {
   const actionable = snapshot.events.pending + snapshot.events.processing + snapshot.events.retrying;
   const processor = snapshot.processor || { status: "never_run" };
@@ -286,6 +305,7 @@ export function createHttpHandler({
   sessionAuthority = null,
   personalSessionManagement = null,
   operatorSessionManagement = null,
+  identityStateManagement = null,
 }) {
   if (!repository) throw new Error("repository is required");
   if (typeof authenticate !== "function") throw new Error("authenticate must be a function");
@@ -408,6 +428,10 @@ export function createHttpHandler({
           const decision = await authorizeSessionRevocationAdministration(repository, session.identityId);
           if (decision.allowed) administrationLinks.push('<a class="button" href="/admin/sessions">Gérer les sessions actives</a>');
         } catch { /* no administrative affordance on repository failure */ }
+        try {
+          const decision = await authorizeIdentitySuspensionAdministration(repository, session.identityId);
+          if (decision.allowed) administrationLinks.push('<a class="button" href="/admin/identities">Gérer le cycle de vie des identités</a>');
+        } catch { /* no administrative affordance on repository failure */ }
         if (typeof repository.countUnreadNotifications === "function") {
           try {
             const unread = await repository.countUnreadNotifications(session.identityId);
@@ -419,6 +443,83 @@ export function createHttpHandler({
         ? `<h1>Identité Infomaniak vérifiée</h1><p>Bienvenue <strong>${escapeHtml(session.displayName)}</strong>. La preuve cryptographique est valide.</p><div class="facts"><p>État NSK : <strong>${session.status === "authenticated" ? "rattachée" : "rattachement requis"}</strong></p>${requestReference}<p>${session.status === "authenticated" ? "Le compte NSK est reconnu ; les droits restent contrôlés séparément." : "Aucun compte, rôle ou droit n’a été créé automatiquement. Une décision humaine reste obligatoire."}</p></div><nav>${administrationLinks.join("")}<form method="post" action="/auth/logout"><button class="secondary" type="submit">Fermer la session</button></form></nav>`
         : `<h1>Le cœur d’identité est prêt</h1><p>Connecte-toi avec Infomaniak pour présenter une preuve d’identité au registre central NSK.</p><div class="facts"><p><strong>Connexion réelle :</strong> Authorization Code + PKCE S256.</p><p><strong>Zéro privilège implicite :</strong> une identité inconnue reste sans droit.</p></div>${oidcConfig ? '<a class="button" href="/auth/infomaniak/start">Continuer avec Infomaniak</a>' : '<p>Le fournisseur OIDC n’est pas encore configuré.</p>'}`;
       writeHtml(response, 200, "Accueil", content);
+      return;
+    }
+    const identityStateRoot = url.pathname === "/admin/identities";
+    const identitySuspendRoute = url.pathname === "/admin/identities/suspend";
+    if (identityStateRoot || identitySuspendRoute) {
+      let session;
+      try {
+        if (!oidcConfig) throw new Error("oidc_not_configured");
+        session = await openCurrentSession(request);
+      } catch {
+        writeHtml(response, 401, "Connexion requise", '<h1>Connexion requise</h1><p>Une session NSK valide est nécessaire pour administrer le cycle de vie des identités.</p><a class="button" href="/">Se connecter</a>');
+        return;
+      }
+      if (session.status !== "authenticated" || !session.identityId || !session.csrf ||
+          !session.centralSession?.sessionId) {
+        writeHtml(response, 401, "Nouvelle connexion requise", '<h1>Nouvelle connexion requise</h1><p>Renouvelle ta session afin d’accéder à l’administration sécurisée.</p><a class="button" href="/">Retour</a>');
+        return;
+      }
+      let access;
+      try {
+        access = await authorizeIdentitySuspensionAdministration(repository, session.identityId);
+      } catch {
+        writeHtml(response, 503, "Identités indisponibles", '<h1>Administration momentanément indisponible</h1><p>Le pouvoir de suspension ne peut pas être vérifié. Aucune identité n’a été modifiée.</p><a class="button" href="/">Retour</a>');
+        return;
+      }
+      if (!access.allowed) {
+        writeHtml(response, 403, "Accès refusé", '<h1>Accès refusé</h1><p>Cette identité ne possède pas la permission dédiée à la suspension des identités. Aucun droit implicite n’est accordé.</p><a class="button" href="/">Retour</a>');
+        return;
+      }
+      if (!identityStateManagement) {
+        writeHtml(response, 503, "Identités indisponibles", '<h1>Identités momentanément indisponibles</h1><p>Aucune identité n’a été modifiée.</p><a class="button" href="/">Retour</a>');
+        return;
+      }
+      if (identityStateRoot && request.method === "GET") {
+        try {
+          const identities = await identityStateManagement.listActive({ operatorIdentityId: session.identityId });
+          const actionToken = (target) => seal({
+            operatorIdentityId: session.identityId,
+            targetIdentityId: target.identityId,
+            expectedStatus: target.status,
+            expiresAt: Date.now() + 10 * 60_000,
+          }, oidcConfig.sessionSecret, "identity-state-action");
+          writeHtml(response, 200, "Cycle de vie des identités", renderIdentityStateAdministration(identities, session.csrf, actionToken));
+        } catch {
+          writeHtml(response, 503, "Identités indisponibles", '<h1>Identités momentanément indisponibles</h1><p>Le registre n’a pas pu être consulté. Aucune identité n’a été modifiée.</p><a class="button" href="/">Retour</a>');
+        }
+        return;
+      }
+      if (identitySuspendRoute && request.method === "POST") {
+        try {
+          const form = await readForm(request, maxBodyBytes);
+          if (!safeEqual(form.get("csrf"), session.csrf)) throw new HttpInputError(403, "invalid_csrf");
+          let target;
+          try { target = open(form.get("target"), oidcConfig.sessionSecret, "identity-state-action"); }
+          catch { throw new HttpInputError(400, "invalid_identity_target"); }
+          if (target.operatorIdentityId !== session.identityId || !validIdentityStateTarget(target)) {
+            throw new HttpInputError(400, "invalid_identity_target");
+          }
+          const justification = String(form.get("justification") ?? "").trim();
+          if (justification.length < 20 || justification.length > 500) {
+            throw new HttpInputError(400, "invalid_justification");
+          }
+          await identityStateManagement.suspend({
+            operatorIdentityId: session.identityId,
+            targetIdentityId: target.targetIdentityId,
+            expectedStatus: target.expectedStatus,
+            justification,
+          });
+          redirect(response, "/admin/identities");
+        } catch (error) {
+          const status = error instanceof HttpInputError || error instanceof IdentityStateError ? error.status : 503;
+          writeHtml(response, status, "Identité non modifiée", '<h1>Identité non modifiée</h1><p>La demande est invalide, périmée, hors périmètre ou concurrente. Aucune suspension partielle n’a été conservée.</p><a class="button" href="/admin/identities">Retour</a>');
+        }
+        return;
+      }
+      response.setHeader("allow", identityStateRoot ? "GET" : "POST");
+      writeJson(response, 405, { error: "method_not_allowed" });
       return;
     }
     const operatorSessionsRoot = url.pathname === "/admin/sessions";

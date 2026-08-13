@@ -220,6 +220,70 @@ export class TransactionalMemoryRepository {
       .map((item) => structuredClone(item));
   }
 
+  suspendIdentityAndRevokeSessions({ identity, expectedStatus, observedAt, identityAuditEvent, closures }) {
+    if (identity.status !== "suspended" || expectedStatus !== "active" ||
+        identityAuditEvent?.action !== "identity.suspended" ||
+        identityAuditEvent.subject_id !== identity.identityId) {
+      throw new Error("invalid identity suspension bundle");
+    }
+    const decisionTime = new Date(observedAt);
+    if (!Number.isFinite(decisionTime.valueOf())) throw new Error("invalid identity suspension time");
+    if (!Array.isArray(closures)) throw new Error("application session closures are required");
+    if (identityAuditEvent.previous_value?.status !== expectedStatus ||
+        identityAuditEvent.new_value?.status !== "suspended" ||
+        identityAuditEvent.new_value?.revoked_sessions !== closures.length) {
+      throw new Error("identity suspension audit does not match bundle");
+    }
+    const sessionIds = new Set();
+    for (const { record, auditEvent } of closures) {
+      if (record.identityId !== identity.identityId || auditEvent?.action !== "application_session.revoked") {
+        throw new Error("identity suspension session scope mismatch");
+      }
+      if (auditEvent.actor_id !== identityAuditEvent.actor_id ||
+          auditEvent.correlation_id !== identityAuditEvent.correlation_id ||
+          auditEvent.justification !== identityAuditEvent.justification ||
+          record.revocationReason !== identityAuditEvent.justification) {
+        throw new Error("identity suspension audit correlation mismatch");
+      }
+      assertApplicationSessionAudit(record, auditEvent, "application_session.revoked");
+      if (sessionIds.has(record.sessionId)) throw new Error("duplicate application session closure");
+      sessionIds.add(record.sessionId);
+    }
+    return this.#transaction((state) => {
+      const previousIdentity = state.identities.get(identity.identityId);
+      if (!previousIdentity || previousIdentity.status !== expectedStatus) {
+        throw new Error("stale identity status");
+      }
+      if (identity.email !== previousIdentity.email || identity.displayName !== previousIdentity.displayName) {
+        throw new Error("identity context is immutable during suspension");
+      }
+      const activeSessionIds = [...state.applicationSessions.values()]
+        .filter((record) => record.identityId === identity.identityId && !record.revokedAt &&
+          new Date(record.idleExpiresAt) > decisionTime && new Date(record.absoluteExpiresAt) > decisionTime)
+        .map((record) => record.sessionId).sort();
+      if (JSON.stringify(activeSessionIds) !== JSON.stringify([...sessionIds].sort())) {
+        throw new Error("identity active session set changed");
+      }
+      for (const { record, expectedVersion } of closures) {
+        const previous = state.applicationSessions.get(record.sessionId);
+        if (!previous || previous.identityId !== identity.identityId || previous.version !== expectedVersion ||
+            record.version !== expectedVersion + 1) throw new Error("stale application session version");
+        assertApplicationSessionImmutableContext(previous, record);
+        if (previous.lastSeenAt !== record.lastSeenAt || previous.idleExpiresAt !== record.idleExpiresAt ||
+            previous.revokedAt || !record.revokedAt || !record.revocationReason) {
+          throw new Error("invalid application session revocation");
+        }
+      }
+      state.identities.set(identity.identityId, structuredClone(identity));
+      this.#appendAudit(state, identityAuditEvent);
+      for (const { record, auditEvent } of closures) {
+        state.applicationSessions.set(record.sessionId, structuredClone(record));
+        this.#appendAudit(state, auditEvent);
+      }
+      return { identity: structuredClone(identity), revokedSessions: closures.length };
+    });
+  }
+
   listAllApplicationSessions() {
     return [...this.#applicationSessions.values()]
       .sort((left, right) =>

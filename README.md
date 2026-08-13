@@ -135,12 +135,18 @@ les autres sessions actives. Les cibles sont scellées, les mutations protégée
 contre la falsification et chaque fermeture est auditée ; voir
 `docs/LOT-51-GESTION-PERSONNELLE-SESSIONS.md`.
 
-Les étapes 1 à 6 sont désormais recettées en préproduction. Le lot 53 prépare la
-dernière étape de l’ADR-020 : une console de révocation opérateur protégée par la
-permission distincte `administration:sessions:revoke`, sans secret ni identifiant
-technique affiché, avec cible scellée, justification, contrôle de version et audit
-atomique. Son activation distante reste volontairement séparée ; voir
+Les sept étapes de l’ADR-020 sont désormais recettées en préproduction. Le lot 53
+a ouvert la révocation opérateur protégée par la permission distincte
+`administration:sessions:revoke`, sans secret ni identifiant technique affiché,
+avec cible scellée, justification, contrôle de version et audit atomique ; voir
 `docs/LOT-53-REVOCATION-OPERATEUR-SESSIONS.md`.
+
+Le lot 54 ferme localement la dette de cohérence restante : une suspension
+gouvernée passe l’identité à `suspended` et révoque toutes ses sessions actives
+dans une transaction unique. Le pouvoir `administration:identities:suspend`, la
+cible scellée, l’interdiction de l’auto-suspension et le rollback concurrent sont
+séparés des autres responsabilités ; voir
+`docs/LOT-54-SUSPENSION-ATOMIQUE-IDENTITES.md`.
 
 ## Prérequis et démarrage local
 
@@ -198,6 +204,7 @@ ne contient aucun secret réel. La production reste inchangée.
 - [`docs/LOT-50-FERMETURE-ANCIENNES-SESSIONS-PREPROD.md`](docs/LOT-50-FERMETURE-ANCIENNES-SESSIONS-PREPROD.md)
 - [`docs/LOT-51-GESTION-PERSONNELLE-SESSIONS.md`](docs/LOT-51-GESTION-PERSONNELLE-SESSIONS.md)
 - [`docs/LOT-53-REVOCATION-OPERATEUR-SESSIONS.md`](docs/LOT-53-REVOCATION-OPERATEUR-SESSIONS.md)
+- [`docs/LOT-54-SUSPENSION-ATOMIQUE-IDENTITES.md`](docs/LOT-54-SUSPENSION-ATOMIQUE-IDENTITES.md)
 - [`docs/ETAT-PREPROD-INFOMANIAK.md`](docs/ETAT-PREPROD-INFOMANIAK.md)
 - [`docs/CONFORMITE-NSES.md`](docs/CONFORMITE-NSES.md)
 - [`docs/CONTRAT-API-INTERNE.md`](docs/CONTRAT-API-INTERNE.md)
