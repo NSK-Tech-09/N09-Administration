@@ -3,6 +3,12 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 const schema = await readFile(new URL("./mariadb/schema.sql", import.meta.url), "utf8");
+const sessionMigration = await readFile(new URL("./mariadb/migrations/20260813-application-sessions.sql", import.meta.url), "utf8");
+const sessionChecks = await readFile(new URL("./mariadb/migrations/20260813-application-sessions-checks.sql", import.meta.url), "utf8");
+
+function normalizedSql(value) {
+  return value.replaceAll(/--[^\n]*/g, "").replaceAll(/\s+/g, " ").trim();
+}
 
 test("le registre applicatif porte retours, politique d’entrée et codes à usage unique", () => {
   assert.match(schema, /CREATE TABLE IF NOT EXISTS application_redirect_uris/);
@@ -25,6 +31,18 @@ test("le registre de sessions ne conserve jamais le secret brut", () => {
   assert.match(schema, /application_sessions_revocation CHECK/);
   const table = schema.match(/CREATE TABLE IF NOT EXISTS application_sessions[\s\S]*?ENGINE=InnoDB;/)?.[0] ?? "";
   assert.doesNotMatch(table, /session_secret|secret_value|raw_secret|cookie|access_token|refresh_token/i);
+});
+
+test("la migration de préproduction reproduit exactement le registre fusionné", () => {
+  const canonicalTable = schema.match(/CREATE TABLE IF NOT EXISTS application_sessions[\s\S]*?ENGINE=InnoDB;/)?.[0] ?? "";
+  const migrationTable = sessionMigration.match(/CREATE TABLE IF NOT EXISTS application_sessions[\s\S]*?ENGINE=InnoDB;/)?.[0] ?? "";
+  assert.equal(normalizedSql(migrationTable), normalizedSql(canonicalTable));
+  assert.match(sessionChecks, /information_schema\.tables/);
+  assert.match(sessionChecks, /information_schema\.columns/);
+  assert.match(sessionChecks, /information_schema\.statistics/);
+  assert.match(sessionChecks, /information_schema\.referential_constraints/);
+  assert.match(sessionChecks, /SELECT COUNT\(\*\) AS application_session_count\s+FROM application_sessions/);
+  assert.doesNotMatch(sessionChecks, /\b(?:INSERT|UPDATE|DELETE|DROP|ALTER|CREATE|TRUNCATE)\b/i);
 });
 
 test("le catalogue applicatif conserve chaque version sans secret", () => {
