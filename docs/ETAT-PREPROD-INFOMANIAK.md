@@ -456,3 +456,38 @@ La recette finale dans Chrome confirme que :
 
 L'isolation humaine réelle attendue après les lots 50 et 51 est donc validée.
 Aucune modification n'a été effectuée en production ni dans N09 – Énergie.
+
+## Lot 53 — révocation opérateur des sessions déployée
+
+Le **13 août 2026**, le commit canonique
+`0e01ac1a4756704f7ea2fd41031912e67491df10` a été déployé dans la release
+immuable `releases/0e01ac1`. L'archive complète porte l'empreinte SHA-256
+`bc7a51dfa2973d2cbb55b96fd30926968f8aa3cd9e24641b8e69cf836aec99be` ;
+**183 fichiers**, **223 tests Node.js** et **63 tests Python** ont été validés
+sur Infomaniak avant le gel du dossier.
+
+La sauvegarde préalable
+`/srv/customer/backups/preprod-admin/lot53-pre-operator-session-revocation-20260813T173642Z.sql.gz`
+pèse **28 412 octets** et porte l'empreinte
+`0b56debebfe68f2f3304b5a8031fda46f9ba4313a732bceee67cc64c619b8892`.
+Elle est valide au format gzip et sa fin d'export est présente. Les
+déclencheurs, refusés au compte d'exécution sans privilège `TRIGGER`, restent
+versionnés dans le schéma de la release et n'ont pas été modifiés.
+
+Le catalogue Administration v4 est publié avec l'empreinte
+`4598c3412bba808c149abf9bf83241c26037fdf61ce560320accd315c1c94f9a`.
+La route `/admin/sessions` a d'abord refusé l'identité principale faute de
+permission, puis l'amorçage préproduction audité a ajouté le seul rôle
+`session-revocation-administrator` à Fred TRAVERS.
+
+La recette réelle a révoqué une session N09 – Suivi des tâches distincte avec
+justification. Tâches a refusé cette session à la requête suivante et une
+reconnexion SSO propre a recréé une session saine. La session Administration
+courante n'était pas révocable depuis la console. L'audit final contient la
+révocation en succès et `verifyAuditChain()` renvoie `true`.
+
+Les contrôles local et public de `/health` répondent `200` avec
+`{"status":"ok"}`. Le registre central, l'exploitation des notifications et
+N09 – Suivi des tâches restent opérationnels ; tous les canaux externes sont
+fermés. `releases/16399df` et `releases/dbf951a` restent disponibles pour le
+retour arrière. Aucun changement n'a touché la production ni N09 – Énergie.
