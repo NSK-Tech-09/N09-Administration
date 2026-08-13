@@ -141,12 +141,19 @@ a ouvert la révocation opérateur protégée par la permission distincte
 avec cible scellée, justification, contrôle de version et audit atomique ; voir
 `docs/LOT-53-REVOCATION-OPERATEUR-SESSIONS.md`.
 
-Le lot 54 ferme localement la dette de cohérence restante : une suspension
+Le lot 54 ferme en préproduction la dette de cohérence restante : une suspension
 gouvernée passe l’identité à `suspended` et révoque toutes ses sessions actives
 dans une transaction unique. Le pouvoir `administration:identities:suspend`, la
 cible scellée, l’interdiction de l’auto-suspension et le rollback concurrent sont
 séparés des autres responsabilités ; voir
 `docs/LOT-54-SUSPENSION-ATOMIQUE-IDENTITES.md`.
+
+Le lot 55 complète localement ce cycle sans ressusciter le passé : une identité
+suspendue peut être réactivée par le pouvoir distinct
+`administration:identities:reactivate`, mais aucune session révoquée ou expirée
+n’est restaurée. La transition est atomique, auditée, refusée si une session
+active subsiste et impose une nouvelle authentification ; voir
+`docs/LOT-55-REACTIVATION-GOUVERNEE-IDENTITES.md`.
 
 ## Prérequis et démarrage local
 
@@ -205,6 +212,7 @@ ne contient aucun secret réel. La production reste inchangée.
 - [`docs/LOT-51-GESTION-PERSONNELLE-SESSIONS.md`](docs/LOT-51-GESTION-PERSONNELLE-SESSIONS.md)
 - [`docs/LOT-53-REVOCATION-OPERATEUR-SESSIONS.md`](docs/LOT-53-REVOCATION-OPERATEUR-SESSIONS.md)
 - [`docs/LOT-54-SUSPENSION-ATOMIQUE-IDENTITES.md`](docs/LOT-54-SUSPENSION-ATOMIQUE-IDENTITES.md)
+- [`docs/LOT-55-REACTIVATION-GOUVERNEE-IDENTITES.md`](docs/LOT-55-REACTIVATION-GOUVERNEE-IDENTITES.md)
 - [`docs/ETAT-PREPROD-INFOMANIAK.md`](docs/ETAT-PREPROD-INFOMANIAK.md)
 - [`docs/CONFORMITE-NSES.md`](docs/CONFORMITE-NSES.md)
 - [`docs/CONTRAT-API-INTERNE.md`](docs/CONTRAT-API-INTERNE.md)

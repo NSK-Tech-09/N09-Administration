@@ -284,6 +284,37 @@ export class TransactionalMemoryRepository {
     });
   }
 
+  reactivateIdentity({ identity, expectedStatus, observedAt, identityAuditEvent }) {
+    if (identity.status !== "active" || expectedStatus !== "suspended" ||
+        identityAuditEvent?.action !== "identity.reactivated" ||
+        identityAuditEvent.subject_id !== identity.identityId ||
+        identityAuditEvent.previous_value?.status !== expectedStatus ||
+        identityAuditEvent.new_value?.status !== "active" ||
+        identityAuditEvent.new_value?.active_sessions !== 0 ||
+        identityAuditEvent.new_value?.restored_sessions !== 0) {
+      throw new Error("invalid identity reactivation bundle");
+    }
+    const decisionTime = new Date(observedAt);
+    if (!Number.isFinite(decisionTime.valueOf())) throw new Error("invalid identity reactivation time");
+    return this.#transaction((state) => {
+      const previousIdentity = state.identities.get(identity.identityId);
+      if (!previousIdentity || previousIdentity.status !== expectedStatus) {
+        throw new Error("stale identity status");
+      }
+      if (identity.email !== previousIdentity.email || identity.displayName !== previousIdentity.displayName) {
+        throw new Error("identity context is immutable during reactivation");
+      }
+      const activeSessions = [...state.applicationSessions.values()].filter((record) =>
+        record.identityId === identity.identityId && !record.revokedAt &&
+        new Date(record.idleExpiresAt) > decisionTime && new Date(record.absoluteExpiresAt) > decisionTime
+      );
+      if (activeSessions.length) throw new Error("suspended identity still has active sessions");
+      state.identities.set(identity.identityId, structuredClone(identity));
+      this.#appendAudit(state, identityAuditEvent);
+      return structuredClone(identity);
+    });
+  }
+
   listAllApplicationSessions() {
     return [...this.#applicationSessions.values()]
       .sort((left, right) =>

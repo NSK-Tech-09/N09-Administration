@@ -181,7 +181,9 @@ L’étape 7 est mise en œuvre par le lot 53 avec un périmètre global explici
 attribué, une cible scellée, une justification obligatoire et un audit atomique.
 Son activation et sa recette en préproduction sont consignées dans
 `LOT-53-REVOCATION-OPERATEUR-SESSIONS.md`. La suspension atomique d’une identité
-et de toutes ses sessions est mise en œuvre séparément par le lot 54.
+et de toutes ses sessions est mise en œuvre séparément par le lot 54. Le lot 55
+complète ce cycle par une réactivation gouvernée qui ne restaure jamais les
+sessions révoquées ou expirées et exige une nouvelle authentification.
 
 Chaque étape exige une sauvegarde vérifiée, une migration additive, une release
 immuable, une recette serveur et un retour arrière documenté. Aucun lot ne doit
@@ -197,6 +199,7 @@ Les tests automatisés doivent couvrir au minimum :
 - révocation de la session actuelle, d’une autre session et de toutes les
   autres sessions ;
 - suspension d’une identité et modification de droits pendant une session ;
+- réactivation sans résurrection d’une session antérieure ;
 - isolation entre identités, applications et périmètres ;
 - refus de la révocation opérateur sans permission, hors périmètre ou sans
   justification ;

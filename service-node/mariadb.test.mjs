@@ -501,3 +501,64 @@ test("suspend l’identité et révoque ses sessions MariaDB dans une transactio
   assert.equal(calls.filter((call) => call === "commit").length, 1);
   assert.equal(calls.at(-1), "release");
 });
+
+test("réactive l’identité MariaDB sans restaurer de session et avec audit atomique", async () => {
+  const reactivated = { ...identity, status: "active" };
+  const identityAuditEvent = createAuditEvent({
+    action: "identity.reactivated", result: "success", source: "tests",
+    correlationId: "identity-reactivation-atomic", actorId: identity.identityId,
+    subjectId: identity.identityId, previousValue: { status: "suspended" },
+    newValue: { status: "active", active_sessions: 0, restored_sessions: 0 },
+    justification: "Réactivation gouvernée après nouvelle décision humaine",
+  });
+  const calls = [];
+  const connection = {
+    beginTransaction: async () => calls.push("begin"), commit: async () => calls.push("commit"),
+    rollback: async () => calls.push("rollback"), release: () => calls.push("release"),
+    execute: async (sql, values = []) => {
+      calls.push({ sql, values });
+      if (sql.startsWith("SELECT status FROM identities")) return [[{ status: "suspended" }]];
+      if (sql.includes("SELECT session_id FROM application_sessions")) return [[]];
+      if (sql.startsWith("SELECT current_hash")) return [[{ current_hash: "" }]];
+      return [{ affectedRows: 1 }];
+    },
+  };
+  await new MariaDbRepository({ getConnection: async () => connection }).reactivateIdentity({
+    identity: reactivated, expectedStatus: "suspended",
+    observedAt: new Date("2026-08-13T05:00:00Z"), identityAuditEvent,
+  });
+  assert.equal(calls.filter((call) => typeof call === "object" && call.sql.includes("UPDATE identities SET status = 'active'")).length, 1);
+  assert.equal(calls.filter((call) => typeof call === "object" && call.sql.includes("SET revoked_at")).length, 0);
+  assert.equal(calls.filter((call) => typeof call === "object" && call.sql.includes("INSERT INTO audit_events")).length, 1);
+  assert.equal(calls.filter((call) => call === "begin").length, 1);
+  assert.equal(calls.filter((call) => call === "commit").length, 1);
+  assert.equal(calls.at(-1), "release");
+});
+
+test("annule la réactivation MariaDB si une session active subsiste", async () => {
+  const identityAuditEvent = createAuditEvent({
+    action: "identity.reactivated", result: "success", source: "tests",
+    correlationId: "identity-reactivation-rejected", actorId: identity.identityId,
+    subjectId: identity.identityId, previousValue: { status: "suspended" },
+    newValue: { status: "active", active_sessions: 0, restored_sessions: 0 },
+    justification: "Réactivation refusée car une session active subsiste",
+  });
+  const calls = [];
+  const connection = {
+    beginTransaction: async () => calls.push("begin"), commit: async () => calls.push("commit"),
+    rollback: async () => calls.push("rollback"), release: () => calls.push("release"),
+    execute: async (sql, values = []) => {
+      calls.push({ sql, values });
+      if (sql.startsWith("SELECT status FROM identities")) return [[{ status: "suspended" }]];
+      if (sql.includes("SELECT session_id FROM application_sessions")) return [[{ session_id: "still-active" }]];
+      return [{ affectedRows: 1 }];
+    },
+  };
+  await assert.rejects(new MariaDbRepository({ getConnection: async () => connection }).reactivateIdentity({
+    identity: { ...identity, status: "active" }, expectedStatus: "suspended",
+    observedAt: new Date("2026-08-13T05:00:00Z"), identityAuditEvent,
+  }), /still has active sessions/);
+  assert.equal(calls.includes("rollback"), true);
+  assert.equal(calls.some((call) => typeof call === "object" && call.sql.includes("UPDATE identities")), false);
+  assert.equal(calls.at(-1), "release");
+});

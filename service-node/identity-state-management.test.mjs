@@ -8,8 +8,11 @@ import {
 } from "./application-session.mjs";
 import { ADMIN_APPLICATION_ID } from "./identity-link-admin.mjs";
 import {
+  authorizeIdentityLifecycleAdministration,
+  authorizeIdentityReactivationAdministration,
   authorizeIdentitySuspensionAdministration,
   createIdentityStateManagement,
+  IDENTITY_REACTIVATION_PERMISSION,
   IDENTITY_SUSPENSION_PERMISSION,
   IdentityStateError,
 } from "./identity-state-management.mjs";
@@ -28,7 +31,7 @@ function audit(action, changes = {}) {
   });
 }
 
-function seededRepository({ permission = IDENTITY_SUSPENSION_PERMISSION, scopeType = null } = {}) {
+function seededRepository({ permissions = [IDENTITY_SUSPENSION_PERMISSION], scopeType = null } = {}) {
   const repository = new TransactionalMemoryRepository();
   for (const [identityId, displayName] of [[operatorId, "Opérateur"], [targetId, "Personne cible"]]) {
     repository.saveIdentity({
@@ -44,7 +47,7 @@ function seededRepository({ permission = IDENTITY_SUSPENSION_PERMISSION, scopeTy
   repository.saveAssignment({
     assignmentId: "10000000-0000-4000-8000-000000000054",
     subjectId: operatorId, applicationId: ADMIN_APPLICATION_ID,
-    roleId: "identity-suspension-administrator", permissions: [permission],
+    roleId: "identity-lifecycle-test-administrator", permissions,
     scopeType, scopeId: scopeType ? "hors-perimetre-global" : null,
     conditions: [], status: "active", validFrom: null, validUntil: null,
     reason: "Pouvoir séparé pour le test", decidedBy: null, inheritedFromGroup: null, version: 1,
@@ -67,11 +70,23 @@ function addSession(repository, { sessionId, applicationId = "n09-suivi-taches",
 test("autorise uniquement le pouvoir de suspension dans le périmètre global", async () => {
   assert.equal((await authorizeIdentitySuspensionAdministration(seededRepository(), operatorId, now)).allowed, true);
   assert.equal((await authorizeIdentitySuspensionAdministration(
-    seededRepository({ permission: "administration:sessions:revoke" }), operatorId, now,
+    seededRepository({ permissions: ["administration:sessions:revoke"] }), operatorId, now,
   )).allowed, false);
   assert.equal((await authorizeIdentitySuspensionAdministration(
     seededRepository({ scopeType: "site" }), operatorId, now,
   )).reasonCode, "scope_mismatch");
+});
+
+test("sépare strictement les pouvoirs de suspension et de réactivation", async () => {
+  const suspensionOnly = seededRepository();
+  assert.equal((await authorizeIdentitySuspensionAdministration(suspensionOnly, operatorId, now)).allowed, true);
+  assert.equal((await authorizeIdentityReactivationAdministration(suspensionOnly, operatorId, now)).allowed, false);
+  const reactivationOnly = seededRepository({ permissions: [IDENTITY_REACTIVATION_PERMISSION] });
+  assert.equal((await authorizeIdentitySuspensionAdministration(reactivationOnly, operatorId, now)).allowed, false);
+  assert.equal((await authorizeIdentityReactivationAdministration(reactivationOnly, operatorId, now)).allowed, true);
+  assert.deepEqual(await authorizeIdentityLifecycleAdministration(reactivationOnly, operatorId, now), {
+    allowed: true, canSuspend: false, canReactivate: true, reasonCode: "allowed",
+  });
 });
 
 test("suspend l’identité et révoque toutes ses sessions actives dans une seule chaîne d’audit", async () => {
@@ -129,6 +144,7 @@ test("annule également la suspension si une session change concurremment", asyn
     listAssignments: (...args) => repository.listAssignments(...args),
     listIdentities: (...args) => repository.listIdentities(...args),
     listApplicationSessions: (...args) => repository.listApplicationSessions(...args),
+    reactivateIdentity: (...args) => repository.reactivateIdentity(...args),
     suspendIdentityAndRevokeSessions: (bundle) => {
       const touched = touchApplicationSession(original, { now: new Date("2026-08-13T11:45:00.000Z") });
       repository.touchApplicationSession(touched, original.version);
@@ -155,6 +171,7 @@ test("annule la suspension si une nouvelle session apparaît pendant la décisio
     listAssignments: (...args) => repository.listAssignments(...args),
     listIdentities: (...args) => repository.listIdentities(...args),
     listApplicationSessions: (...args) => repository.listApplicationSessions(...args),
+    reactivateIdentity: (...args) => repository.reactivateIdentity(...args),
     suspendIdentityAndRevokeSessions: (bundle) => {
       addSession(repository, {
         sessionId: "00000000-0000-4000-8000-000000000066",
@@ -170,5 +187,53 @@ test("annule la suspension si une nouvelle session apparaît pendant la décisio
     justification: "Suspension interrompue par une nouvelle session concurrente",
   }), /active session set changed/);
   assert.equal(repository.getIdentity(targetId).status, "active");
+  assert.equal(repository.verifyAuditChain(), true);
+});
+
+test("réactive une identité suspendue sans restaurer ses anciennes sessions", async () => {
+  const repository = seededRepository({
+    permissions: [IDENTITY_SUSPENSION_PERMISSION, IDENTITY_REACTIVATION_PERMISSION],
+  });
+  const activeSession = addSession(repository, { sessionId: "00000000-0000-4000-8000-000000000067" });
+  const expiredSession = addSession(repository, {
+    sessionId: "00000000-0000-4000-8000-000000000069",
+    issuedAt: new Date("2026-08-13T06:00:00.000Z"),
+  });
+  const management = createIdentityStateManagement({ repository, now: () => now });
+  await management.suspend({
+    operatorIdentityId: operatorId, targetIdentityId: targetId, expectedStatus: "active",
+    justification: "Suspension préalable pour vérifier une réactivation sans résurrection",
+  });
+  const revokedBefore = repository.getApplicationSession(activeSession.sessionId);
+  assert.ok(revokedBefore.revokedAt);
+  const result = await management.reactivate({
+    operatorIdentityId: operatorId, targetIdentityId: targetId, expectedStatus: "suspended",
+    justification: "Retour autorisé après une nouvelle décision humaine explicitement contrôlée",
+    correlationId: "lot55-correlation",
+  });
+  assert.equal(result.restoredSessions, 0);
+  assert.equal(repository.getIdentity(targetId).status, "active");
+  assert.deepEqual(repository.getApplicationSession(activeSession.sessionId), revokedBefore);
+  assert.equal(repository.getApplicationSession(expiredSession.sessionId).revokedAt, null);
+  assert.ok(new Date(repository.getApplicationSession(expiredSession.sessionId).absoluteExpiresAt) < now);
+  const event = repository.auditSnapshot().at(-1).event;
+  assert.equal(event.action, "identity.reactivated");
+  assert.equal(event.correlation_id, "lot55-correlation");
+  assert.deepEqual(event.new_value, { status: "active", active_sessions: 0, restored_sessions: 0 });
+  assert.equal(repository.verifyAuditChain(), true);
+});
+
+test("refuse la réactivation si une session active existe encore", async () => {
+  const repository = seededRepository({ permissions: [IDENTITY_REACTIVATION_PERMISSION] });
+  repository.saveIdentity({ ...repository.getIdentity(targetId), status: "suspended" }, audit("identity.suspended", {
+    actorId: operatorId, subjectId: targetId,
+    previousValue: { status: "active" }, newValue: { status: "suspended" },
+  }));
+  addSession(repository, { sessionId: "00000000-0000-4000-8000-000000000068" });
+  await assert.rejects(createIdentityStateManagement({ repository, now: () => now }).reactivate({
+    operatorIdentityId: operatorId, targetIdentityId: targetId, expectedStatus: "suspended",
+    justification: "Réactivation volontairement refusée à cause d’une session encore active",
+  }), /suspended identity still has active sessions/);
+  assert.equal(repository.getIdentity(targetId).status, "suspended");
   assert.equal(repository.verifyAuditChain(), true);
 });

@@ -3,8 +3,14 @@ import test from "node:test";
 import { publishAdministrationAccessCatalog } from "./administration-access-catalog.mjs";
 import { createAuditEvent } from "./audit.mjs";
 import { ADMIN_APPLICATION_ID } from "./identity-link-admin.mjs";
-import { bootstrapIdentitySuspensionAdministrator } from "./identity-state-admin-bootstrap.mjs";
-import { authorizeIdentitySuspensionAdministration } from "./identity-state-management.mjs";
+import {
+  bootstrapIdentityReactivationAdministrator,
+  bootstrapIdentitySuspensionAdministrator,
+} from "./identity-state-admin-bootstrap.mjs";
+import {
+  authorizeIdentityReactivationAdministration,
+  authorizeIdentitySuspensionAdministration,
+} from "./identity-state-management.mjs";
 import { TransactionalMemoryRepository } from "./repository.mjs";
 
 const identity = {
@@ -40,19 +46,26 @@ test("refuse l’amorçage sans activation explicite ou hors préproduction", as
   await assert.rejects(bootstrapIdentitySuspensionAdministrator(repository, {
     ...target, database: "n09_admin_prod",
   }), /preproduction/);
+  await assert.rejects(bootstrapIdentityReactivationAdministrator(repository, {
+    ...target, allowBootstrap: "false",
+  }), /explicitly enabled/);
 });
 
-test("crée le pouvoir global séparé après publication du catalogue v5 et reste idempotent", async () => {
+test("crée les deux pouvoirs par deux amorçages explicites séparés et reste idempotent", async () => {
   const repository = repositoryWithAdministration();
   await publishAdministrationAccessCatalog(repository, { database: "n09_admin_preprod", allowBootstrap: "true" });
   const before = repository.auditCount();
   assert.deepEqual((await bootstrapIdentitySuspensionAdministrator(repository, target)).created, ["assignment"]);
   assert.equal((await authorizeIdentitySuspensionAdministration(repository, identity.identityId)).allowed, true);
+  assert.equal((await authorizeIdentityReactivationAdministration(repository, identity.identityId)).allowed, false);
+  assert.deepEqual((await bootstrapIdentityReactivationAdministrator(repository, target)).created, ["assignment"]);
+  assert.equal((await authorizeIdentityReactivationAdministration(repository, identity.identityId)).allowed, true);
   assert.deepEqual((await bootstrapIdentitySuspensionAdministrator(repository, target)).created, []);
-  assert.equal(repository.auditCount(), before + 1);
+  assert.deepEqual((await bootstrapIdentityReactivationAdministrator(repository, target)).created, []);
+  assert.equal(repository.auditCount(), before + 2);
   assert.equal(repository.verifyAuditChain(), true);
 });
 
-test("refuse l’affectation tant que le catalogue v5 n’est pas publié", async () => {
-  await assert.rejects(bootstrapIdentitySuspensionAdministrator(repositoryWithAdministration(), target), /catalog v5/);
+test("refuse l’affectation tant que le catalogue v6 n’est pas publié", async () => {
+  await assert.rejects(bootstrapIdentityReactivationAdministrator(repositoryWithAdministration(), target), /catalog v6/);
 });
