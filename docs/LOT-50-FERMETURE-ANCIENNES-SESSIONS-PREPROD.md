@@ -104,8 +104,12 @@ autonome.
 - l'ancienne session Administration a été refusée, puis une nouvelle
   authentification Infomaniak a abouti ; la nouvelle session Tâches donne accès
   aux **165 tâches** selon les droits recalculés ;
-- l'audit central reste valide après la recette : **11 créations**, **2
-  expirations** et **5 révocations** ;
+- deux sessions Suivi des tâches réelles ont été fermées en une seule opération
+  depuis Administration ; la session Administration courante a été préservée,
+  les cookies Tâches ont été refusés au contrôle suivant et une session saine a
+  été recréée ;
+- l'audit central reste valide après la recette : **13 créations**, **2
+  expirations** et **7 révocations** ;
 - la file locale de révocation Tâches contient **0** élément en attente ;
 - état laissé utilisable : une session active Administration et une session
   active Suivi des tâches ;
