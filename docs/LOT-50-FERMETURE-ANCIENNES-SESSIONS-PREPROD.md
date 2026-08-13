@@ -1,3 +1,4 @@
+
 # Lot 50 — Fermeture des anciennes sessions en préproduction
 
 Statut : **déployé et recetté en préproduction**
@@ -119,4 +120,3 @@ autonome.
 - N09 – Suivi des tâches : `LOT-41-FERMETURE-ANCIENNES-SESSIONS.md`
 - `ARC-008`, `ARC-010`, `ARC-012`, `ARC-013`, `ARC-016`
 - `ERG-016`, `ERG-032`, `TST-001`
-
