@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { httpConfigFromEnvironment, mariaDbConfigFromEnvironment } from "./runtime-config.mjs";
+import {
+  applicationSessionShadowConfigFromEnvironment, httpConfigFromEnvironment, mariaDbConfigFromEnvironment,
+} from "./runtime-config.mjs";
 
 const databaseEnvironment = {
   N09_DB_HOST: "database.internal",
@@ -30,4 +32,29 @@ test("maintient le transport sur la boucle locale avant OIDC", () => {
   }), { host: "0.0.0.0", port: 3200 });
   assert.throws(() => httpConfigFromEnvironment({ N09_HTTP_HOST: "0.0.0.0" }), /trusted reverse proxy/);
   assert.throws(() => httpConfigFromEnvironment({ N09_HTTP_PORT: "70000" }), /port/);
+});
+
+test("ferme l'observation des sessions par défaut et la borne à la préproduction", () => {
+  assert.deepEqual(applicationSessionShadowConfigFromEnvironment({}), {
+    mode: "disabled", applicationId: "n09-administration",
+    idleTtlMs: 1_800_000, absoluteTtlMs: 28_800_000, touchIntervalMs: 300_000,
+  });
+  assert.deepEqual(applicationSessionShadowConfigFromEnvironment({
+    N09_ENVIRONMENT: "preprod", N09_SESSION_SHADOW_MODE: "observe",
+    N09_SESSION_SHADOW_IDLE_TTL_MS: "600000",
+    N09_SESSION_SHADOW_ABSOLUTE_TTL_MS: "3600000",
+    N09_SESSION_SHADOW_TOUCH_INTERVAL_MS: "120000",
+  }), {
+    mode: "observe", applicationId: "n09-administration",
+    idleTtlMs: 600_000, absoluteTtlMs: 3_600_000, touchIntervalMs: 120_000,
+  });
+  assert.throws(() => applicationSessionShadowConfigFromEnvironment({
+    N09_ENVIRONMENT: "production", N09_SESSION_SHADOW_MODE: "observe",
+  }), /restricted to preprod/);
+  assert.throws(() => applicationSessionShadowConfigFromEnvironment({
+    N09_SESSION_SHADOW_MODE: "enforce",
+  }), /disabled or observe/);
+  assert.throws(() => applicationSessionShadowConfigFromEnvironment({
+    N09_SESSION_SHADOW_IDLE_TTL_MS: "300000", N09_SESSION_SHADOW_TOUCH_INTERVAL_MS: "300000",
+  }), /lifetime/);
 });

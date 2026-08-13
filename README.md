@@ -108,6 +108,14 @@ un verrou singleton dans MariaDB. La console conserve seulement l’état borné
 dernier cycle, sans charge métier ni identité technique ; voir
 `docs/ADR-019-TRAITEMENT-AUTONOME-NOTIFICATIONS.md`.
 
+Le registre de sessions entre maintenant dans sa phase d'observation locale.
+Lorsqu'elle sera explicitement activée en préproduction, une nouvelle connexion
+rattachée d'Administration pourra créer une session centrale et comparer son
+état en arrière-plan. Le cookie actuel restera seul opposable : absence,
+divergence, expiration, révocation ou panne du registre ne modifieront encore
+aucun accès. Les mesures structurées excluent identités, références, secrets,
+empreintes et cookies ; voir `docs/LOT-45-OBSERVATION-INOPPOSABLE-SESSIONS.md`.
+
 ## Prérequis et démarrage local
 
 - Python 3.11 ou supérieur ;
@@ -153,6 +161,8 @@ ne contient aucun secret réel. La production reste inchangée.
 - [`docs/ADR-017-MATERIALISATION-CENTRE-NOTIFICATIONS.md`](docs/ADR-017-MATERIALISATION-CENTRE-NOTIFICATIONS.md)
 - [`docs/ADR-018-OBSERVABILITE-NOTIFICATIONS.md`](docs/ADR-018-OBSERVABILITE-NOTIFICATIONS.md)
 - [`docs/ADR-019-TRAITEMENT-AUTONOME-NOTIFICATIONS.md`](docs/ADR-019-TRAITEMENT-AUTONOME-NOTIFICATIONS.md)
+- [`docs/ADR-020-SESSIONS-APPLICATIVES-REVOCABLES.md`](docs/ADR-020-SESSIONS-APPLICATIVES-REVOCABLES.md)
+- [`docs/LOT-45-OBSERVATION-INOPPOSABLE-SESSIONS.md`](docs/LOT-45-OBSERVATION-INOPPOSABLE-SESSIONS.md)
 - [`docs/ETAT-PREPROD-INFOMANIAK.md`](docs/ETAT-PREPROD-INFOMANIAK.md)
 - [`docs/CONFORMITE-NSES.md`](docs/CONFORMITE-NSES.md)
 - [`docs/CONTRAT-API-INTERNE.md`](docs/CONTRAT-API-INTERNE.md)
