@@ -112,10 +112,16 @@ export function assessApplicationSession(record, {
     return Object.freeze({ allowed: false, reasonCode: "session_secret_invalid" });
   }
   if (record.revokedAt) return Object.freeze({ allowed: false, reasonCode: "session_revoked" });
-  if (new Date(record.absoluteExpiresAt) <= currentTime) {
+  const absoluteExpiry = new Date(record.absoluteExpiresAt);
+  const idleExpiry = new Date(record.idleExpiresAt);
+  if (!Number.isFinite(absoluteExpiry.valueOf()) || !Number.isFinite(idleExpiry.valueOf()) ||
+      idleExpiry > absoluteExpiry) {
+    return Object.freeze({ allowed: false, reasonCode: "session_record_invalid" });
+  }
+  if (absoluteExpiry <= currentTime) {
     return Object.freeze({ allowed: false, reasonCode: "session_absolute_expired" });
   }
-  if (new Date(record.idleExpiresAt) <= currentTime) {
+  if (idleExpiry <= currentTime) {
     return Object.freeze({ allowed: false, reasonCode: "session_idle_expired" });
   }
   return Object.freeze({ allowed: true, reasonCode: "session_active" });

@@ -61,6 +61,19 @@ test("distingue expiration d’inactivité, expiration absolue et révocation", 
   assert.equal(assessApplicationSession(revoked, { ...request, now: new Date("2026-08-13T03:11:00Z") }).reasonCode, "session_revoked");
 });
 
+test("ferme l’accès si les échéances persistées sont invalides", () => {
+  const { credential, record } = activeSession();
+  const request = { ...credential, identityId: record.identityId, applicationId: record.applicationId, now };
+  assert.equal(
+    assessApplicationSession({ ...record, idleExpiresAt: "date-invalide" }, request).reasonCode,
+    "session_record_invalid",
+  );
+  assert.equal(
+    assessApplicationSession({ ...record, idleExpiresAt: "2026-08-13T08:00:00Z" }, request).reasonCode,
+    "session_record_invalid",
+  );
+});
+
 test("prolonge l’inactivité sans dépasser l’échéance absolue", () => {
   const { record } = activeSession({ idleTtlMs: 3 * 60 * 60_000, absoluteTtlMs: 4 * 60 * 60_000 });
   const touched = touchApplicationSession(record, { now: new Date("2026-08-13T05:30:00.000Z") });

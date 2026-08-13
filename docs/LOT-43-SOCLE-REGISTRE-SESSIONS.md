@@ -38,6 +38,7 @@ La suite complète de N09 – Administration réussit le 13 août 2026 :
 - refus des durées incohérentes ou supérieures au plafond ;
 - isolation identité/application ;
 - refus après inactivité, échéance absolue ou révocation ;
+- refus fermé d’un enregistrement dont les échéances sont invalides ;
 - prolongation sans dépassement de la durée absolue ;
 - contrôle structurel du schéma MariaDB.
 
