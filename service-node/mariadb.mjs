@@ -605,6 +605,14 @@ export class MariaDbRepository {
     return rows.map(mapApplicationSession);
   }
 
+  async listAllApplicationSessions() {
+    const [rows] = await this.pool.execute(
+      `SELECT * FROM application_sessions
+       ORDER BY last_seen_at DESC, session_id`,
+    );
+    return rows.map(mapApplicationSession);
+  }
+
   async touchApplicationSession(record, expectedVersion) {
     if (record.version !== expectedVersion + 1) throw new Error("stale application session version");
     return this.#transaction(async (connection) => {

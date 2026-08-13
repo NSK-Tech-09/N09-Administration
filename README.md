@@ -122,18 +122,25 @@ releases immuables, paliers `issue` puis `enforce`, recettes et retours arrière
 sans suppression de preuve ; voir
 `docs/LOT-49-DEPLOIEMENT-SESSIONS-OPPOSABLES-PREPROD.md`.
 
-Le lot 50 ferme localement la compatibilité avec les anciens cookies : format
+Le lot 50 a fermé en préproduction la compatibilité avec les anciens cookies : format
 versionné obligatoire, disparition de l'ancien champ et des anciens réglages,
 preuve centrale obligatoire dans les deux applications et retour arrière sans
-résurrection. Son déploiement imposera une nouvelle connexion en préproduction ;
+résurrection. Son déploiement a imposé une nouvelle connexion en préproduction ;
 voir `docs/LOT-50-FERMETURE-ANCIENNES-SESSIONS-PREPROD.md`.
 
-Le lot 51 ouvre localement l'espace personnel « Mes sessions » dans
+Le lot 51 a ouvert et recetté en préproduction l'espace personnel « Mes sessions » dans
 Administration : consultation limitée à sa propre identité, identification de
 la session courante, fermeture distante unitaire ou fermeture atomique de toutes
 les autres sessions actives. Les cibles sont scellées, les mutations protégées
 contre la falsification et chaque fermeture est auditée ; voir
 `docs/LOT-51-GESTION-PERSONNELLE-SESSIONS.md`.
+
+Les étapes 1 à 6 sont désormais recettées en préproduction. Le lot 53 prépare la
+dernière étape de l’ADR-020 : une console de révocation opérateur protégée par la
+permission distincte `administration:sessions:revoke`, sans secret ni identifiant
+technique affiché, avec cible scellée, justification, contrôle de version et audit
+atomique. Son activation distante reste volontairement séparée ; voir
+`docs/LOT-53-REVOCATION-OPERATEUR-SESSIONS.md`.
 
 ## Prérequis et démarrage local
 
@@ -147,6 +154,7 @@ utiliser un chemin propre à l’environnement sur le modèle de `.env.example`.
 
 ```powershell
 python -m unittest discover -s tests -v
+node --test "service-node/*.test.mjs"
 ```
 
 La même vérification est exécutée automatiquement à chaque PR et mise à jour de
@@ -189,6 +197,7 @@ ne contient aucun secret réel. La production reste inchangée.
 - [`docs/LOT-49-DEPLOIEMENT-SESSIONS-OPPOSABLES-PREPROD.md`](docs/LOT-49-DEPLOIEMENT-SESSIONS-OPPOSABLES-PREPROD.md)
 - [`docs/LOT-50-FERMETURE-ANCIENNES-SESSIONS-PREPROD.md`](docs/LOT-50-FERMETURE-ANCIENNES-SESSIONS-PREPROD.md)
 - [`docs/LOT-51-GESTION-PERSONNELLE-SESSIONS.md`](docs/LOT-51-GESTION-PERSONNELLE-SESSIONS.md)
+- [`docs/LOT-53-REVOCATION-OPERATEUR-SESSIONS.md`](docs/LOT-53-REVOCATION-OPERATEUR-SESSIONS.md)
 - [`docs/ETAT-PREPROD-INFOMANIAK.md`](docs/ETAT-PREPROD-INFOMANIAK.md)
 - [`docs/CONFORMITE-NSES.md`](docs/CONFORMITE-NSES.md)
 - [`docs/CONTRAT-API-INTERNE.md`](docs/CONTRAT-API-INTERNE.md)

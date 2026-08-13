@@ -1,6 +1,6 @@
 # ADR-020 — Sessions applicatives révocables
 
-Statut : **acceptée ; étapes 1 à 4 recettées en préproduction, étapes 5 et 6 implémentées et validées localement**
+Statut : **acceptée ; étapes 1 à 6 recettées en préproduction, étape 7 implémentée et validée localement**
 
 Date : **13 août 2026**
 
@@ -176,6 +176,11 @@ sessions centrales par un contrat standard équivalent.
 6. Ouvrir la consultation et la révocation de ses propres sessions.
 7. Ouvrir la révocation opérateur après attribution gouvernée de la permission
    dédiée.
+
+L’étape 7 est mise en œuvre par le lot 53 avec un périmètre global explicitement
+attribué, une cible scellée, une justification obligatoire et un audit atomique.
+Son activation en préproduction reste soumise à la recette décrite dans
+`LOT-53-REVOCATION-OPERATEUR-SESSIONS.md`.
 
 Chaque étape exige une sauvegarde vérifiée, une migration additive, une release
 immuable, une recette serveur et un retour arrière documenté. Aucun lot ne doit
