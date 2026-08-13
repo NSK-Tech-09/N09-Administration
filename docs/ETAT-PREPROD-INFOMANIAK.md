@@ -1,4 +1,5 @@
 
+
 # État de la préproduction Infomaniak
 
 Date du constat : **10 août 2026**  
@@ -406,5 +407,3 @@ La fermeture groupée reste prouvée par les tests automatisés ; sa recette ave
 plusieurs navigateurs indépendants devra être complétée avant la promotion en
 production. Aucune mutation n'a été effectuée en production ni dans N09 –
 Énergie.
-
-
