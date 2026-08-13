@@ -15,6 +15,18 @@ test("le registre applicatif porte retours, politique d’entrée et codes à us
   assert.doesNotMatch(schema, /access_token|refresh_token|id_token/i);
 });
 
+test("le registre de sessions ne conserve jamais le secret brut", () => {
+  assert.match(schema, /CREATE TABLE IF NOT EXISTS application_sessions/);
+  assert.match(schema, /session_id CHAR\(36\) PRIMARY KEY/);
+  assert.match(schema, /secret_hash CHAR\(64\) NOT NULL/);
+  assert.match(schema, /idle_expires_at DATETIME\(6\) NOT NULL/);
+  assert.match(schema, /absolute_expires_at DATETIME\(6\) NOT NULL/);
+  assert.match(schema, /revoked_at DATETIME\(6\)/);
+  assert.match(schema, /application_sessions_revocation CHECK/);
+  const table = schema.match(/CREATE TABLE IF NOT EXISTS application_sessions[\s\S]*?ENGINE=InnoDB;/)?.[0] ?? "";
+  assert.doesNotMatch(table, /session_secret|secret_value|raw_secret|cookie|access_token|refresh_token/i);
+});
+
 test("le catalogue applicatif conserve chaque version sans secret", () => {
   assert.match(schema, /CREATE TABLE IF NOT EXISTS application_access_catalog_versions/);
   assert.match(schema, /PRIMARY KEY \(application_id, catalog_version\)/);
