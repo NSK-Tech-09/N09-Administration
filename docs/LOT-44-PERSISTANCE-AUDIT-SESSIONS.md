@@ -1,6 +1,6 @@
 # Lot 44 — Persistance transactionnelle et audit des sessions
 
-Statut : **implémenté et validé localement, non publié et non déployé**
+Statut : **fusionné dans `main` par la PR #46, non déployé**
 
 Date : **13 août 2026**
 
@@ -9,6 +9,8 @@ Date : **13 août 2026**
 Ce lot poursuit le socle fusionné par la PR #45. Il rend le registre de
 sessions utilisable par les deux implémentations de persistance de N09 –
 Administration, sans le relier aux parcours de connexion actifs.
+
+Il a été fusionné par la PR #46, commit `206afd3232aacd1bf229eddb95a507c278cd2fc0`.
 
 ## Décision
 

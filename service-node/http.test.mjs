@@ -11,7 +11,7 @@ import { createLinkRequest } from "./federated-identity.mjs";
 import { createHttpHandler } from "./http.mjs";
 import { ADMIN_APPLICATION_ID, LINK_DECISION_PERMISSION } from "./identity-link-admin.mjs";
 import { createInternalClientAuthenticator, INTERNAL_CLIENT_HEADERS, signInternalRequest } from "./internal-client-auth.mjs";
-import { OIDC_SESSION_COOKIE, seal } from "./oidc.mjs";
+import { OIDC_SESSION_COOKIE, open, seal } from "./oidc.mjs";
 import { NOTIFICATION_OPERATIONS_READ_PERMISSION } from "./notification-operations-admin.mjs";
 import { TransactionalMemoryRepository } from "./repository.mjs";
 
@@ -119,12 +119,13 @@ function seededAdminRepository({
   return { adminRepository, linkRequest };
 }
 
-function adminCookie(csrf = "csrf-value") {
+function adminCookie(csrf = "csrf-value", shadowSession = null) {
   const session = {
     issuer: "https://login.infomaniak.com", subject: "admin-provider-subject",
     identityId: adminIdentity.identityId, displayName: adminIdentity.displayName,
     status: "authenticated", csrf, expiresAt: Date.now() + 60_000,
   };
+  if (shadowSession) session.shadowSession = shadowSession;
   return `${OIDC_SESSION_COOKIE}=${seal(session, oidcConfig.sessionSecret, "oidc-session")}`;
 }
 
@@ -235,6 +236,30 @@ test("ne révèle pas la preuve externe dans l'état de session public", async (
     assert.equal(response.status, 401);
     assert.deepEqual(await response.json(), { authenticated: false });
   });
+});
+
+test("observe la session centrale sans rendre son résultat opposable", async () => {
+  const shadowSession = {
+    sessionId: "b14ad8d3-b14b-4f2e-8f0b-c79dfc1fd702",
+    secret: "B".repeat(43),
+  };
+  const observations = [];
+  const sessionShadow = {
+    enroll: async () => null,
+    observe: async (input) => {
+      observations.push(input);
+      throw new Error("simulated central divergence");
+    },
+  };
+  await withServer({ oidcConfig, sessionShadow }, async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/auth/session`, {
+      headers: { cookie: adminCookie("csrf-value", shadowSession) },
+    });
+    assert.equal(response.status, 200);
+    assert.equal((await response.json()).authenticated, true);
+    await new Promise((resolve) => setImmediate(resolve));
+  });
+  assert.deepEqual(observations, [{ credential: shadowSession, identityId: adminIdentity.identityId }]);
 });
 
 test("refuse l’administration à une identité rattachée sans permission dédiée", async () => {
@@ -544,6 +569,51 @@ test("valide le retour Infomaniak et crée seulement une session à rattacher", 
     assert.equal(savedRequests[0].status, "pending");
     assert.equal(savedRequests[0].subject, "external-42");
   });
+});
+
+test("inscrit une nouvelle session rattachée en observation dans le cookie chiffré", async () => {
+  const { publicKey, privateKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
+  const jwk = publicKey.export({ format: "jwk" });
+  let expectedNonce;
+  const fetchImpl = async (url) => {
+    if (String(url).endsWith("/oauth2/jwks")) {
+      return new Response(JSON.stringify({ keys: [{ ...jwk, kid: "shadow-key", alg: "RS256" }] }), { status: 200 });
+    }
+    const now = Math.floor(Date.now() / 1000);
+    const header = Buffer.from(JSON.stringify({ alg: "RS256", kid: "shadow-key" })).toString("base64url");
+    const claims = Buffer.from(JSON.stringify({
+      iss: "https://login.infomaniak.com", aud: oidcConfig.clientId, sub: "linked-subject",
+      nonce: expectedNonce, iat: now - 1, exp: now + 300,
+    })).toString("base64url");
+    const signature = sign("RSA-SHA256", Buffer.from(`${header}.${claims}`), privateKey).toString("base64url");
+    return new Response(JSON.stringify({ id_token: `${header}.${claims}.${signature}` }), { status: 200 });
+  };
+  const { adminRepository } = seededAdminRepository();
+  adminRepository.findExternalIdentity = async () => ({ identityId: adminIdentity.identityId, status: "active" });
+  const shadowSession = {
+    sessionId: "b14ad8d3-b14b-4f2e-8f0b-c79dfc1fd702",
+    secret: "B".repeat(43),
+  };
+  const enrolled = [];
+  const sessionShadow = {
+    enroll: async (input) => { enrolled.push(input); return shadowSession; },
+    observe: async () => ({ outcome: "active" }),
+  };
+  await withServer({ repository: adminRepository, oidcConfig, fetchImpl, sessionShadow }, async (baseUrl) => {
+    const start = await fetch(`${baseUrl}/auth/infomaniak/start`, { redirect: "manual" });
+    const authorization = new URL(start.headers.get("location"));
+    expectedNonce = authorization.searchParams.get("nonce");
+    const transactionCookie = start.headers.get("set-cookie").split(";")[0];
+    const callback = await fetch(`${baseUrl}/auth/infomaniak/callback?code=one-time-code&state=${authorization.searchParams.get("state")}`, {
+      headers: { cookie: transactionCookie }, redirect: "manual",
+    });
+    assert.equal(callback.status, 303);
+    const sealedSession = callback.headers.get("set-cookie").match(/n09_oidc_session=([^;,]+)/)?.[1];
+    const session = open(sealedSession, oidcConfig.sessionSecret, "oidc-session");
+    assert.deepEqual(session.shadowSession, shadowSession);
+    assert.equal(session.identityId, adminIdentity.identityId);
+  });
+  assert.deepEqual(enrolled, [{ identityId: adminIdentity.identityId }]);
 });
 
 test("refuse par défaut une décision sans adaptateur d'authentification", async () => {

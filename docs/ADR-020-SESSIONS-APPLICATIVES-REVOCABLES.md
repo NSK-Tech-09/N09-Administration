@@ -1,6 +1,6 @@
 # ADR-020 — Sessions applicatives révocables
 
-Statut : **acceptée ; socle fusionné, persistance implémentée localement, non déployée**
+Statut : **acceptée ; socle et persistance fusionnés, observation implémentée localement, non déployée**
 
 Date : **13 août 2026**
 

@@ -236,9 +236,45 @@ function renderNotificationOperations(snapshot) {
   return `<h1>Exploitation des notifications</h1><p>Vue centrale en lecture seule de la file et de ses résolutions. Cette page ne traite aucun événement, ne modifie aucune préférence et n’ouvre aucun canal externe.</p><div class="summary"><div class="metric"><strong>${escapeHtml(actionable)}</strong>à traiter ou en cours</div><div class="metric"><strong>${escapeHtml(snapshot.events.processed)}</strong>événements traités</div><div class="metric"><strong>${escapeHtml(snapshot.notifications.total)}</strong>notifications internes</div><div class="metric"><strong>${escapeHtml(snapshot.events.quarantined)}</strong>événements en quarantaine</div><div class="metric"><strong>${escapeHtml(snapshot.notifications.unread)}</strong>notifications non lues</div><div class="metric"><strong>${escapeHtml(snapshot.externalDeliveries.blocked)}</strong>livraisons externes bloquées</div></div><div class="facts"><p><strong>Consommateur interne :</strong> ${processorState}<br>${processorDetails}</p><p><strong>Canaux externes :</strong> ${externalState}<br><strong>Suppressions cumulées :</strong> action propre ${escapeHtml(snapshot.suppressions.ownAction)} · préférences ${escapeHtml(snapshot.suppressions.preferences)} · identité non liée ${escapeHtml(snapshot.suppressions.unlinkedIdentity)}</p><p class="muted">Dernier événement reçu : ${snapshot.events.lastReceivedAt ? escapeHtml(formatDate(snapshot.events.lastReceivedAt)) : "aucun"} · dernier traitement : ${snapshot.events.lastProcessedAt ? escapeHtml(formatDate(snapshot.events.lastProcessedAt)) : "aucun"}</p></div><h2>Résolutions récentes</h2><div class="directory">${resolutionCards || '<div class="facts"><p>Aucune résolution enregistrée.</p></div>'}</div><nav><a class="button secondary" href="/">Retour à l’accueil</a><a class="button secondary" href="/notifications">Centre personnel</a><form method="post" action="/auth/logout"><button class="secondary" type="submit">Fermer la session</button></form></nav>`;
 }
 
-export function createHttpHandler({ repository, authenticate = async () => null, oidcConfig = null, fetchImpl = fetch, maxBodyBytes = DEFAULT_MAX_BODY_BYTES }) {
+export function createHttpHandler({
+  repository,
+  authenticate = async () => null,
+  oidcConfig = null,
+  fetchImpl = fetch,
+  maxBodyBytes = DEFAULT_MAX_BODY_BYTES,
+  sessionShadow = null,
+}) {
   if (!repository) throw new Error("repository is required");
   if (typeof authenticate !== "function") throw new Error("authenticate must be a function");
+
+  function observeSessionInBackground(session) {
+    if (!sessionShadow || session?.status !== "authenticated" || !session.identityId) return;
+    try {
+      Promise.resolve(sessionShadow.observe({
+        credential: session.shadowSession ?? null,
+        identityId: session.identityId,
+      })).catch(() => {});
+    } catch { /* observation must never influence current access */ }
+  }
+
+  function openCurrentSession(request) {
+    if (!oidcConfig) throw new Error("oidc_not_configured");
+    const session = open(
+      parseCookies(request.headers.cookie).get(OIDC_SESSION_COOKIE),
+      oidcConfig.sessionSecret,
+      "oidc-session",
+    );
+    observeSessionInBackground(session);
+    return session;
+  }
+
+  async function attachShadowSession(session) {
+    if (!sessionShadow || session?.status !== "authenticated" || !session.identityId) return session;
+    try {
+      const credential = await sessionShadow.enroll({ identityId: session.identityId });
+      return credential ? { ...session, shadowSession: credential } : session;
+    } catch { return session; }
+  }
 
   return async function handle(request, response) {
     const url = new URL(request.url, "https://n09.invalid");
@@ -251,7 +287,7 @@ export function createHttpHandler({ repository, authenticate = async () => null,
         if (!oidcConfig) throw new Error("oidc_not_configured");
         const loginRequest = validateAuthorizationRequest(url.searchParams);
         let session;
-        try { session = open(parseCookies(request.headers.cookie).get(OIDC_SESSION_COOKIE), oidcConfig.sessionSecret, "oidc-session"); } catch { /* login below */ }
+        try { session = openCurrentSession(request); } catch { /* login below */ }
         if (!session) {
           redirect(response, `/auth/infomaniak/start?return_to=${encodeURIComponent(`${url.pathname}${url.search}`)}`);
           return;
@@ -290,7 +326,7 @@ export function createHttpHandler({ repository, authenticate = async () => null,
     if (url.pathname === "/" && request.method === "GET") {
       let session = null;
       if (oidcConfig) {
-        try { session = open(parseCookies(request.headers.cookie).get(OIDC_SESSION_COOKIE), oidcConfig.sessionSecret, "oidc-session"); } catch { /* anonymous */ }
+        try { session = openCurrentSession(request); } catch { /* anonymous */ }
       }
       const requestReference = session?.requestId
         ? `<p>Demande enregistrée : <strong>${escapeHtml(session.requestId)}</strong></p>` : "";
@@ -385,6 +421,7 @@ export function createHttpHandler({ repository, authenticate = async () => null,
             expiresAt: Date.now() + 8 * 60 * 60 * 1000,
           };
         }
+        session = await attachShadowSession(session);
         const sessionCookie = cookie(OIDC_SESSION_COOKIE, seal(session, oidcConfig.sessionSecret, "oidc-session"), { maxAge: 8 * 60 * 60 });
         response.statusCode = 303;
         response.setHeader("cache-control", "no-store");
@@ -403,7 +440,7 @@ export function createHttpHandler({ repository, authenticate = async () => null,
     if (url.pathname === "/auth/session" && request.method === "GET") {
       try {
         if (!oidcConfig) throw new Error("oidc_not_configured");
-        const session = open(parseCookies(request.headers.cookie).get(OIDC_SESSION_COOKIE), oidcConfig.sessionSecret, "oidc-session");
+        const session = openCurrentSession(request);
         writeJson(response, 200, {
           authenticated: true, provider: "infomaniak", status: session.status,
           display_name: session.displayName, request_id: session.requestId ?? null,
@@ -426,7 +463,7 @@ export function createHttpHandler({ repository, authenticate = async () => null,
       let session;
       try {
         if (!oidcConfig) throw new Error("oidc_not_configured");
-        session = open(parseCookies(request.headers.cookie).get(OIDC_SESSION_COOKIE), oidcConfig.sessionSecret, "oidc-session");
+        session = openCurrentSession(request);
       } catch {
         writeHtml(response, 401, "Connexion requise", '<h1>Connexion requise</h1><p>Une session NSK valide est nécessaire pour consulter tes notifications.</p><a class="button" href="/">Se connecter</a>');
         return;
@@ -478,7 +515,7 @@ export function createHttpHandler({ repository, authenticate = async () => null,
       let session;
       try {
         if (!oidcConfig) throw new Error("oidc_not_configured");
-        session = open(parseCookies(request.headers.cookie).get(OIDC_SESSION_COOKIE), oidcConfig.sessionSecret, "oidc-session");
+        session = openCurrentSession(request);
       } catch {
         writeHtml(response, 401, "Connexion requise", '<h1>Connexion requise</h1><p>Une session NSK valide est nécessaire.</p><a class="button" href="/">Se connecter</a>');
         return;
@@ -515,7 +552,7 @@ export function createHttpHandler({ repository, authenticate = async () => null,
       let session;
       try {
         if (!oidcConfig) throw new Error("oidc_not_configured");
-        session = open(parseCookies(request.headers.cookie).get(OIDC_SESSION_COOKIE), oidcConfig.sessionSecret, "oidc-session");
+        session = openCurrentSession(request);
       } catch {
         writeHtml(response, 401, "Connexion requise", '<h1>Connexion requise</h1><p>Une session NSK valide est nécessaire.</p><a class="button" href="/">Se connecter</a>');
         return;
@@ -614,7 +651,7 @@ export function createHttpHandler({ repository, authenticate = async () => null,
       let session;
       try {
         if (!oidcConfig) throw new Error("oidc_not_configured");
-        session = open(parseCookies(request.headers.cookie).get(OIDC_SESSION_COOKIE), oidcConfig.sessionSecret, "oidc-session");
+        session = openCurrentSession(request);
       } catch {
         writeHtml(response, 401, "Connexion requise", '<h1>Connexion requise</h1><p>Une session NSK valide est nécessaire.</p><a class="button" href="/">Se connecter</a>');
         return;
@@ -652,7 +689,7 @@ export function createHttpHandler({ repository, authenticate = async () => null,
       let session;
       try {
         if (!oidcConfig) throw new Error("oidc_not_configured");
-        session = open(parseCookies(request.headers.cookie).get(OIDC_SESSION_COOKIE), oidcConfig.sessionSecret, "oidc-session");
+        session = openCurrentSession(request);
       } catch {
         writeHtml(response, 401, "Connexion requise", '<h1>Connexion requise</h1><p>Une session NSK valide est nécessaire.</p><a class="button" href="/">Se connecter</a>');
         return;
