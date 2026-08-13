@@ -14,6 +14,7 @@ const oidcConfig = {
 
 function sessionCookie() {
   const session = {
+    sessionVersion: 2,
     issuer: "https://login.infomaniak.com", subject: "provider-subject", identityId,
     displayName: "Fred", status: "authenticated", csrf, expiresAt: Date.now() + 60_000,
   };

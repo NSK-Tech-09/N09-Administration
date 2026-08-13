@@ -19,6 +19,7 @@ import {
 } from "./oidc.mjs";
 
 const DEFAULT_MAX_BODY_BYTES = 64 * 1024;
+const CURRENT_SESSION_VERSION = 2;
 
 class HttpInputError extends Error {
   constructor(status, code) {
@@ -253,7 +254,7 @@ export function createHttpHandler({
         session?.status !== "authenticated" || !session.identityId) return;
     try {
       Promise.resolve(administrationSessionAuthority.observe({
-        credential: session.centralSession ?? session.shadowSession ?? null,
+        credential: session.centralSession ?? null,
         identityId: session.identityId,
       })).catch(() => {});
     } catch { /* observation must never influence current access */ }
@@ -266,10 +267,11 @@ export function createHttpHandler({
       oidcConfig.sessionSecret,
       "oidc-session",
     );
+    if (session?.sessionVersion !== CURRENT_SESSION_VERSION) throw new Error("session_cookie_outdated");
     observeSessionInBackground(session);
     if (administrationSessionAuthority?.mode === "enforce" && session?.status === "authenticated") {
       const assessment = await administrationSessionAuthority.assess({
-        credential: session.centralSession ?? session.shadowSession ?? null,
+        credential: session.centralSession ?? null,
         identityId: session.identityId,
       });
       if (!assessment.allowed) throw new Error(assessment.reasonCode);
@@ -408,6 +410,7 @@ export function createHttpHandler({
           const identity = await repository.getIdentity(linked.identityId);
           if (!identity || identity.status !== "active") throw new Error("nsk_identity_not_active");
           session = {
+            sessionVersion: CURRENT_SESSION_VERSION,
             issuer: INFOMANIAK_ISSUER, subject: claims.sub, identityId: identity.identityId,
             displayName: identity.displayName, status: "authenticated", csrf: randomUUID(),
             expiresAt: Date.now() + 8 * 60 * 60 * 1000,
@@ -427,6 +430,7 @@ export function createHttpHandler({
             }));
           }
           session = {
+            sessionVersion: CURRENT_SESSION_VERSION,
             issuer: INFOMANIAK_ISSUER, subject: claims.sub, displayName,
             status: "link_required", requestId: linkRequest.requestId,
             requestExpiresAt: linkRequest.expiresAt,
@@ -470,11 +474,13 @@ export function createHttpHandler({
             oidcConfig.sessionSecret,
             "oidc-session",
           );
-          const result = await administrationSessionAuthority.revokeCurrent({
-            credential: session.centralSession ?? session.shadowSession ?? null,
-            identityId: session.identityId,
-          });
-          if (!result.revoked) throw new Error(result.reasonCode);
+          if (session?.sessionVersion === CURRENT_SESSION_VERSION) {
+            const result = await administrationSessionAuthority.revokeCurrent({
+              credential: session.centralSession ?? null,
+              identityId: session.identityId,
+            });
+            if (!result.revoked) throw new Error(result.reasonCode);
+          }
         } catch {
           writeHtml(response, 503, "Déconnexion en attente", '<h1>Déconnexion en attente</h1><p>La fermeture centrale de cette session ne peut pas encore être confirmée. Aucun succès fictif n’est affiché et le cookie est conservé pour permettre une nouvelle tentative.</p><a class="button" href="/">Réessayer</a>');
           return;

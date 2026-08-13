@@ -1,6 +1,6 @@
 # ADR-020 — Sessions applicatives révocables
 
-Statut : **acceptée ; observation Administration recettée en préproduction, opposabilité de l'application pilote et d'Administration implémentée localement**
+Statut : **acceptée ; étapes 1 à 4 recettées en préproduction, fermeture des anciens cookies implémentée et validée localement**
 
 Date : **13 août 2026**
 
