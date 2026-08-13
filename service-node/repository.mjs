@@ -1,6 +1,12 @@
 import { randomUUID } from "node:crypto";
 import { eventHash, verifyAuditChain } from "./audit.mjs";
 import {
+  assertApplicationSessionActivityProgress,
+  assertApplicationSessionAudit,
+  assertApplicationSessionImmutableContext,
+  assertNewApplicationSessionRecord,
+} from "./application-session.mjs";
+import {
   ApplicationAccessCatalogError, applicationAccessCatalogHash, assertCompatibleCatalogEvolution,
 } from "./application-access-catalog.mjs";
 import { NotificationIngressError } from "./notification-ingress.mjs";
@@ -18,6 +24,7 @@ export class TransactionalMemoryRepository {
   #applicationRedirectUris = new Map();
   #applicationLoginPolicies = new Map();
   #applicationAuthorizationCodes = new Map();
+  #applicationSessions = new Map();
   #assignments = new Map();
   #notificationEvents = new Map();
   #auditEntries = [];
@@ -32,6 +39,7 @@ export class TransactionalMemoryRepository {
       applicationRedirectUris: cloneMap(this.#applicationRedirectUris),
       applicationLoginPolicies: cloneMap(this.#applicationLoginPolicies),
       applicationAuthorizationCodes: cloneMap(this.#applicationAuthorizationCodes),
+      applicationSessions: cloneMap(this.#applicationSessions),
       assignments: cloneMap(this.#assignments),
       notificationEvents: cloneMap(this.#notificationEvents),
       auditEntries: structuredClone(this.#auditEntries),
@@ -45,6 +53,7 @@ export class TransactionalMemoryRepository {
     this.#applicationRedirectUris = state.applicationRedirectUris;
     this.#applicationLoginPolicies = state.applicationLoginPolicies;
     this.#applicationAuthorizationCodes = state.applicationAuthorizationCodes;
+    this.#applicationSessions = state.applicationSessions;
     this.#assignments = state.assignments;
     this.#notificationEvents = state.notificationEvents;
     this.#auditEntries = state.auditEntries;
@@ -180,6 +189,76 @@ export class TransactionalMemoryRepository {
       state.applicationAuthorizationCodes.set(codeHash, consumed);
       this.#appendAudit(state, auditEvent);
       return structuredClone(consumed);
+    });
+  }
+
+  saveApplicationSession(record, auditEvent) {
+    assertApplicationSessionAudit(record, auditEvent, "application_session.created");
+    assertNewApplicationSessionRecord(record);
+    return this.#transaction((state) => {
+      if (!state.identities.has(record.identityId) || !state.applications.has(record.applicationId)) {
+        throw new Error("application session prerequisites are missing");
+      }
+      if (state.applicationSessions.has(record.sessionId)) throw new Error("application session already exists");
+      if ([...state.applicationSessions.values()].some((item) => item.secretHash === record.secretHash)) {
+        throw new Error("application session secret hash must be unique");
+      }
+      state.applicationSessions.set(record.sessionId, structuredClone(record));
+      this.#appendAudit(state, auditEvent);
+      return structuredClone(record);
+    });
+  }
+
+  getApplicationSession(sessionId) {
+    return structuredClone(this.#applicationSessions.get(sessionId) ?? null);
+  }
+
+  listApplicationSessions(identityId) {
+    return [...this.#applicationSessions.values()]
+      .filter((item) => item.identityId === identityId)
+      .sort((left, right) => String(right.lastSeenAt).localeCompare(String(left.lastSeenAt)))
+      .map((item) => structuredClone(item));
+  }
+
+  touchApplicationSession(record, expectedVersion) {
+    return this.#transaction((state) => {
+      const previous = state.applicationSessions.get(record.sessionId);
+      if (!previous || previous.version !== expectedVersion || record.version !== expectedVersion + 1) {
+        throw new Error("stale application session version");
+      }
+      assertApplicationSessionImmutableContext(previous, record);
+      assertApplicationSessionActivityProgress(previous, record);
+      if (previous.revokedAt !== record.revokedAt ||
+          previous.revokedByIdentityId !== record.revokedByIdentityId ||
+          previous.revocationReason !== record.revocationReason) {
+        throw new Error("application session revocation cannot change during touch");
+      }
+      if (previous.revokedAt || new Date(previous.absoluteExpiresAt) <= new Date(record.lastSeenAt) ||
+          new Date(previous.idleExpiresAt) <= new Date(record.lastSeenAt)) {
+        throw new Error("inactive application session cannot be touched");
+      }
+      state.applicationSessions.set(record.sessionId, structuredClone(record));
+      return structuredClone(record);
+    });
+  }
+
+  revokeApplicationSession(record, expectedVersion, auditEvent) {
+    assertApplicationSessionAudit(record, auditEvent, "application_session.revoked");
+    return this.#transaction((state) => {
+      const previous = state.applicationSessions.get(record.sessionId);
+      if (!previous || previous.version !== expectedVersion || record.version !== expectedVersion + 1) {
+        throw new Error("stale application session version");
+      }
+      assertApplicationSessionImmutableContext(previous, record);
+      if (previous.lastSeenAt !== record.lastSeenAt || previous.idleExpiresAt !== record.idleExpiresAt) {
+        throw new Error("application session activity is immutable during revocation");
+      }
+      if (previous.revokedAt || !record.revokedAt || !record.revocationReason) {
+        throw new Error("invalid application session revocation");
+      }
+      state.applicationSessions.set(record.sessionId, structuredClone(record));
+      this.#appendAudit(state, auditEvent);
+      return structuredClone(record);
     });
   }
 
