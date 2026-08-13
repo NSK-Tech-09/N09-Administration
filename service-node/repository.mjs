@@ -243,7 +243,10 @@ export class TransactionalMemoryRepository {
   }
 
   revokeApplicationSession(record, expectedVersion, auditEvent) {
-    assertApplicationSessionAudit(record, auditEvent, "application_session.revoked");
+    if (!["application_session.revoked", "application_session.expired"].includes(auditEvent?.action)) {
+      throw new Error("invalid application session closure audit");
+    }
+    assertApplicationSessionAudit(record, auditEvent, auditEvent.action);
     return this.#transaction((state) => {
       const previous = state.applicationSessions.get(record.sessionId);
       if (!previous || previous.version !== expectedVersion || record.version !== expectedVersion + 1) {

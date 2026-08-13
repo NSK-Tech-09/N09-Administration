@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   applicationSessionShadowConfigFromEnvironment, httpConfigFromEnvironment, mariaDbConfigFromEnvironment,
+  tasksApplicationSessionConfigFromEnvironment,
 } from "./runtime-config.mjs";
 
 const databaseEnvironment = {
@@ -20,6 +21,27 @@ test("charge une configuration MariaDB TLS sans exposer de valeur implicite", ()
   });
   assert.throws(() => mariaDbConfigFromEnvironment({ ...databaseEnvironment, N09_DB_PASSWORD: "" }), /PASSWORD/);
   assert.throws(() => mariaDbConfigFromEnvironment({ ...databaseEnvironment, N09_DB_SSL: "false" }), /must be true/);
+});
+
+test("prépare l'émission puis l'opposabilité des sessions Tâches uniquement en préproduction", () => {
+  assert.deepEqual(tasksApplicationSessionConfigFromEnvironment({}), {
+    mode: "disabled", applicationId: "n09-suivi-taches",
+    idleTtlMs: 3_600_000, absoluteTtlMs: 14_400_000, touchIntervalMs: 300_000,
+  });
+  assert.deepEqual(tasksApplicationSessionConfigFromEnvironment({
+    N09_ENVIRONMENT: "preprod",
+    N09_TASKS_SESSION_MODE: "issue",
+  }).mode, "issue");
+  assert.deepEqual(tasksApplicationSessionConfigFromEnvironment({
+    N09_ENVIRONMENT: "preprod",
+    N09_TASKS_SESSION_MODE: "enforce",
+  }).mode, "enforce");
+  assert.throws(() => tasksApplicationSessionConfigFromEnvironment({
+    N09_ENVIRONMENT: "production", N09_TASKS_SESSION_MODE: "enforce",
+  }), /restricted to preprod/);
+  assert.throws(() => tasksApplicationSessionConfigFromEnvironment({
+    N09_TASKS_SESSION_MODE: "observe",
+  }), /disabled, issue or enforce/);
 });
 
 test("maintient le transport sur la boucle locale avant OIDC", () => {

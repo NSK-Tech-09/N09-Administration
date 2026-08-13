@@ -243,6 +243,7 @@ export function createHttpHandler({
   fetchImpl = fetch,
   maxBodyBytes = DEFAULT_MAX_BODY_BYTES,
   sessionShadow = null,
+  sessionAuthority = null,
 }) {
   if (!repository) throw new Error("repository is required");
   if (typeof authenticate !== "function") throw new Error("authenticate must be a function");
@@ -312,7 +313,12 @@ export function createHttpHandler({
         const { payload, rawBody } = await readJson(request, maxBodyBytes);
         const principal = await authenticate(request, { rawBody });
         correlationId = principal?.correlationId || correlationId;
-        const identity = await exchangeApplicationLoginCode({ repository, principal, payload });
+        const identity = await exchangeApplicationLoginCode({
+          repository,
+          principal,
+          payload,
+          sessionAuthority,
+        });
         writeJson(response, 200, identity, correlationId);
       } catch (error) {
         if (error instanceof HttpInputError) writeJson(response, error.status, { error: error.code }, correlationId);
@@ -786,6 +792,43 @@ export function createHttpHandler({
       }
       return;
     }
+    if (url.pathname === "/internal/v1/application-sessions/revoke") {
+      if (request.method !== "POST") {
+        response.setHeader("allow", "POST");
+        writeJson(response, 405, { error: "method_not_allowed" });
+        return;
+      }
+      let correlationId = randomUUID();
+      try {
+        if (!sessionAuthority) throw new Error("session_authority_unavailable");
+        const { payload, rawBody } = await readJson(request, maxBodyBytes);
+        const principal = await authenticate(request, { rawBody });
+        correlationId = principal?.correlationId || correlationId;
+        const fields = Object.keys(payload ?? {});
+        if (!principal || principal.audience !== principal.applicationId ||
+            principal.applicationId !== payload?.application_id ||
+            fields.some((field) => !["application_id", "identity_id", "session_id"].includes(field)) ||
+            ![payload?.application_id, payload?.identity_id, payload?.session_id]
+              .every((value) => typeof value === "string" && value)) {
+          throw new HttpInputError(401, "authentication_required");
+        }
+        const result = await sessionAuthority.revokeForApplication({
+          applicationId: payload.application_id,
+          identityId: payload.identity_id,
+          sessionId: payload.session_id,
+          reason: "Déconnexion demandée dans N09 – Suivi des tâches",
+        });
+        if (!result.revoked) {
+          writeJson(response, 404, { error: result.reasonCode }, correlationId);
+          return;
+        }
+        writeJson(response, 200, { revoked: true, reason_code: result.reasonCode }, correlationId);
+      } catch (error) {
+        if (error instanceof HttpInputError) writeJson(response, error.status, { error: error.code }, correlationId);
+        else writeJson(response, 503, { error: "session_registry_unavailable" }, correlationId);
+      }
+      return;
+    }
     if (url.pathname === "/internal/v1/application-access-catalogs") {
       if (request.method !== "POST") {
         response.setHeader("allow", "POST");
@@ -821,7 +864,7 @@ export function createHttpHandler({
       const { payload, rawBody } = await readJson(request, maxBodyBytes);
       const principal = await authenticate(request, { rawBody });
       correlationId = principal?.correlationId || correlationId;
-      const result = await evaluateAccessRequestAsync({ repository, principal, payload });
+      const result = await evaluateAccessRequestAsync({ repository, principal, payload, sessionAuthority });
       writeJson(response, result.status, result.body, result.correlationId);
     } catch (error) {
       if (error instanceof HttpInputError) {

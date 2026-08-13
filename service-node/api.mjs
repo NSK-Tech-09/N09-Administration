@@ -8,6 +8,8 @@ const ALLOWED_FIELDS = new Set([
   "scope_type",
   "scope_id",
   "satisfied_conditions",
+  "session_id",
+  "session_secret",
 ]);
 
 function prepareRequest(principal, payload) {
@@ -31,10 +33,21 @@ function prepareRequest(principal, payload) {
   ) {
     return { error: [400, { error: "invalid_request" }] };
   }
+  const hasSessionId = Object.hasOwn(payload, "session_id");
+  const hasSessionSecret = Object.hasOwn(payload, "session_secret");
+  if (hasSessionId !== hasSessionSecret ||
+      (hasSessionId && (typeof payload.session_id !== "string" || typeof payload.session_secret !== "string"))) {
+    return { error: [400, { error: "invalid_request" }] };
+  }
   if (payload.application_id !== principal.applicationId) {
     return { error: [403, { error: "application_boundary_violation" }] };
   }
-  return { conditions };
+  return {
+    conditions,
+    sessionCredential: hasSessionId
+      ? { sessionId: payload.session_id, secret: payload.session_secret }
+      : null,
+  };
 }
 
 function decisionResponse({ identity, application, assignments, payload, conditions, respond }) {
@@ -64,11 +77,22 @@ export function evaluateAccessRequest({ repository, principal, payload }) {
   });
 }
 
-export async function evaluateAccessRequestAsync({ repository, principal, payload }) {
+export async function evaluateAccessRequestAsync({ repository, principal, payload, sessionAuthority = null }) {
   const correlationId = principal?.correlationId || randomUUID();
   const respond = (status, body) => ({ status, body, correlationId });
   const prepared = prepareRequest(principal, payload);
   if (prepared.error) return respond(...prepared.error);
+
+  if (sessionAuthority) {
+    const sessionDecision = await sessionAuthority.assess({
+      credential: prepared.sessionCredential,
+      identityId: payload.identity_id,
+      applicationId: payload.application_id,
+    });
+    if (!sessionDecision.allowed) {
+      return respond(200, { allowed: false, reason_code: sessionDecision.reasonCode });
+    }
+  }
 
   const [identity, application, assignments] = await Promise.all([
     repository.getIdentity(payload.identity_id),

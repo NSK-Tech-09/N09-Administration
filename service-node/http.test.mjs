@@ -627,6 +627,56 @@ test("refuse par défaut une décision sans adaptateur d'authentification", asyn
   });
 });
 
+test("révoque une session uniquement pour l'application technique propriétaire", async () => {
+  let revocation;
+  const authenticate = async () => ({
+    applicationId: "tasks", audience: "tasks", correlationId: "correlation-session-revoke",
+  });
+  const sessionAuthority = {
+    revokeForApplication: async (request) => {
+      revocation = request;
+      return { revoked: true, reasonCode: "session_revoked" };
+    },
+  };
+  await withServer({ authenticate, sessionAuthority }, async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/internal/v1/application-sessions/revoke`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        application_id: "tasks",
+        identity_id: "identity-1",
+        session_id: "session-1",
+      }),
+    });
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), { revoked: true, reason_code: "session_revoked" });
+  });
+  assert.deepEqual(revocation, {
+    applicationId: "tasks",
+    identityId: "identity-1",
+    sessionId: "session-1",
+    reason: "Déconnexion demandée dans N09 – Suivi des tâches",
+  });
+});
+
+test("ferme l'accès HTTP lorsque la session applicative centrale est révoquée", async () => {
+  const authenticate = async () => ({
+    applicationId: "tasks", audience: "tasks", correlationId: "correlation-session-denied",
+  });
+  const sessionAuthority = {
+    assess: async () => ({ allowed: false, reasonCode: "session_revoked" }),
+  };
+  await withServer({ authenticate, sessionAuthority }, async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/internal/v1/access-decisions`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ ...payload, session_id: "session-1", session_secret: "secret-1" }),
+    });
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), { allowed: false, reason_code: "session_revoked" });
+  });
+});
+
 test("transporte une décision authentifiée sans modifier son contrat", async () => {
   const authenticate = async () => ({
     applicationId: "tasks", audience: "tasks", correlationId: "00000000-0000-4000-8000-000000000009",
