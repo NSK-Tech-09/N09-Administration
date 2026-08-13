@@ -10,6 +10,7 @@ import {
 } from "./access-decision-admin.mjs";
 import { ADMIN_APPLICATION_ID, authorizeIdentityLinkAdministration } from "./identity-link-admin.mjs";
 import { authorizeNotificationOperationsAdministration } from "./notification-operations-admin.mjs";
+import { PersonalSessionError } from "./personal-session-management.mjs";
 import {
   exchangeApplicationLoginCode, issueApplicationLoginCode, validateAuthorizationRequest,
 } from "./application-login.mjs";
@@ -216,6 +217,23 @@ function renderNotifications(notifications, unreadCount, csrf) {
   return `<h1>Centre de notifications</h1><p>Ce centre interne est le canal de référence. Lire une notification ne la supprime pas et aucun canal externe n’est activé par cette page.</p><div class="summary"><div class="metric"><strong>${escapeHtml(unreadCount)}</strong>non lue${unreadCount > 1 ? "s" : ""}</div><div class="metric"><strong>${escapeHtml(notifications.length)}</strong>affichée${notifications.length > 1 ? "s" : ""}</div></div><nav>${allRead}<a class="button secondary" href="/">Retour à l’accueil</a></nav><div class="directory">${cards || '<div class="facts"><p>Aucune notification pour le moment.</p></div>'}</div>`;
 }
 
+function renderPersonalSessions(sessions, csrf, actionToken) {
+  const activeOthers = sessions.filter((session) => session.state === "active" && !session.current).length;
+  const stateLabel = (session) => session.current ? "Session actuelle"
+    : session.state === "active" ? "Active"
+      : session.state === "expired" ? "Expirée" : "Fermée";
+  const cards = sessions.map((session) => {
+    const action = session.state === "active" && !session.current
+      ? `<form method="post" action="/account/sessions/revoke"><input type="hidden" name="csrf" value="${escapeHtml(csrf)}"><input type="hidden" name="target" value="${escapeHtml(actionToken(session))}"><button class="secondary" type="submit">Fermer cette session</button></form>`
+      : session.current
+        ? '<p class="muted">Utilise « Fermer la session » pour quitter cet appareil.</p>' : "";
+    return `<article class="entry"><p><span class="pill${session.state === "active" ? "" : " inactive"}">${escapeHtml(stateLabel(session))}</span></p><h3>${escapeHtml(session.applicationName)}</h3><p>${escapeHtml(session.contextLabel || "Connexion à l’application")}</p><p class="muted">Ouverte le ${escapeHtml(formatDate(session.issuedAt))}<br>Dernière activité ${escapeHtml(formatDate(session.lastSeenAt))}<br>Échéance au plus tard ${escapeHtml(formatDate(session.absoluteExpiresAt))}</p>${action}</article>`;
+  }).join("");
+  const closeOthers = activeOthers
+    ? `<form method="post" action="/account/sessions/revoke-others"><input type="hidden" name="csrf" value="${escapeHtml(csrf)}"><button class="secondary" type="submit">Fermer toutes les autres sessions (${escapeHtml(activeOthers)})</button></form>` : "";
+  return `<h1>Mes sessions</h1><p>Retrouve ici les connexions ouvertes dans l’écosystème NSK Tech 09. Une fermeture distante prend effet au prochain contrôle serveur de l’application.</p><div class="facts"><p><strong>Protection :</strong> cette page n’affiche aucun cookie, secret, adresse réseau ni identifiant technique de session.</p></div><nav>${closeOthers}<a class="button secondary" href="/">Retour à l’accueil</a><form method="post" action="/auth/logout"><button class="secondary" type="submit">Fermer la session actuelle</button></form></nav><div class="directory">${cards || '<div class="facts"><p>Aucune session enregistrée.</p></div>'}</div>`;
+}
+
 function renderNotificationOperations(snapshot) {
   const actionable = snapshot.events.pending + snapshot.events.processing + snapshot.events.retrying;
   const processor = snapshot.processor || { status: "never_run" };
@@ -245,6 +263,7 @@ export function createHttpHandler({
   maxBodyBytes = DEFAULT_MAX_BODY_BYTES,
   administrationSessionAuthority = null,
   sessionAuthority = null,
+  personalSessionManagement = null,
 }) {
   if (!repository) throw new Error("repository is required");
   if (typeof authenticate !== "function") throw new Error("authenticate must be a function");
@@ -346,6 +365,7 @@ export function createHttpHandler({
         ? `<p>Demande enregistrée : <strong>${escapeHtml(session.requestId)}</strong></p>` : "";
       const administrationLinks = [];
       if (session?.status === "authenticated" && session.csrf) {
+        administrationLinks.push('<a class="button" href="/account/sessions">Mes sessions</a>');
         try {
           const decision = await authorizeIdentityLinkAdministration(repository, session.identityId);
           if (decision.allowed) administrationLinks.push('<a class="button" href="/admin/link-requests">Administrer les rattachements</a>');
@@ -491,6 +511,81 @@ export function createHttpHandler({
       response.setHeader("location", "/");
       response.setHeader("set-cookie", cookie(OIDC_SESSION_COOKIE, "", { maxAge: 0 }));
       response.end();
+      return;
+    }
+    const personalSessionsRoot = url.pathname === "/account/sessions";
+    const personalSessionRevoke = url.pathname === "/account/sessions/revoke";
+    const personalSessionsRevokeOthers = url.pathname === "/account/sessions/revoke-others";
+    if (personalSessionsRoot || personalSessionRevoke || personalSessionsRevokeOthers) {
+      let session;
+      try {
+        if (!oidcConfig) throw new Error("oidc_not_configured");
+        session = await openCurrentSession(request);
+      } catch {
+        writeHtml(response, 401, "Connexion requise", '<h1>Connexion requise</h1><p>Une session NSK valide est nécessaire pour gérer tes connexions.</p><a class="button" href="/">Se connecter</a>');
+        return;
+      }
+      if (session.status !== "authenticated" || !session.identityId || !session.csrf ||
+          !session.centralSession?.sessionId) {
+        writeHtml(response, 401, "Nouvelle connexion requise", '<h1>Nouvelle connexion requise</h1><p>Renouvelle ta session afin de gérer tes connexions.</p><a class="button" href="/">Retour</a>');
+        return;
+      }
+      if (!personalSessionManagement) {
+        writeHtml(response, 503, "Sessions indisponibles", '<h1>Sessions momentanément indisponibles</h1><p>Aucune connexion n’a été modifiée.</p><a class="button" href="/">Retour</a>');
+        return;
+      }
+      if (personalSessionsRoot && request.method === "GET") {
+        try {
+          const sessions = await personalSessionManagement.listOwn({
+            identityId: session.identityId,
+            currentSessionId: session.centralSession.sessionId,
+          });
+          const actionToken = (target) => seal({
+            identityId: session.identityId,
+            targetSessionId: target.sessionId,
+            expectedVersion: target.version,
+            expiresAt: Date.now() + 10 * 60_000,
+          }, oidcConfig.sessionSecret, "personal-session-action");
+          writeHtml(response, 200, "Mes sessions", renderPersonalSessions(sessions, session.csrf, actionToken));
+        } catch {
+          writeHtml(response, 503, "Sessions indisponibles", '<h1>Sessions momentanément indisponibles</h1><p>Le registre n’a pas pu être consulté. Aucune connexion n’a été modifiée.</p><a class="button" href="/">Retour</a>');
+        }
+        return;
+      }
+      if ((personalSessionRevoke || personalSessionsRevokeOthers) && request.method === "POST") {
+        try {
+          const form = await readForm(request, maxBodyBytes);
+          if (!safeEqual(form.get("csrf"), session.csrf)) throw new HttpInputError(403, "invalid_csrf");
+          if (personalSessionRevoke) {
+            let target;
+            try {
+              target = open(form.get("target"), oidcConfig.sessionSecret, "personal-session-action");
+            } catch { throw new HttpInputError(400, "invalid_session_target"); }
+            if (target.identityId !== session.identityId || !Number.isSafeInteger(target.expectedVersion)) {
+              throw new HttpInputError(400, "invalid_session_target");
+            }
+            await personalSessionManagement.revokeOne({
+              identityId: session.identityId,
+              currentSessionId: session.centralSession.sessionId,
+              targetSessionId: target.targetSessionId,
+              expectedVersion: target.expectedVersion,
+            });
+          } else {
+            await personalSessionManagement.revokeAllOthers({
+              identityId: session.identityId,
+              currentSessionId: session.centralSession.sessionId,
+            });
+          }
+          redirect(response, "/account/sessions");
+        } catch (error) {
+          const status = error instanceof HttpInputError || error instanceof PersonalSessionError
+            ? error.status : 503;
+          writeHtml(response, status, "Session non modifiée", '<h1>Session non modifiée</h1><p>La demande est invalide, périmée ou concurrente. Aucune fermeture partielle n’a été présentée comme réussie.</p><a class="button" href="/account/sessions">Retour</a>');
+        }
+        return;
+      }
+      response.setHeader("allow", personalSessionsRoot ? "GET" : "POST");
+      writeJson(response, 405, { error: "method_not_allowed" });
       return;
     }
     const notificationsRoot = url.pathname === "/notifications";

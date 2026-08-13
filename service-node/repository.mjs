@@ -243,25 +243,41 @@ export class TransactionalMemoryRepository {
   }
 
   revokeApplicationSession(record, expectedVersion, auditEvent) {
-    if (!["application_session.revoked", "application_session.expired"].includes(auditEvent?.action)) {
-      throw new Error("invalid application session closure audit");
+    return this.revokeApplicationSessions([{ record, expectedVersion, auditEvent }])[0];
+  }
+
+  revokeApplicationSessions(closures) {
+    if (!Array.isArray(closures) || closures.length === 0) {
+      throw new Error("application session closures are required");
     }
-    assertApplicationSessionAudit(record, auditEvent, auditEvent.action);
+    const sessionIds = new Set();
+    for (const { record, auditEvent } of closures) {
+      if (!["application_session.revoked", "application_session.expired"].includes(auditEvent?.action)) {
+        throw new Error("invalid application session closure audit");
+      }
+      assertApplicationSessionAudit(record, auditEvent, auditEvent.action);
+      if (sessionIds.has(record.sessionId)) throw new Error("duplicate application session closure");
+      sessionIds.add(record.sessionId);
+    }
     return this.#transaction((state) => {
-      const previous = state.applicationSessions.get(record.sessionId);
-      if (!previous || previous.version !== expectedVersion || record.version !== expectedVersion + 1) {
-        throw new Error("stale application session version");
+      for (const { record, expectedVersion } of closures) {
+        const previous = state.applicationSessions.get(record.sessionId);
+        if (!previous || previous.version !== expectedVersion || record.version !== expectedVersion + 1) {
+          throw new Error("stale application session version");
+        }
+        assertApplicationSessionImmutableContext(previous, record);
+        if (previous.lastSeenAt !== record.lastSeenAt || previous.idleExpiresAt !== record.idleExpiresAt) {
+          throw new Error("application session activity is immutable during revocation");
+        }
+        if (previous.revokedAt || !record.revokedAt || !record.revocationReason) {
+          throw new Error("invalid application session revocation");
+        }
       }
-      assertApplicationSessionImmutableContext(previous, record);
-      if (previous.lastSeenAt !== record.lastSeenAt || previous.idleExpiresAt !== record.idleExpiresAt) {
-        throw new Error("application session activity is immutable during revocation");
+      for (const { record, auditEvent } of closures) {
+        state.applicationSessions.set(record.sessionId, structuredClone(record));
+        this.#appendAudit(state, auditEvent);
       }
-      if (previous.revokedAt || !record.revokedAt || !record.revocationReason) {
-        throw new Error("invalid application session revocation");
-      }
-      state.applicationSessions.set(record.sessionId, structuredClone(record));
-      this.#appendAudit(state, auditEvent);
-      return structuredClone(record);
+      return closures.map(({ record }) => structuredClone(record));
     });
   }
 

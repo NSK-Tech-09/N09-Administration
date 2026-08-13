@@ -186,3 +186,40 @@ test("révoque avec audit atomique et refuse un audit contenant la référence c
   assert.throws(() => repository.saveApplicationSession(second, leakingAudit), /must not contain/);
   assert.equal(repository.getApplicationSession(second.sessionId), null);
 });
+
+test("annule tout un groupe de révocations si une seule version est périmée", () => {
+  const repository = new TransactionalMemoryRepository();
+  const first = applicationSession(repository).record;
+  repository.saveApplicationSession(first, createApplicationSessionAuditEvent({
+    record: first, action: "application_session.created", correlationId: "batch-first-created",
+  }));
+  const second = createApplicationSession({
+    identityId: identity.identityId, applicationId: application.applicationId,
+    idleTtlMs: 60 * 60_000, absoluteTtlMs: 4 * 60 * 60_000,
+    now: new Date("2026-08-13T04:02:00Z"), authenticatedAt: new Date("2026-08-13T04:02:00Z"),
+    randomUuidImpl: () => "00000000-0000-4000-8000-000000000045",
+    randomBytesImpl: () => Buffer.alloc(32, 12),
+  }).record;
+  repository.saveApplicationSession(second, createApplicationSessionAuditEvent({
+    record: second, action: "application_session.created", correlationId: "batch-second-created",
+  }));
+  const closures = [first, second].map((record, index) => {
+    const revoked = revokeApplicationSession(record, {
+      revokedByIdentityId: identity.identityId, reason: "Fermeture groupée demandée",
+      now: new Date("2026-08-13T04:20:00Z"),
+    });
+    return {
+      record: revoked,
+      expectedVersion: index === 0 ? record.version : 99,
+      auditEvent: createApplicationSessionAuditEvent({
+        record: revoked, action: "application_session.revoked", actorId: identity.identityId,
+        correlationId: `batch-${index}-revoked`,
+      }),
+    };
+  });
+  const beforeAuditCount = repository.auditCount();
+  assert.throws(() => repository.revokeApplicationSessions(closures), /stale/);
+  assert.equal(repository.getApplicationSession(first.sessionId).revokedAt, null);
+  assert.equal(repository.getApplicationSession(second.sessionId).revokedAt, null);
+  assert.equal(repository.auditCount(), beforeAuditCount);
+});
