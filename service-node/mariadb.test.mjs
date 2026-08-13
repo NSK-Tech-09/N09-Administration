@@ -393,3 +393,51 @@ test("révoque une session MariaDB avec verrou, version et audit atomique", asyn
   assert.equal(calls.filter((call) => typeof call === "object" && call.sql.includes("INSERT INTO audit_events")).length, 1);
   assert.equal(calls.at(-2), "commit");
 });
+
+test("verrouille et révoque un groupe de sessions dans une seule transaction", async () => {
+  const first = persistedSession();
+  const second = createApplicationSession({
+    identityId: first.identityId, applicationId: first.applicationId,
+    idleTtlMs: 60 * 60_000, absoluteTtlMs: 4 * 60 * 60_000,
+    authenticatedAt: new Date("2026-08-13T04:02:00Z"), now: new Date("2026-08-13T04:02:00Z"),
+    randomUuidImpl: () => "00000000-0000-4000-8000-000000000045",
+    randomBytesImpl: () => Buffer.alloc(32, 12),
+  }).record;
+  const active = new Map([[first.sessionId, first], [second.sessionId, second]]);
+  const calls = [];
+  const connection = {
+    beginTransaction: async () => calls.push("begin"), commit: async () => calls.push("commit"),
+    rollback: async () => calls.push("rollback"), release: () => calls.push("release"),
+    execute: async (sql, values = []) => {
+      calls.push({ sql, values });
+      if (sql.includes("FROM application_sessions") && sql.includes("FOR UPDATE")) {
+        return [[sessionRow(active.get(values[0]))]];
+      }
+      if (sql.startsWith("SELECT current_hash")) return [[{ current_hash: "" }]];
+      return [{ affectedRows: 1 }];
+    },
+  };
+  const closures = [second, first].map((record, index) => {
+    const revoked = revokeApplicationSession(record, {
+      revokedByIdentityId: record.identityId, reason: "Fermeture groupée demandée",
+      now: new Date("2026-08-13T04:20:00Z"),
+    });
+    return {
+      record: revoked, expectedVersion: record.version,
+      auditEvent: createApplicationSessionAuditEvent({
+        record: revoked, action: "application_session.revoked", actorId: record.identityId,
+        correlationId: `batch-session-${index}`,
+      }),
+    };
+  });
+  await new MariaDbRepository({ getConnection: async () => connection }).revokeApplicationSessions(closures);
+  const lockedIds = calls
+    .filter((call) => typeof call === "object" && call.sql.includes("FROM application_sessions") && call.sql.includes("FOR UPDATE"))
+    .map((call) => call.values[0]);
+  assert.deepEqual(lockedIds, [first.sessionId, second.sessionId]);
+  assert.equal(calls.filter((call) => typeof call === "object" && call.sql.includes("SET revoked_at")).length, 2);
+  assert.equal(calls.filter((call) => typeof call === "object" && call.sql.includes("INSERT INTO audit_events")).length, 2);
+  assert.equal(calls.filter((call) => call === "begin").length, 1);
+  assert.equal(calls.filter((call) => call === "commit").length, 1);
+  assert.equal(calls.at(-1), "release");
+});

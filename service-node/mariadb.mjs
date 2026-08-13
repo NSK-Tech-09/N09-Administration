@@ -635,35 +635,52 @@ export class MariaDbRepository {
   }
 
   async revokeApplicationSession(record, expectedVersion, auditEvent) {
-    if (!["application_session.revoked", "application_session.expired"].includes(auditEvent?.action)) {
-      throw new Error("invalid application session closure audit");
+    return (await this.revokeApplicationSessions([{ record, expectedVersion, auditEvent }]))[0];
+  }
+
+  async revokeApplicationSessions(closures) {
+    if (!Array.isArray(closures) || closures.length === 0) {
+      throw new Error("application session closures are required");
     }
-    assertApplicationSessionAudit(record, auditEvent, auditEvent.action);
+    const sessionIds = new Set();
+    for (const { record, auditEvent } of closures) {
+      if (!["application_session.revoked", "application_session.expired"].includes(auditEvent?.action)) {
+        throw new Error("invalid application session closure audit");
+      }
+      assertApplicationSessionAudit(record, auditEvent, auditEvent.action);
+      if (sessionIds.has(record.sessionId)) throw new Error("duplicate application session closure");
+      sessionIds.add(record.sessionId);
+    }
+    const ordered = [...closures].sort((left, right) => left.record.sessionId.localeCompare(right.record.sessionId));
     return this.#transaction(async (connection) => {
-      const [rows] = await connection.execute(
-        "SELECT * FROM application_sessions WHERE session_id = ? FOR UPDATE", [record.sessionId],
-      );
-      const previous = mapApplicationSession(rows[0]);
-      if (!previous || previous.version !== expectedVersion || record.version !== expectedVersion + 1) {
-        throw new Error("stale application session version");
+      for (const { record, expectedVersion } of ordered) {
+        const [rows] = await connection.execute(
+          "SELECT * FROM application_sessions WHERE session_id = ? FOR UPDATE", [record.sessionId],
+        );
+        const previous = mapApplicationSession(rows[0]);
+        if (!previous || previous.version !== expectedVersion || record.version !== expectedVersion + 1) {
+          throw new Error("stale application session version");
+        }
+        assertApplicationSessionImmutableContext(previous, record);
+        if (previous.lastSeenAt !== record.lastSeenAt || previous.idleExpiresAt !== record.idleExpiresAt) {
+          throw new Error("application session activity is immutable during revocation");
+        }
+        if (previous.revokedAt || !record.revokedAt || !record.revocationReason) {
+          throw new Error("invalid application session revocation");
+        }
       }
-      assertApplicationSessionImmutableContext(previous, record);
-      if (previous.lastSeenAt !== record.lastSeenAt || previous.idleExpiresAt !== record.idleExpiresAt) {
-        throw new Error("application session activity is immutable during revocation");
+      for (const { record, expectedVersion, auditEvent } of ordered) {
+        const [result] = await connection.execute(
+          `UPDATE application_sessions
+           SET revoked_at = ?, revoked_by_identity_id = ?, revocation_reason = ?, version = ?
+           WHERE session_id = ? AND version = ? AND revoked_at IS NULL`,
+          [asMariaDate(record.revokedAt), record.revokedByIdentityId, record.revocationReason,
+           record.version, record.sessionId, expectedVersion],
+        );
+        if (result.affectedRows !== 1) throw new Error("stale application session version");
+        await this.#appendAudit(connection, auditEvent);
       }
-      if (previous.revokedAt || !record.revokedAt || !record.revocationReason) {
-        throw new Error("invalid application session revocation");
-      }
-      const [result] = await connection.execute(
-        `UPDATE application_sessions
-         SET revoked_at = ?, revoked_by_identity_id = ?, revocation_reason = ?, version = ?
-         WHERE session_id = ? AND version = ? AND revoked_at IS NULL`,
-        [asMariaDate(record.revokedAt), record.revokedByIdentityId, record.revocationReason,
-         record.version, record.sessionId, expectedVersion],
-      );
-      if (result.affectedRows !== 1) throw new Error("stale application session version");
-      await this.#appendAudit(connection, auditEvent);
-      return structuredClone(record);
+      return ordered.map(({ record }) => structuredClone(record));
     });
   }
 

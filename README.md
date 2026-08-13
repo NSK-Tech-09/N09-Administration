@@ -128,6 +128,13 @@ preuve centrale obligatoire dans les deux applications et retour arrière sans
 résurrection. Son déploiement imposera une nouvelle connexion en préproduction ;
 voir `docs/LOT-50-FERMETURE-ANCIENNES-SESSIONS-PREPROD.md`.
 
+Le lot 51 ouvre localement l'espace personnel « Mes sessions » dans
+Administration : consultation limitée à sa propre identité, identification de
+la session courante, fermeture distante unitaire ou fermeture atomique de toutes
+les autres sessions actives. Les cibles sont scellées, les mutations protégées
+contre la falsification et chaque fermeture est auditée ; voir
+`docs/LOT-51-GESTION-PERSONNELLE-SESSIONS.md`.
+
 ## Prérequis et démarrage local
 
 - Python 3.11 ou supérieur ;
@@ -180,6 +187,7 @@ ne contient aucun secret réel. La production reste inchangée.
 - [`docs/LOT-48-OPPOSABILITE-SESSIONS-ADMINISTRATION.md`](docs/LOT-48-OPPOSABILITE-SESSIONS-ADMINISTRATION.md)
 - [`docs/LOT-49-DEPLOIEMENT-SESSIONS-OPPOSABLES-PREPROD.md`](docs/LOT-49-DEPLOIEMENT-SESSIONS-OPPOSABLES-PREPROD.md)
 - [`docs/LOT-50-FERMETURE-ANCIENNES-SESSIONS-PREPROD.md`](docs/LOT-50-FERMETURE-ANCIENNES-SESSIONS-PREPROD.md)
+- [`docs/LOT-51-GESTION-PERSONNELLE-SESSIONS.md`](docs/LOT-51-GESTION-PERSONNELLE-SESSIONS.md)
 - [`docs/ETAT-PREPROD-INFOMANIAK.md`](docs/ETAT-PREPROD-INFOMANIAK.md)
 - [`docs/CONFORMITE-NSES.md`](docs/CONFORMITE-NSES.md)
 - [`docs/CONTRAT-API-INTERNE.md`](docs/CONTRAT-API-INTERNE.md)
