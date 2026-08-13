@@ -414,3 +414,45 @@ groupée réelle de plusieurs sessions est donc recettée. L'isolation vis-à-vi
 d'une autre identité reste couverte par les tests automatisés et attend une
 seconde identité NSK Tech 09 réelle pour sa recette humaine. Aucune mutation
 n'a été effectuée en production ni dans N09 – Énergie.
+
+## Lot 52 — seconde identité humaine et isolation réelle validées
+
+Le **13 août 2026**, une seconde identité humaine active a été créée par la
+commande contrôlée de préproduction, sans affectation ni permission :
+
+- **Fred TRAVERS — Recette** ;
+- `travers.fred.09@gmail.com` ;
+- identité NSK `ac31d4fa-ca3f-4d34-87b3-3d8e436b30de` ;
+- chaîne d'audit valide ;
+- zéro droit actif après création.
+
+La première connexion réelle dans une session Chrome isolée a produit une
+demande `link_required`, sans création automatique de compte ou de droit.
+L'identité administratrice principale a approuvé cette demande vers l'identité
+de recette avec une justification explicite. Le registre a alors conservé les
+six affectations existantes exclusivement sur l'identité principale.
+
+La recette a découvert un défaut de renouvellement : la fermeture d'une session
+encore `link_required` exigeait à tort la révocation d'une session centrale qui
+n'existe pas à ce stade. La PR **#59** a corrigé ce cas tout en conservant la
+révocation centrale obligatoire pour les sessions réellement authentifiées.
+Elle a été fusionnée avec le commit
+`16399df2b53a009d2592c3511be7fa7055d43d0a`.
+
+La release immuable `releases/16399df` a réussi **211 tests Node.js** et
+**63 tests Python** sur Infomaniak. Après un redémarrage explicite du processus,
+les contrôles local et public de `/health` ont répondu `{"status":"ok"}`.
+La release précédente `releases/dbf951a` reste disponible pour retour arrière.
+
+La recette finale dans Chrome confirme que :
+
+- la déconnexion puis la reconnexion du compte de recette fonctionnent ;
+- l'identité est affichée comme rattachée sous **Fred TRAVERS — Recette** ;
+- `/admin/access` est refusé faute de permission dédiée ;
+- N09 – Suivi des tâches refuse la connexion faute d'autorisation centrale ;
+- l'identité de recette ne voit que sa propre session Administration ;
+- aucune session de l'identité principale, aucun rôle et aucun droit ne sont
+  exposés ou accordés implicitement.
+
+L'isolation humaine réelle attendue après les lots 50 et 51 est donc validée.
+Aucune modification n'a été effectuée en production ni dans N09 – Énergie.
