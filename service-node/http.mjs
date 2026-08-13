@@ -494,12 +494,14 @@ export function createHttpHandler({
             oidcConfig.sessionSecret,
             "oidc-session",
           );
-          if (session?.sessionVersion === CURRENT_SESSION_VERSION) {
+          if (session?.sessionVersion === CURRENT_SESSION_VERSION && session.status === "authenticated") {
             const result = await administrationSessionAuthority.revokeCurrent({
               credential: session.centralSession ?? null,
               identityId: session.identityId,
             });
             if (!result.revoked) throw new Error(result.reasonCode);
+          } else if (session?.sessionVersion === CURRENT_SESSION_VERSION && session.status !== "link_required") {
+            throw new Error("invalid_session_status");
           }
         } catch {
           writeHtml(response, 503, "Déconnexion en attente", '<h1>Déconnexion en attente</h1><p>La fermeture centrale de cette session ne peut pas encore être confirmée. Aucun succès fictif n’est affiché et le cookie est conservé pour permettre une nouvelle tentative.</p><a class="button" href="/">Réessayer</a>');
