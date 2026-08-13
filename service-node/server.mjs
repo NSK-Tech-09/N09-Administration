@@ -10,6 +10,7 @@ import {
 } from "./runtime-config.mjs";
 import { oidcConfigFromEnvironment } from "./oidc.mjs";
 import { createPersonalSessionManagement } from "./personal-session-management.mjs";
+import { createOperatorSessionManagement } from "./operator-session-management.mjs";
 
 async function main() {
   const databaseConfig = mariaDbConfigFromEnvironment(process.env);
@@ -28,6 +29,7 @@ async function main() {
   });
   const sessionAuthority = createApplicationSessionAuthority({ repository, config: tasksSessionConfig });
   const personalSessionManagement = createPersonalSessionManagement({ repository });
+  const operatorSessionManagement = createOperatorSessionManagement({ repository });
   const server = createServer(createHttpHandler({
     repository,
     oidcConfig,
@@ -35,6 +37,7 @@ async function main() {
     administrationSessionAuthority,
     sessionAuthority,
     personalSessionManagement,
+    operatorSessionManagement,
   }));
   server.on("clientError", (_error, socket) => socket.end("HTTP/1.1 400 Bad Request\r\n\r\n"));
 

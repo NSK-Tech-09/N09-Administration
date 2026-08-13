@@ -12,6 +12,9 @@ import { ADMIN_APPLICATION_ID, authorizeIdentityLinkAdministration } from "./ide
 import { authorizeNotificationOperationsAdministration } from "./notification-operations-admin.mjs";
 import { PersonalSessionError } from "./personal-session-management.mjs";
 import {
+  authorizeSessionRevocationAdministration, OperatorSessionError,
+} from "./operator-session-management.mjs";
+import {
   exchangeApplicationLoginCode, issueApplicationLoginCode, validateAuthorizationRequest,
 } from "./application-login.mjs";
 import {
@@ -95,6 +98,13 @@ function safeEqual(left, right) {
   const leftBuffer = Buffer.from(left);
   const rightBuffer = Buffer.from(right);
   return leftBuffer.length === rightBuffer.length && timingSafeEqual(leftBuffer, rightBuffer);
+}
+
+function validOperatorTarget(target) {
+  const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  return target && uuid.test(String(target.targetIdentityId ?? "")) &&
+    uuid.test(String(target.targetSessionId ?? "")) &&
+    Number.isSafeInteger(target.expectedVersion) && target.expectedVersion > 0;
 }
 
 function redirect(response, location) {
@@ -234,6 +244,17 @@ function renderPersonalSessions(sessions, csrf, actionToken) {
   return `<h1>Mes sessions</h1><p>Retrouve ici les connexions ouvertes dans l’écosystème NSK Tech 09. Une fermeture distante prend effet au prochain contrôle serveur de l’application.</p><div class="facts"><p><strong>Protection :</strong> cette page n’affiche aucun cookie, secret, adresse réseau ni identifiant technique de session.</p></div><nav>${closeOthers}<a class="button secondary" href="/">Retour à l’accueil</a><form method="post" action="/auth/logout"><button class="secondary" type="submit">Fermer la session actuelle</button></form></nav><div class="directory">${cards || '<div class="facts"><p>Aucune session enregistrée.</p></div>'}</div>`;
 }
 
+function renderOperatorSessions(sessions, csrf, actionToken) {
+  const cards = sessions.map((session) => {
+    const action = session.current
+      ? '<p class="muted">La session opérateur courante se ferme uniquement depuis l’espace personnel.</p>'
+      : `<form class="grant" method="post" action="/admin/sessions/revoke"><input type="hidden" name="csrf" value="${escapeHtml(csrf)}"><input type="hidden" name="target" value="${escapeHtml(actionToken(session))}"><label>Justification de la fermeture<input name="justification" minlength="20" maxlength="500" required placeholder="Pourquoi cette session doit-elle être fermée ?"></label><button class="secondary" type="submit">Révoquer cette session</button></form>`;
+    const identityState = session.identityStatus === "active" ? "Identité active" : `Identité ${session.identityStatus}`;
+    return `<article class="entry"><p><span class="pill">Session active</span> · ${escapeHtml(identityState)}</p><h3>${escapeHtml(session.identityName)}</h3><p>${escapeHtml(session.identityEmail)}<br><strong>${escapeHtml(session.applicationName)}</strong> · ${escapeHtml(session.contextLabel || "Connexion à l’application")}</p><p class="muted">Ouverte le ${escapeHtml(formatDate(session.issuedAt))}<br>Dernière activité ${escapeHtml(formatDate(session.lastSeenAt))}<br>Expiration d’inactivité ${escapeHtml(formatDate(session.idleExpiresAt))}<br>Échéance absolue ${escapeHtml(formatDate(session.absoluteExpiresAt))}</p>${action}</article>`;
+  }).join("");
+  return `<h1>Sessions actives de l’écosystème</h1><p>Cette console permet uniquement la révocation motivée d’une session active. Elle ne révèle ni cookie, ni secret, ni adresse réseau, ni identifiant technique.</p><div class="summary"><div class="metric"><strong>${escapeHtml(sessions.length)}</strong>session${sessions.length > 1 ? "s" : ""} active${sessions.length > 1 ? "s" : ""}</div></div><div class="facts"><p><strong>Périmètre :</strong> administration globale explicitement attribuée par la permission dédiée <code>administration:sessions:revoke</code>.</p><p><strong>Garde-fou :</strong> la session opérateur courante ne peut pas être fermée depuis cette console.</p></div><div class="directory">${cards || '<div class="facts"><p>Aucune session active enregistrée.</p></div>'}</div><nav><a class="button secondary" href="/">Retour à l’accueil</a><a class="button secondary" href="/account/sessions">Mes sessions</a></nav>`;
+}
+
 function renderNotificationOperations(snapshot) {
   const actionable = snapshot.events.pending + snapshot.events.processing + snapshot.events.retrying;
   const processor = snapshot.processor || { status: "never_run" };
@@ -264,6 +285,7 @@ export function createHttpHandler({
   administrationSessionAuthority = null,
   sessionAuthority = null,
   personalSessionManagement = null,
+  operatorSessionManagement = null,
 }) {
   if (!repository) throw new Error("repository is required");
   if (typeof authenticate !== "function") throw new Error("authenticate must be a function");
@@ -382,6 +404,10 @@ export function createHttpHandler({
           const decision = await authorizeNotificationOperationsAdministration(repository, session.identityId);
           if (decision.allowed) administrationLinks.push('<a class="button" href="/admin/notification-operations">Exploiter les notifications</a>');
         } catch { /* no administrative affordance on repository failure */ }
+        try {
+          const decision = await authorizeSessionRevocationAdministration(repository, session.identityId);
+          if (decision.allowed) administrationLinks.push('<a class="button" href="/admin/sessions">Gérer les sessions actives</a>');
+        } catch { /* no administrative affordance on repository failure */ }
         if (typeof repository.countUnreadNotifications === "function") {
           try {
             const unread = await repository.countUnreadNotifications(session.identityId);
@@ -393,6 +419,94 @@ export function createHttpHandler({
         ? `<h1>Identité Infomaniak vérifiée</h1><p>Bienvenue <strong>${escapeHtml(session.displayName)}</strong>. La preuve cryptographique est valide.</p><div class="facts"><p>État NSK : <strong>${session.status === "authenticated" ? "rattachée" : "rattachement requis"}</strong></p>${requestReference}<p>${session.status === "authenticated" ? "Le compte NSK est reconnu ; les droits restent contrôlés séparément." : "Aucun compte, rôle ou droit n’a été créé automatiquement. Une décision humaine reste obligatoire."}</p></div><nav>${administrationLinks.join("")}<form method="post" action="/auth/logout"><button class="secondary" type="submit">Fermer la session</button></form></nav>`
         : `<h1>Le cœur d’identité est prêt</h1><p>Connecte-toi avec Infomaniak pour présenter une preuve d’identité au registre central NSK.</p><div class="facts"><p><strong>Connexion réelle :</strong> Authorization Code + PKCE S256.</p><p><strong>Zéro privilège implicite :</strong> une identité inconnue reste sans droit.</p></div>${oidcConfig ? '<a class="button" href="/auth/infomaniak/start">Continuer avec Infomaniak</a>' : '<p>Le fournisseur OIDC n’est pas encore configuré.</p>'}`;
       writeHtml(response, 200, "Accueil", content);
+      return;
+    }
+    const operatorSessionsRoot = url.pathname === "/admin/sessions";
+    const operatorSessionRevoke = url.pathname === "/admin/sessions/revoke";
+    if (operatorSessionsRoot || operatorSessionRevoke) {
+      let session;
+      try {
+        if (!oidcConfig) throw new Error("oidc_not_configured");
+        session = await openCurrentSession(request);
+      } catch {
+        writeHtml(response, 401, "Connexion requise", '<h1>Connexion requise</h1><p>Une session NSK valide est nécessaire pour administrer les sessions.</p><a class="button" href="/">Se connecter</a>');
+        return;
+      }
+      if (session.status !== "authenticated" || !session.identityId || !session.csrf ||
+          !session.centralSession?.sessionId) {
+        writeHtml(response, 401, "Nouvelle connexion requise", '<h1>Nouvelle connexion requise</h1><p>Renouvelle ta session afin d’accéder à l’administration sécurisée.</p><a class="button" href="/">Retour</a>');
+        return;
+      }
+      let access;
+      try {
+        access = await authorizeSessionRevocationAdministration(repository, session.identityId);
+      } catch {
+        console.error(JSON.stringify({ event: "operator_session_administration_unavailable", reason: "authorization_repository_failure" }));
+        writeHtml(response, 503, "Sessions indisponibles", '<h1>Administration momentanément indisponible</h1><p>Le pouvoir de révocation ne peut pas être vérifié. Aucune session n’a été modifiée.</p><a class="button" href="/">Retour</a>');
+        return;
+      }
+      if (!access.allowed) {
+        writeHtml(response, 403, "Accès refusé", '<h1>Accès refusé</h1><p>Cette identité ne possède pas la permission dédiée à la révocation des sessions. Aucun droit implicite n’est accordé.</p><a class="button" href="/">Retour</a>');
+        return;
+      }
+      if (!operatorSessionManagement) {
+        writeHtml(response, 503, "Sessions indisponibles", '<h1>Sessions momentanément indisponibles</h1><p>Aucune session n’a été modifiée.</p><a class="button" href="/">Retour</a>');
+        return;
+      }
+      if (operatorSessionsRoot && request.method === "GET") {
+        try {
+          const sessions = await operatorSessionManagement.listActive({
+            operatorIdentityId: session.identityId,
+            currentSessionId: session.centralSession.sessionId,
+          });
+          const actionToken = (target) => seal({
+            operatorIdentityId: session.identityId,
+            targetIdentityId: target.identityId,
+            targetSessionId: target.sessionId,
+            expectedVersion: target.version,
+            expiresAt: Date.now() + 10 * 60_000,
+          }, oidcConfig.sessionSecret, "operator-session-action");
+          writeHtml(response, 200, "Sessions actives", renderOperatorSessions(sessions, session.csrf, actionToken));
+        } catch {
+          console.error(JSON.stringify({ event: "operator_session_administration_unavailable", reason: "listing_repository_failure" }));
+          writeHtml(response, 503, "Sessions indisponibles", '<h1>Sessions momentanément indisponibles</h1><p>Le registre n’a pas pu être consulté. Aucune session n’a été modifiée.</p><a class="button" href="/">Retour</a>');
+        }
+        return;
+      }
+      if (operatorSessionRevoke && request.method === "POST") {
+        try {
+          const form = await readForm(request, maxBodyBytes);
+          if (!safeEqual(form.get("csrf"), session.csrf)) throw new HttpInputError(403, "invalid_csrf");
+          let target;
+          try {
+            target = open(form.get("target"), oidcConfig.sessionSecret, "operator-session-action");
+          } catch { throw new HttpInputError(400, "invalid_session_target"); }
+          if (target.operatorIdentityId !== session.identityId || !validOperatorTarget(target)) {
+            throw new HttpInputError(400, "invalid_session_target");
+          }
+          const justification = String(form.get("justification") ?? "").trim();
+          if (justification.length < 20 || justification.length > 500) {
+            throw new HttpInputError(400, "invalid_justification");
+          }
+          await operatorSessionManagement.revokeOne({
+            operatorIdentityId: session.identityId,
+            currentSessionId: session.centralSession.sessionId,
+            targetIdentityId: target.targetIdentityId,
+            targetSessionId: target.targetSessionId,
+            expectedVersion: target.expectedVersion,
+            justification,
+          });
+          redirect(response, "/admin/sessions");
+        } catch (error) {
+          const status = error instanceof HttpInputError || error instanceof OperatorSessionError
+            ? error.status : 503;
+          if (status >= 500) console.error(JSON.stringify({ event: "operator_session_revocation_failed", reason: "repository_rejected_decision" }));
+          writeHtml(response, status, "Session non modifiée", '<h1>Session non modifiée</h1><p>La demande est invalide, périmée, hors périmètre ou concurrente. Aucune fermeture partielle n’a été présentée comme réussie.</p><a class="button" href="/admin/sessions">Retour</a>');
+        }
+        return;
+      }
+      response.setHeader("allow", operatorSessionsRoot ? "GET" : "POST");
+      writeJson(response, 405, { error: "method_not_allowed" });
       return;
     }
     if (url.pathname === "/auth/infomaniak/start" && request.method === "GET") {

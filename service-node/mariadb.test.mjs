@@ -343,6 +343,21 @@ test("annule la création de session si son audit MariaDB échoue", async () => 
   assert.equal(pool.calls.includes("commit"), false);
 });
 
+test("lit le registre complet des sessions en une seule requête ordonnée", async () => {
+  const record = persistedSession();
+  const calls = [];
+  const repository = new MariaDbRepository({
+    execute: async (sql, values = []) => {
+      calls.push({ sql, values });
+      return [[sessionRow(record)]];
+    },
+  });
+  assert.deepEqual(await repository.listAllApplicationSessions(), [record]);
+  assert.equal(calls.length, 1);
+  assert.match(calls[0].sql, /ORDER BY last_seen_at DESC, session_id/);
+  assert.deepEqual(calls[0].values, []);
+});
+
 test("actualise l’activité MariaDB seulement pour la version active attendue", async () => {
   const calls = [];
   const active = persistedSession();

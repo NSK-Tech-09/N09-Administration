@@ -220,6 +220,15 @@ export class TransactionalMemoryRepository {
       .map((item) => structuredClone(item));
   }
 
+  listAllApplicationSessions() {
+    return [...this.#applicationSessions.values()]
+      .sort((left, right) =>
+        String(right.lastSeenAt).localeCompare(String(left.lastSeenAt)) ||
+        left.sessionId.localeCompare(right.sessionId)
+      )
+      .map((item) => structuredClone(item));
+  }
+
   touchApplicationSession(record, expectedVersion) {
     return this.#transaction((state) => {
       const previous = state.applicationSessions.get(record.sessionId);

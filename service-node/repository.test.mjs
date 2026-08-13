@@ -116,6 +116,7 @@ test("persiste la session et son audit de création dans une seule transaction m
   repository.saveApplicationSession(record, event);
   assert.deepEqual(repository.getApplicationSession(record.sessionId), record);
   assert.deepEqual(repository.listApplicationSessions(identity.identityId), [record]);
+  assert.deepEqual(repository.listAllApplicationSessions(), [record]);
   assert.equal(repository.auditCount(), 3);
   assert.equal(repository.verifyAuditChain(), true);
 });
