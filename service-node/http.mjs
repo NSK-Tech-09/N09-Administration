@@ -242,23 +242,24 @@ export function createHttpHandler({
   oidcConfig = null,
   fetchImpl = fetch,
   maxBodyBytes = DEFAULT_MAX_BODY_BYTES,
-  sessionShadow = null,
+  administrationSessionAuthority = null,
   sessionAuthority = null,
 }) {
   if (!repository) throw new Error("repository is required");
   if (typeof authenticate !== "function") throw new Error("authenticate must be a function");
 
   function observeSessionInBackground(session) {
-    if (!sessionShadow || session?.status !== "authenticated" || !session.identityId) return;
+    if (administrationSessionAuthority?.mode !== "observe" ||
+        session?.status !== "authenticated" || !session.identityId) return;
     try {
-      Promise.resolve(sessionShadow.observe({
-        credential: session.shadowSession ?? null,
+      Promise.resolve(administrationSessionAuthority.observe({
+        credential: session.centralSession ?? session.shadowSession ?? null,
         identityId: session.identityId,
       })).catch(() => {});
     } catch { /* observation must never influence current access */ }
   }
 
-  function openCurrentSession(request) {
+  async function openCurrentSession(request) {
     if (!oidcConfig) throw new Error("oidc_not_configured");
     const session = open(
       parseCookies(request.headers.cookie).get(OIDC_SESSION_COOKIE),
@@ -266,15 +267,20 @@ export function createHttpHandler({
       "oidc-session",
     );
     observeSessionInBackground(session);
+    if (administrationSessionAuthority?.mode === "enforce" && session?.status === "authenticated") {
+      const assessment = await administrationSessionAuthority.assess({
+        credential: session.centralSession ?? session.shadowSession ?? null,
+        identityId: session.identityId,
+      });
+      if (!assessment.allowed) throw new Error(assessment.reasonCode);
+    }
     return session;
   }
 
-  async function attachShadowSession(session) {
-    if (!sessionShadow || session?.status !== "authenticated" || !session.identityId) return session;
-    try {
-      const credential = await sessionShadow.enroll({ identityId: session.identityId });
-      return credential ? { ...session, shadowSession: credential } : session;
-    } catch { return session; }
+  async function attachCentralSession(session) {
+    if (!administrationSessionAuthority || session?.status !== "authenticated" || !session.identityId) return session;
+    const credential = await administrationSessionAuthority.issue({ identityId: session.identityId });
+    return credential ? { ...session, centralSession: credential } : session;
   }
 
   return async function handle(request, response) {
@@ -288,7 +294,7 @@ export function createHttpHandler({
         if (!oidcConfig) throw new Error("oidc_not_configured");
         const loginRequest = validateAuthorizationRequest(url.searchParams);
         let session;
-        try { session = openCurrentSession(request); } catch { /* login below */ }
+        try { session = await openCurrentSession(request); } catch { /* login below */ }
         if (!session) {
           redirect(response, `/auth/infomaniak/start?return_to=${encodeURIComponent(`${url.pathname}${url.search}`)}`);
           return;
@@ -332,7 +338,7 @@ export function createHttpHandler({
     if (url.pathname === "/" && request.method === "GET") {
       let session = null;
       if (oidcConfig) {
-        try { session = openCurrentSession(request); } catch { /* anonymous */ }
+        try { session = await openCurrentSession(request); } catch { /* anonymous */ }
       }
       const requestReference = session?.requestId
         ? `<p>Demande enregistrée : <strong>${escapeHtml(session.requestId)}</strong></p>` : "";
@@ -427,7 +433,7 @@ export function createHttpHandler({
             expiresAt: Date.now() + 8 * 60 * 60 * 1000,
           };
         }
-        session = await attachShadowSession(session);
+        session = await attachCentralSession(session);
         const sessionCookie = cookie(OIDC_SESSION_COOKIE, seal(session, oidcConfig.sessionSecret, "oidc-session"), { maxAge: 8 * 60 * 60 });
         response.statusCode = 303;
         response.setHeader("cache-control", "no-store");
@@ -439,14 +445,15 @@ export function createHttpHandler({
           ? error.message : "unexpected_oidc_error";
         console.error(JSON.stringify({ event: "oidc_callback_failed", reason }));
         const diagnostic = oidcConfig?.exposeSafeErrors ? `<p class="note">Code diagnostic : <code>${reason}</code></p>` : "";
-        writeHtml(response, 400, "Connexion non validée", `<h1>Connexion non validée</h1><p>La preuve d’identité n’a pas pu être vérifiée. Aucun compte et aucun droit n’ont été modifiés.</p>${diagnostic}<a class="button" href="/">Retour</a>`, [clearTransaction]);
+        const unavailable = reason === "administration_session_registry_unavailable";
+        writeHtml(response, unavailable ? 503 : 400, "Connexion non validée", `<h1>Connexion non validée</h1><p>${unavailable ? "Le registre central de sessions n’est pas disponible. Aucune session locale autonome n’a été créée." : "La preuve d’identité n’a pas pu être vérifiée. Aucun compte et aucun droit n’ont été modifiés."}</p>${diagnostic}<a class="button" href="/">Retour</a>`, [clearTransaction]);
       }
       return;
     }
     if (url.pathname === "/auth/session" && request.method === "GET") {
       try {
         if (!oidcConfig) throw new Error("oidc_not_configured");
-        const session = openCurrentSession(request);
+        const session = await openCurrentSession(request);
         writeJson(response, 200, {
           authenticated: true, provider: "infomaniak", status: session.status,
           display_name: session.displayName, request_id: session.requestId ?? null,
@@ -455,6 +462,24 @@ export function createHttpHandler({
       return;
     }
     if (url.pathname === "/auth/logout" && request.method === "POST") {
+      if (administrationSessionAuthority?.mode === "enforce") {
+        try {
+          if (!oidcConfig) throw new Error("oidc_not_configured");
+          const session = open(
+            parseCookies(request.headers.cookie).get(OIDC_SESSION_COOKIE),
+            oidcConfig.sessionSecret,
+            "oidc-session",
+          );
+          const result = await administrationSessionAuthority.revokeCurrent({
+            credential: session.centralSession ?? session.shadowSession ?? null,
+            identityId: session.identityId,
+          });
+          if (!result.revoked) throw new Error(result.reasonCode);
+        } catch {
+          writeHtml(response, 503, "Déconnexion en attente", '<h1>Déconnexion en attente</h1><p>La fermeture centrale de cette session ne peut pas encore être confirmée. Aucun succès fictif n’est affiché et le cookie est conservé pour permettre une nouvelle tentative.</p><a class="button" href="/">Réessayer</a>');
+          return;
+        }
+      }
       response.statusCode = 303;
       response.setHeader("cache-control", "no-store");
       response.setHeader("location", "/");
@@ -469,7 +494,7 @@ export function createHttpHandler({
       let session;
       try {
         if (!oidcConfig) throw new Error("oidc_not_configured");
-        session = openCurrentSession(request);
+        session = await openCurrentSession(request);
       } catch {
         writeHtml(response, 401, "Connexion requise", '<h1>Connexion requise</h1><p>Une session NSK valide est nécessaire pour consulter tes notifications.</p><a class="button" href="/">Se connecter</a>');
         return;
@@ -521,7 +546,7 @@ export function createHttpHandler({
       let session;
       try {
         if (!oidcConfig) throw new Error("oidc_not_configured");
-        session = openCurrentSession(request);
+        session = await openCurrentSession(request);
       } catch {
         writeHtml(response, 401, "Connexion requise", '<h1>Connexion requise</h1><p>Une session NSK valide est nécessaire.</p><a class="button" href="/">Se connecter</a>');
         return;
@@ -558,7 +583,7 @@ export function createHttpHandler({
       let session;
       try {
         if (!oidcConfig) throw new Error("oidc_not_configured");
-        session = openCurrentSession(request);
+        session = await openCurrentSession(request);
       } catch {
         writeHtml(response, 401, "Connexion requise", '<h1>Connexion requise</h1><p>Une session NSK valide est nécessaire.</p><a class="button" href="/">Se connecter</a>');
         return;
@@ -657,7 +682,7 @@ export function createHttpHandler({
       let session;
       try {
         if (!oidcConfig) throw new Error("oidc_not_configured");
-        session = openCurrentSession(request);
+        session = await openCurrentSession(request);
       } catch {
         writeHtml(response, 401, "Connexion requise", '<h1>Connexion requise</h1><p>Une session NSK valide est nécessaire.</p><a class="button" href="/">Se connecter</a>');
         return;
@@ -695,7 +720,7 @@ export function createHttpHandler({
       let session;
       try {
         if (!oidcConfig) throw new Error("oidc_not_configured");
-        session = openCurrentSession(request);
+        session = await openCurrentSession(request);
       } catch {
         writeHtml(response, 401, "Connexion requise", '<h1>Connexion requise</h1><p>Une session NSK valide est nécessaire.</p><a class="button" href="/">Se connecter</a>');
         return;

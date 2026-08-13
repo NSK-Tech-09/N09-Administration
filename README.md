@@ -108,13 +108,13 @@ un verrou singleton dans MariaDB. La console conserve seulement l’état borné
 dernier cycle, sans charge métier ni identité technique ; voir
 `docs/ADR-019-TRAITEMENT-AUTONOME-NOTIFICATIONS.md`.
 
-Le registre de sessions entre maintenant dans sa phase d'observation locale.
-Lorsqu'elle sera explicitement activée en préproduction, une nouvelle connexion
-rattachée d'Administration pourra créer une session centrale et comparer son
-état en arrière-plan. Le cookie actuel restera seul opposable : absence,
-divergence, expiration, révocation ou panne du registre ne modifieront encore
-aucun accès. Les mesures structurées excluent identités, références, secrets,
-empreintes et cookies ; voir `docs/LOT-45-OBSERVATION-INOPPOSABLE-SESSIONS.md`.
+Le registre de sessions a franchi l'observation inopposable et prépare désormais
+son opposabilité progressive. Le lot 47 couvre l'application pilote Suivi des
+tâches ; le lot 48 rend la propre session web d'Administration contrôlable et
+révocable côté serveur, tout en conservant `observe` jusqu'à une bascule
+explicitement recettée. Une déconnexion opposable ne présente le succès qu'après
+révocation centrale confirmée ; voir
+`docs/LOT-48-OPPOSABILITE-SESSIONS-ADMINISTRATION.md`.
 
 ## Prérequis et démarrage local
 
@@ -165,6 +165,7 @@ ne contient aucun secret réel. La production reste inchangée.
 - [`docs/LOT-45-OBSERVATION-INOPPOSABLE-SESSIONS.md`](docs/LOT-45-OBSERVATION-INOPPOSABLE-SESSIONS.md)
 - [`docs/LOT-46-ACTIVATION-OBSERVATION-SESSIONS-PREPROD.md`](docs/LOT-46-ACTIVATION-OBSERVATION-SESSIONS-PREPROD.md)
 - [`docs/LOT-47-OPPOSABILITE-SESSIONS-SUIVI-TACHES.md`](docs/LOT-47-OPPOSABILITE-SESSIONS-SUIVI-TACHES.md)
+- [`docs/LOT-48-OPPOSABILITE-SESSIONS-ADMINISTRATION.md`](docs/LOT-48-OPPOSABILITE-SESSIONS-ADMINISTRATION.md)
 - [`docs/ETAT-PREPROD-INFOMANIAK.md`](docs/ETAT-PREPROD-INFOMANIAK.md)
 - [`docs/CONFORMITE-NSES.md`](docs/CONFORMITE-NSES.md)
 - [`docs/CONTRAT-API-INTERNE.md`](docs/CONTRAT-API-INTERNE.md)

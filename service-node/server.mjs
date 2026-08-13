@@ -1,11 +1,11 @@
 import { createServer } from "node:http";
-import { createApplicationSessionShadow } from "./application-session-shadow.mjs";
+import { createAdministrationSessionAuthority } from "./administration-session-authority.mjs";
 import { createApplicationSessionAuthority } from "./application-session-authority.mjs";
 import { createHttpHandler } from "./http.mjs";
 import { createInternalClientAuthenticator, internalClientsFromEnvironment } from "./internal-client-auth.mjs";
 import { createMariaDbPool, MariaDbRepository } from "./mariadb.mjs";
 import {
-  applicationSessionShadowConfigFromEnvironment, httpConfigFromEnvironment, mariaDbConfigFromEnvironment,
+  administrationSessionConfigFromEnvironment, httpConfigFromEnvironment, mariaDbConfigFromEnvironment,
   tasksApplicationSessionConfigFromEnvironment,
 } from "./runtime-config.mjs";
 import { oidcConfigFromEnvironment } from "./oidc.mjs";
@@ -14,20 +14,23 @@ async function main() {
   const databaseConfig = mariaDbConfigFromEnvironment(process.env);
   const httpConfig = httpConfigFromEnvironment(process.env);
   const oidcConfig = oidcConfigFromEnvironment(process.env);
-  const sessionShadowConfig = applicationSessionShadowConfigFromEnvironment(process.env);
+  const administrationSessionConfig = administrationSessionConfigFromEnvironment(process.env);
   const tasksSessionConfig = tasksApplicationSessionConfigFromEnvironment(process.env);
   const authenticate = createInternalClientAuthenticator({ clients: internalClientsFromEnvironment(process.env) });
   const pool = await createMariaDbPool(databaseConfig);
   await pool.query("SELECT 1");
 
   const repository = new MariaDbRepository(pool);
-  const sessionShadow = createApplicationSessionShadow({ repository, config: sessionShadowConfig });
+  const administrationSessionAuthority = createAdministrationSessionAuthority({
+    repository,
+    config: administrationSessionConfig,
+  });
   const sessionAuthority = createApplicationSessionAuthority({ repository, config: tasksSessionConfig });
   const server = createServer(createHttpHandler({
     repository,
     oidcConfig,
     authenticate,
-    sessionShadow,
+    administrationSessionAuthority,
     sessionAuthority,
   }));
   server.on("clientError", (_error, socket) => socket.end("HTTP/1.1 400 Bad Request\r\n\r\n"));
@@ -45,7 +48,7 @@ async function main() {
   });
   console.log(JSON.stringify({
     event: "service_started", host: httpConfig.host, port: httpConfig.port,
-    session_shadow_mode: sessionShadowConfig.mode,
+    administration_session_mode: administrationSessionConfig.mode,
     tasks_session_mode: tasksSessionConfig.mode,
   }));
 }

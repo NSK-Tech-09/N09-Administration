@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
-  applicationSessionShadowConfigFromEnvironment, httpConfigFromEnvironment, mariaDbConfigFromEnvironment,
+  administrationSessionConfigFromEnvironment, httpConfigFromEnvironment, mariaDbConfigFromEnvironment,
   tasksApplicationSessionConfigFromEnvironment,
 } from "./runtime-config.mjs";
 
@@ -56,27 +56,33 @@ test("maintient le transport sur la boucle locale avant OIDC", () => {
   assert.throws(() => httpConfigFromEnvironment({ N09_HTTP_PORT: "70000" }), /port/);
 });
 
-test("ferme l'observation des sessions par défaut et la borne à la préproduction", () => {
-  assert.deepEqual(applicationSessionShadowConfigFromEnvironment({}), {
+test("prépare l'observation puis l'opposabilité des sessions Administration en préproduction", () => {
+  assert.deepEqual(administrationSessionConfigFromEnvironment({}), {
     mode: "disabled", applicationId: "n09-administration",
     idleTtlMs: 1_800_000, absoluteTtlMs: 28_800_000, touchIntervalMs: 300_000,
   });
-  assert.deepEqual(applicationSessionShadowConfigFromEnvironment({
-    N09_ENVIRONMENT: "preprod", N09_SESSION_SHADOW_MODE: "observe",
-    N09_SESSION_SHADOW_IDLE_TTL_MS: "600000",
-    N09_SESSION_SHADOW_ABSOLUTE_TTL_MS: "3600000",
-    N09_SESSION_SHADOW_TOUCH_INTERVAL_MS: "120000",
+  assert.deepEqual(administrationSessionConfigFromEnvironment({
+    N09_ENVIRONMENT: "preprod", N09_ADMIN_SESSION_MODE: "observe",
+    N09_ADMIN_SESSION_IDLE_TTL_MS: "600000",
+    N09_ADMIN_SESSION_ABSOLUTE_TTL_MS: "3600000",
+    N09_ADMIN_SESSION_TOUCH_INTERVAL_MS: "120000",
   }), {
     mode: "observe", applicationId: "n09-administration",
     idleTtlMs: 600_000, absoluteTtlMs: 3_600_000, touchIntervalMs: 120_000,
   });
-  assert.throws(() => applicationSessionShadowConfigFromEnvironment({
-    N09_ENVIRONMENT: "production", N09_SESSION_SHADOW_MODE: "observe",
+  assert.equal(administrationSessionConfigFromEnvironment({
+    N09_ENVIRONMENT: "preprod", N09_ADMIN_SESSION_MODE: "enforce",
+  }).mode, "enforce");
+  assert.throws(() => administrationSessionConfigFromEnvironment({
+    N09_ENVIRONMENT: "production", N09_ADMIN_SESSION_MODE: "enforce",
   }), /restricted to preprod/);
-  assert.throws(() => applicationSessionShadowConfigFromEnvironment({
-    N09_SESSION_SHADOW_MODE: "enforce",
-  }), /disabled or observe/);
-  assert.throws(() => applicationSessionShadowConfigFromEnvironment({
-    N09_SESSION_SHADOW_IDLE_TTL_MS: "300000", N09_SESSION_SHADOW_TOUCH_INTERVAL_MS: "300000",
+  assert.throws(() => administrationSessionConfigFromEnvironment({
+    N09_ADMIN_SESSION_MODE: "issue",
+  }), /disabled, observe or enforce/);
+  assert.throws(() => administrationSessionConfigFromEnvironment({
+    N09_ADMIN_SESSION_IDLE_TTL_MS: "300000", N09_ADMIN_SESSION_TOUCH_INTERVAL_MS: "300000",
   }), /lifetime/);
+  assert.equal(administrationSessionConfigFromEnvironment({
+    N09_ENVIRONMENT: "preprod", N09_SESSION_SHADOW_MODE: "observe",
+  }).mode, "observe");
 });

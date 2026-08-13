@@ -244,14 +244,15 @@ test("observe la session centrale sans rendre son résultat opposable", async ()
     secret: "B".repeat(43),
   };
   const observations = [];
-  const sessionShadow = {
-    enroll: async () => null,
+  const administrationSessionAuthority = {
+    mode: "observe",
+    issue: async () => null,
     observe: async (input) => {
       observations.push(input);
       throw new Error("simulated central divergence");
     },
   };
-  await withServer({ oidcConfig, sessionShadow }, async (baseUrl) => {
+  await withServer({ oidcConfig, administrationSessionAuthority }, async (baseUrl) => {
     const response = await fetch(`${baseUrl}/auth/session`, {
       headers: { cookie: adminCookie("csrf-value", shadowSession) },
     });
@@ -260,6 +261,67 @@ test("observe la session centrale sans rendre son résultat opposable", async ()
     await new Promise((resolve) => setImmediate(resolve));
   });
   assert.deepEqual(observations, [{ credential: shadowSession, identityId: adminIdentity.identityId }]);
+});
+
+test("ferme l'accès HTTP lorsque la session Administration centrale est refusée", async () => {
+  const credential = {
+    sessionId: "b14ad8d3-b14b-4f2e-8f0b-c79dfc1fd702",
+    secret: "B".repeat(43),
+  };
+  const assessments = [];
+  const administrationSessionAuthority = {
+    mode: "enforce",
+    assess: async (input) => {
+      assessments.push(input);
+      return { allowed: false, reasonCode: "session_revoked" };
+    },
+  };
+  await withServer({ oidcConfig, administrationSessionAuthority }, async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/auth/session`, {
+      headers: { cookie: adminCookie("csrf-value", credential) },
+    });
+    assert.equal(response.status, 401);
+    assert.deepEqual(await response.json(), { authenticated: false });
+  });
+  assert.deepEqual(assessments, [{ credential, identityId: adminIdentity.identityId }]);
+});
+
+test("confirme la déconnexion seulement après révocation centrale", async () => {
+  const credential = {
+    sessionId: "b14ad8d3-b14b-4f2e-8f0b-c79dfc1fd702",
+    secret: "B".repeat(43),
+  };
+  const revocations = [];
+  const authority = (revoked) => ({
+    mode: "enforce",
+    revokeCurrent: async (input) => {
+      revocations.push(input);
+      return revoked
+        ? { revoked: true, reasonCode: "session_revoked" }
+        : { revoked: false, reasonCode: "session_registry_unavailable" };
+    },
+  });
+  await withServer({ oidcConfig, administrationSessionAuthority: authority(true) }, async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/auth/logout`, {
+      method: "POST",
+      redirect: "manual",
+      headers: { cookie: adminCookie("csrf-value", credential) },
+    });
+    assert.equal(response.status, 303);
+    assert.match(response.headers.get("set-cookie"), /Max-Age=0/);
+  });
+  await withServer({ oidcConfig, administrationSessionAuthority: authority(false) }, async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/auth/logout`, {
+      method: "POST",
+      redirect: "manual",
+      headers: { cookie: adminCookie("csrf-value", credential) },
+    });
+    assert.equal(response.status, 503);
+    assert.equal(response.headers.get("set-cookie"), null);
+    assert.match(await response.text(), /Aucun succès fictif/);
+  });
+  assert.equal(revocations.length, 2);
+  assert.deepEqual(revocations[0], { credential, identityId: adminIdentity.identityId });
 });
 
 test("refuse l’administration à une identité rattachée sans permission dédiée", async () => {
@@ -595,11 +657,12 @@ test("inscrit une nouvelle session rattachée en observation dans le cookie chif
     secret: "B".repeat(43),
   };
   const enrolled = [];
-  const sessionShadow = {
-    enroll: async (input) => { enrolled.push(input); return shadowSession; },
+  const administrationSessionAuthority = {
+    mode: "observe",
+    issue: async (input) => { enrolled.push(input); return shadowSession; },
     observe: async () => ({ outcome: "active" }),
   };
-  await withServer({ repository: adminRepository, oidcConfig, fetchImpl, sessionShadow }, async (baseUrl) => {
+  await withServer({ repository: adminRepository, oidcConfig, fetchImpl, administrationSessionAuthority }, async (baseUrl) => {
     const start = await fetch(`${baseUrl}/auth/infomaniak/start`, { redirect: "manual" });
     const authorization = new URL(start.headers.get("location"));
     expectedNonce = authorization.searchParams.get("nonce");
@@ -610,7 +673,7 @@ test("inscrit une nouvelle session rattachée en observation dans le cookie chif
     assert.equal(callback.status, 303);
     const sealedSession = callback.headers.get("set-cookie").match(/n09_oidc_session=([^;,]+)/)?.[1];
     const session = open(sealedSession, oidcConfig.sessionSecret, "oidc-session");
-    assert.deepEqual(session.shadowSession, shadowSession);
+    assert.deepEqual(session.centralSession, shadowSession);
     assert.equal(session.identityId, adminIdentity.identityId);
   });
   assert.deepEqual(enrolled, [{ identityId: adminIdentity.identityId }]);

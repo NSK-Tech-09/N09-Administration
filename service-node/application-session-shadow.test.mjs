@@ -40,6 +40,7 @@ test("reste totalement inerte lorsque l'observation n'est pas explicitement acti
     enrollments: { succeeded: 0, failed: 0 },
     observations: { active: 0, notEnrolled: 0, divergent: 0, unavailable: 0 },
     touches: { succeeded: 0, failed: 0 },
+    revocations: { succeeded: 0, failed: 0 },
   });
 });
 
@@ -64,6 +65,7 @@ test("enregistre, compare et consolide une activité à fréquence bornée", asy
     enrollments: { succeeded: 1, failed: 0 },
     observations: { active: 2, notEnrolled: 0, divergent: 0, unavailable: 0 },
     touches: { succeeded: 1, failed: 0 },
+    revocations: { succeeded: 0, failed: 0 },
   });
   const serializedLogs = logs.join("\n");
   assert.doesNotMatch(serializedLogs, new RegExp(credential.sessionId, "i"));
@@ -101,5 +103,6 @@ test("absorbe les indisponibilités et ne journalise aucune donnée fournie", as
     enrollments: { succeeded: 0, failed: 1 },
     observations: { active: 0, notEnrolled: 0, divergent: 0, unavailable: 1 },
     touches: { succeeded: 0, failed: 0 },
+    revocations: { succeeded: 0, failed: 0 },
   });
 });
