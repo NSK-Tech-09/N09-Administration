@@ -1,5 +1,11 @@
 import { createHash, randomUUID } from "node:crypto";
 import { canonicalJson, eventHash, verifyAuditChain } from "./audit.mjs";
+import {
+  assertApplicationSessionActivityProgress,
+  assertApplicationSessionAudit,
+  assertApplicationSessionImmutableContext,
+  assertNewApplicationSessionRecord,
+} from "./application-session.mjs";
 import { externalPrincipalKey } from "./federated-identity.mjs";
 import {
   ApplicationAccessCatalogError, applicationAccessCatalogHash, assertCompatibleCatalogEvolution,
@@ -111,6 +117,20 @@ function mapNotificationEvent(row) {
     processingAttempts: Number(row.processing_attempts), availableAt: asIso(row.available_at),
     claimedAt: asIso(row.claimed_at), claimedBy: row.claimed_by,
     processedAt: asIso(row.processed_at), lastErrorCode: row.last_error_code,
+  };
+}
+
+function mapApplicationSession(row) {
+  if (!row) return null;
+  return {
+    sessionId: row.session_id, secretHash: row.secret_hash,
+    identityId: row.identity_id, applicationId: row.application_id,
+    issuedAt: asIso(row.issued_at), lastSeenAt: asIso(row.last_seen_at),
+    idleExpiresAt: asIso(row.idle_expires_at), absoluteExpiresAt: asIso(row.absolute_expires_at),
+    authenticatedAt: asIso(row.authenticated_at), idleTtlMs: Number(row.idle_ttl_ms),
+    contextLabel: row.context_label, revokedAt: asIso(row.revoked_at),
+    revokedByIdentityId: row.revoked_by_identity_id,
+    revocationReason: row.revocation_reason, version: Number(row.version),
   };
 }
 
@@ -547,6 +567,100 @@ export class MariaDbRepository {
         redirectUri: row.redirect_uri, codeChallenge: row.code_challenge,
         issuedAt: asIso(row.issued_at), expiresAt: asIso(row.expires_at), consumedAt: now.toISOString(),
       };
+    });
+  }
+
+  async saveApplicationSession(record, auditEvent) {
+    assertApplicationSessionAudit(record, auditEvent, "application_session.created");
+    assertNewApplicationSessionRecord(record);
+    return this.#transaction(async (connection) => {
+      await connection.execute(
+        `INSERT INTO application_sessions(
+           session_id, secret_hash, identity_id, application_id, issued_at, last_seen_at,
+           idle_expires_at, absolute_expires_at, authenticated_at, idle_ttl_ms,
+           context_label, revoked_at, revoked_by_identity_id, revocation_reason, version
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, '', ?)`,
+        [record.sessionId, record.secretHash, record.identityId, record.applicationId,
+         asMariaDate(record.issuedAt), asMariaDate(record.lastSeenAt),
+         asMariaDate(record.idleExpiresAt), asMariaDate(record.absoluteExpiresAt),
+         asMariaDate(record.authenticatedAt), record.idleTtlMs, record.contextLabel, record.version],
+      );
+      await this.#appendAudit(connection, auditEvent);
+      return structuredClone(record);
+    });
+  }
+
+  async getApplicationSession(sessionId) {
+    const [rows] = await this.pool.execute(
+      "SELECT * FROM application_sessions WHERE session_id = ?", [sessionId],
+    );
+    return mapApplicationSession(rows[0]);
+  }
+
+  async listApplicationSessions(identityId) {
+    const [rows] = await this.pool.execute(
+      `SELECT * FROM application_sessions WHERE identity_id = ?
+       ORDER BY last_seen_at DESC, session_id`, [identityId],
+    );
+    return rows.map(mapApplicationSession);
+  }
+
+  async touchApplicationSession(record, expectedVersion) {
+    if (record.version !== expectedVersion + 1) throw new Error("stale application session version");
+    return this.#transaction(async (connection) => {
+      const [rows] = await connection.execute(
+        "SELECT * FROM application_sessions WHERE session_id = ? FOR UPDATE", [record.sessionId],
+      );
+      const previous = mapApplicationSession(rows[0]);
+      if (!previous || previous.version !== expectedVersion) throw new Error("stale application session version");
+      assertApplicationSessionImmutableContext(previous, record);
+      assertApplicationSessionActivityProgress(previous, record);
+      if (previous.revokedAt !== record.revokedAt ||
+          previous.revokedByIdentityId !== record.revokedByIdentityId ||
+          previous.revocationReason !== record.revocationReason || previous.revokedAt) {
+        throw new Error("inactive application session cannot be touched");
+      }
+      const [result] = await connection.execute(
+        `UPDATE application_sessions
+         SET last_seen_at = ?, idle_expires_at = ?, version = ?
+         WHERE session_id = ? AND version = ? AND revoked_at IS NULL
+           AND last_seen_at < ? AND absolute_expires_at > ? AND idle_expires_at > ?`,
+        [asMariaDate(record.lastSeenAt), asMariaDate(record.idleExpiresAt), record.version,
+         record.sessionId, expectedVersion, asMariaDate(record.lastSeenAt),
+         asMariaDate(record.lastSeenAt), asMariaDate(record.lastSeenAt)],
+      );
+      if (result.affectedRows !== 1) throw new Error("stale or inactive application session");
+      return structuredClone(record);
+    });
+  }
+
+  async revokeApplicationSession(record, expectedVersion, auditEvent) {
+    assertApplicationSessionAudit(record, auditEvent, "application_session.revoked");
+    return this.#transaction(async (connection) => {
+      const [rows] = await connection.execute(
+        "SELECT * FROM application_sessions WHERE session_id = ? FOR UPDATE", [record.sessionId],
+      );
+      const previous = mapApplicationSession(rows[0]);
+      if (!previous || previous.version !== expectedVersion || record.version !== expectedVersion + 1) {
+        throw new Error("stale application session version");
+      }
+      assertApplicationSessionImmutableContext(previous, record);
+      if (previous.lastSeenAt !== record.lastSeenAt || previous.idleExpiresAt !== record.idleExpiresAt) {
+        throw new Error("application session activity is immutable during revocation");
+      }
+      if (previous.revokedAt || !record.revokedAt || !record.revocationReason) {
+        throw new Error("invalid application session revocation");
+      }
+      const [result] = await connection.execute(
+        `UPDATE application_sessions
+         SET revoked_at = ?, revoked_by_identity_id = ?, revocation_reason = ?, version = ?
+         WHERE session_id = ? AND version = ? AND revoked_at IS NULL`,
+        [asMariaDate(record.revokedAt), record.revokedByIdentityId, record.revocationReason,
+         record.version, record.sessionId, expectedVersion],
+      );
+      if (result.affectedRows !== 1) throw new Error("stale application session version");
+      await this.#appendAudit(connection, auditEvent);
+      return structuredClone(record);
     });
   }
 

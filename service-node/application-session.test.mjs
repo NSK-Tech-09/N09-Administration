@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   assessApplicationSession,
+  createApplicationSessionAuditEvent,
   createApplicationSession,
   revokeApplicationSession,
   touchApplicationSession,
@@ -80,6 +81,8 @@ test("prolonge l’inactivité sans dépasser l’échéance absolue", () => {
   assert.equal(touched.lastSeenAt, "2026-08-13T05:30:00.000Z");
   assert.equal(touched.idleExpiresAt, record.absoluteExpiresAt);
   assert.equal(touched.version, 2);
+  assert.throws(() => touchApplicationSession(record, { now: record.lastSeenAt }), /activity_time/);
+  assert.throws(() => touchApplicationSession(record, { now: "2026-08-13T02:59:00Z" }), /activity_time/);
 });
 
 test("révoque une seule fois avec une cause bornée", () => {
@@ -93,4 +96,17 @@ test("révoque une seule fois avec une cause bornée", () => {
   assert.equal(revoked.version, 2);
   assert.equal(revokeApplicationSession(revoked, { reason: "Nouvelle demande" }), revoked);
   assert.throws(() => revokeApplicationSession(record, { reason: "" }), /invalid_revocation_reason/);
+});
+
+test("produit un audit de cycle de vie sans identifiant ni empreinte de session", () => {
+  const { record } = activeSession();
+  const event = createApplicationSessionAuditEvent({
+    record, action: "application_session.created", correlationId: "correlation-session",
+  });
+  const serialized = JSON.stringify(event);
+  assert.equal(event.subject_id, record.identityId);
+  assert.equal(event.application_id, record.applicationId);
+  assert.equal(serialized.includes(record.sessionId), false);
+  assert.equal(serialized.includes(record.secretHash), false);
+  assert.doesNotMatch(serialized, /session_id|secret_hash/);
 });

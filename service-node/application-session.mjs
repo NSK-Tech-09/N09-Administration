@@ -1,4 +1,5 @@
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
+import { createAuditEvent } from "./audit.mjs";
 
 export const APPLICATION_SESSION_SECRET_BYTES = 32;
 export const APPLICATION_SESSION_MIN_IDLE_MS = 5 * 60_000;
@@ -27,6 +28,69 @@ export function applicationSessionSecretHash(secret) {
     throw new Error("invalid_session_secret");
   }
   return createHash("sha256").update(secret, "utf8").digest("hex");
+}
+
+export function assertNewApplicationSessionRecord(record) {
+  const issuedAt = new Date(record.issuedAt);
+  const lastSeenAt = new Date(record.lastSeenAt);
+  const idleExpiresAt = new Date(record.idleExpiresAt);
+  const absoluteExpiresAt = new Date(record.absoluteExpiresAt);
+  const authenticatedAt = new Date(record.authenticatedAt);
+  if (record.version !== 1 || record.revokedAt || record.revokedByIdentityId || record.revocationReason ||
+      !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(record.sessionId) ||
+      !/^[0-9a-f]{64}$/.test(record.secretHash) ||
+      !Number.isSafeInteger(record.idleTtlMs) || record.idleTtlMs <= 0 ||
+      typeof record.contextLabel !== "string" || record.contextLabel.length > 255 ||
+      ![issuedAt, lastSeenAt, idleExpiresAt, absoluteExpiresAt, authenticatedAt]
+        .every((date) => Number.isFinite(date.valueOf())) ||
+      authenticatedAt > issuedAt || issuedAt > lastSeenAt || lastSeenAt >= idleExpiresAt ||
+      idleExpiresAt > absoluteExpiresAt) {
+    throw new Error("invalid new application session record");
+  }
+}
+
+export function assertApplicationSessionImmutableContext(previous, next) {
+  for (const field of [
+    "sessionId", "secretHash", "identityId", "applicationId", "issuedAt",
+    "absoluteExpiresAt", "authenticatedAt", "idleTtlMs", "contextLabel",
+  ]) {
+    if (previous[field] !== next[field]) throw new Error(`application session ${field} is immutable`);
+  }
+}
+
+export function assertApplicationSessionActivityWindow(record) {
+  const activity = new Date(record.lastSeenAt);
+  const idleExpiry = new Date(record.idleExpiresAt);
+  const absoluteExpiry = new Date(record.absoluteExpiresAt);
+  if (![activity, idleExpiry, absoluteExpiry].every((date) => Number.isFinite(date.valueOf())) ||
+      activity >= idleExpiry || idleExpiry > absoluteExpiry) {
+    throw new Error("invalid application session activity progression");
+  }
+}
+
+export function assertApplicationSessionActivityProgress(previous, next) {
+  const previousActivity = new Date(previous.lastSeenAt);
+  const nextActivity = new Date(next.lastSeenAt);
+  assertApplicationSessionActivityWindow(next);
+  if (!Number.isFinite(previousActivity.valueOf()) || !Number.isFinite(nextActivity.valueOf()) ||
+      nextActivity <= previousActivity || previous.absoluteExpiresAt !== next.absoluteExpiresAt) {
+    throw new Error("invalid application session activity progression");
+  }
+}
+
+export function assertApplicationSessionAudit(record, auditEvent, expectedAction) {
+  if (auditEvent.action !== expectedAction || auditEvent.subject_id !== record.identityId ||
+      auditEvent.application_id !== record.applicationId) {
+    throw new Error("audit context must match application session");
+  }
+  const serialized = JSON.stringify(auditEvent);
+  if (serialized.includes(record.sessionId) || serialized.includes(record.secretHash)) {
+    throw new Error("audit must not contain application session identifiers or secret hashes");
+  }
+  if (expectedAction === "application_session.revoked" &&
+      auditEvent.actor_id !== record.revokedByIdentityId) {
+    throw new Error("audit actor must match application session revoker");
+  }
 }
 
 export function createApplicationSession({
@@ -133,6 +197,7 @@ export function touchApplicationSession(record, { now = new Date() } = {}) {
   if (!Number.isFinite(currentTime.valueOf()) || !Number.isFinite(absoluteExpiry.valueOf())) {
     throw new Error("invalid_session_date");
   }
+  if (currentTime <= new Date(record.lastSeenAt)) throw new Error("invalid_session_activity_time");
   if (record.revokedAt || currentTime >= absoluteExpiry || currentTime >= new Date(record.idleExpiresAt)) {
     throw new Error("inactive_session_cannot_be_touched");
   }
@@ -163,5 +228,41 @@ export function revokeApplicationSession(record, {
     revokedByIdentityId,
     revocationReason: normalizedReason,
     version: record.version + 1,
+  });
+}
+
+export function createApplicationSessionAuditEvent({
+  record,
+  action,
+  actorId = null,
+  justification = "",
+  correlationId = randomUUID(),
+  occurredAt = new Date(),
+}) {
+  if (!["application_session.created", "application_session.revoked"].includes(action)) {
+    throw new Error("invalid_application_session_audit_action");
+  }
+  const revoked = action === "application_session.revoked";
+  if (revoked && (!record.revokedAt || !record.revocationReason)) {
+    throw new Error("invalid_application_session_audit_state");
+  }
+  return createAuditEvent({
+    action,
+    result: "success",
+    source: "application-session-registry",
+    correlationId,
+    actorId,
+    subjectId: record.identityId,
+    applicationId: record.applicationId,
+    cause: revoked ? "explicit_revocation" : "authenticated_session_opened",
+    previousValue: revoked ? { state: "active", version: record.version - 1 } : null,
+    newValue: {
+      state: revoked ? "revoked" : "active",
+      version: record.version,
+      idle_expires_at: record.idleExpiresAt,
+      absolute_expires_at: record.absoluteExpiresAt,
+    },
+    justification: revoked ? (justification || record.revocationReason) : justification,
+    occurredAt,
   });
 }

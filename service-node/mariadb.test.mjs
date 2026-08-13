@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { createAuditEvent } from "./audit.mjs";
+import {
+  createApplicationSession, createApplicationSessionAuditEvent, revokeApplicationSession,
+} from "./application-session.mjs";
 import { createLinkRequest } from "./federated-identity.mjs";
 import {
   acquireNotificationProcessingLock, createMariaDbPool, MariaDbRepository,
@@ -288,4 +291,105 @@ test("abandonne proprement un cycle déjà verrouillé", async () => {
   };
   assert.equal(await acquireNotificationProcessingLock({ getConnection: async () => connection }), null);
   assert.equal(released, 1);
+});
+
+function persistedSession() {
+  return createApplicationSession({
+    identityId: "identity-1", applicationId: "tasks",
+    idleTtlMs: 60 * 60_000, absoluteTtlMs: 4 * 60 * 60_000,
+    authenticatedAt: new Date("2026-08-13T04:00:00Z"), now: new Date("2026-08-13T04:01:00Z"),
+    randomUuidImpl: () => "00000000-0000-4000-8000-000000000044",
+    randomBytesImpl: () => Buffer.alloc(32, 11),
+  }).record;
+}
+
+function sessionRow(record) {
+  return {
+    session_id: record.sessionId, secret_hash: record.secretHash,
+    identity_id: record.identityId, application_id: record.applicationId,
+    issued_at: record.issuedAt, last_seen_at: record.lastSeenAt,
+    idle_expires_at: record.idleExpiresAt, absolute_expires_at: record.absoluteExpiresAt,
+    authenticated_at: record.authenticatedAt, idle_ttl_ms: record.idleTtlMs,
+    context_label: record.contextLabel, revoked_at: record.revokedAt,
+    revoked_by_identity_id: record.revokedByIdentityId,
+    revocation_reason: record.revocationReason, version: record.version,
+  };
+}
+
+test("persiste une session et son audit MariaDB dans la même transaction", async () => {
+  const pool = fakePool();
+  const record = persistedSession();
+  const event = createApplicationSessionAuditEvent({
+    record, action: "application_session.created", correlationId: "session-created",
+  });
+  await new MariaDbRepository(pool).saveApplicationSession(record, event);
+  assert.ok(pool.calls.some((call) => typeof call === "object" && call.sql.includes("INSERT INTO application_sessions")));
+  assert.equal(pool.calls.filter((call) => typeof call === "object" && call.sql.includes("INSERT INTO audit_events")).length, 1);
+  assert.equal(pool.calls.at(-2), "commit");
+  assert.equal(pool.calls.at(-1), "release");
+});
+
+test("annule la création de session si son audit MariaDB échoue", async () => {
+  const pool = fakePool({ failAudit: true });
+  const record = persistedSession();
+  const event = createApplicationSessionAuditEvent({
+    record, action: "application_session.created", correlationId: "session-created",
+  });
+  await assert.rejects(new MariaDbRepository(pool).saveApplicationSession(record, event), /audit unavailable/);
+  assert.equal(pool.calls.at(-2), "rollback");
+  assert.equal(pool.calls.at(-1), "release");
+  assert.equal(pool.calls.includes("commit"), false);
+});
+
+test("actualise l’activité MariaDB seulement pour la version active attendue", async () => {
+  const calls = [];
+  const active = persistedSession();
+  let updateAffectedRows = 1;
+  const connection = {
+    beginTransaction: async () => calls.push("begin"), commit: async () => calls.push("commit"),
+    rollback: async () => calls.push("rollback"), release: () => calls.push("release"),
+    execute: async (sql, values = []) => {
+      calls.push({ sql, values });
+      if (sql.includes("FROM application_sessions") && sql.includes("FOR UPDATE")) return [[sessionRow(active)]];
+      return [{ affectedRows: updateAffectedRows }];
+    },
+  };
+  const pool = { getConnection: async () => connection };
+  const record = { ...active, lastSeenAt: "2026-08-13T04:30:00.000Z", idleExpiresAt: "2026-08-13T05:30:00.000Z", version: 2 };
+  await new MariaDbRepository(pool).touchApplicationSession(record, 1);
+  const update = calls.find((call) => typeof call === "object" && call.sql.includes("UPDATE application_sessions"));
+  assert.match(update.sql, /version = \? AND revoked_at IS NULL/);
+  assert.match(update.sql, /absolute_expires_at > \? AND idle_expires_at > \?/);
+  assert.equal(calls.at(-2), "commit");
+
+  updateAffectedRows = 0;
+  await assert.rejects(new MariaDbRepository(pool).touchApplicationSession(record, 1), /stale or inactive/);
+  assert.equal(calls.at(-2), "rollback");
+});
+
+test("révoque une session MariaDB avec verrou, version et audit atomique", async () => {
+  const active = persistedSession();
+  const revoked = revokeApplicationSession(active, {
+    revokedByIdentityId: active.identityId, reason: "Déconnexion distante demandée",
+    now: new Date("2026-08-13T04:20:00Z"),
+  });
+  const calls = [];
+  const connection = {
+    beginTransaction: async () => calls.push("begin"), commit: async () => calls.push("commit"),
+    rollback: async () => calls.push("rollback"), release: () => calls.push("release"),
+    execute: async (sql, values = []) => {
+      calls.push({ sql, values });
+      if (sql.includes("FROM application_sessions") && sql.includes("FOR UPDATE")) return [[sessionRow(active)]];
+      if (sql.startsWith("SELECT current_hash")) return [[{ current_hash: "" }]];
+      return [{ affectedRows: 1 }];
+    },
+  };
+  const event = createApplicationSessionAuditEvent({
+    record: revoked, action: "application_session.revoked", actorId: active.identityId,
+    correlationId: "session-revoked",
+  });
+  await new MariaDbRepository({ getConnection: async () => connection }).revokeApplicationSession(revoked, 1, event);
+  assert.ok(calls.some((call) => typeof call === "object" && call.sql.includes("SET revoked_at")));
+  assert.equal(calls.filter((call) => typeof call === "object" && call.sql.includes("INSERT INTO audit_events")).length, 1);
+  assert.equal(calls.at(-2), "commit");
 });
