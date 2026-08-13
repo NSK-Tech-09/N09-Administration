@@ -1,6 +1,6 @@
 # ADR-020 — Sessions applicatives révocables
 
-Statut : **acceptée ; observation Administration recettée en préproduction, opposabilité de l'application pilote implémentée localement**
+Statut : **acceptée ; observation Administration recettée en préproduction, opposabilité de l'application pilote et d'Administration implémentée localement**
 
 Date : **13 août 2026**
 
