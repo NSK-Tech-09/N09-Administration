@@ -491,3 +491,36 @@ Les contrôles local et public de `/health` répondent `200` avec
 N09 – Suivi des tâches restent opérationnels ; tous les canaux externes sont
 fermés. `releases/16399df` et `releases/dbf951a` restent disponibles pour le
 retour arrière. Aucun changement n'a touché la production ni N09 – Énergie.
+
+## Lot 54 — suspension atomique des identités déployée
+
+Le **13 août 2026**, le commit canonique
+`551db4b4725ca61d591d8e1376924421c3ded024` a été activé dans la release
+immuable `releases/551db4b`. L’archive porte l’empreinte SHA-256
+`2cccb8152043ff9d7231a9c94a3fc45c3a53e2b874aef265d526b8f3127b5181` ;
+**190 fichiers**, **236 tests Node.js** et **63 tests Python** ont été validés
+sur Infomaniak avant le gel en lecture seule.
+
+La sauvegarde préalable
+`/srv/customer/backups/preprod-admin/lot54-pre-identity-suspension-20260813T185145Z.sql.gz`
+pèse **31 283 octets**, est valide au format gzip et porte l’empreinte
+`6d325682b4da14bc25cf0c24497d0d7138f5bc10d71f503edf4a23fef548a01c`.
+Le catalogue Administration v5 est publié avec l’empreinte
+`fe48460d21d7a6239c23d96ac0875999759c9c5e10bbffd9913627c89a45115e`
+et l’identité principale possède l’affectation gouvernée
+`identity-suspension-administrator`.
+
+La nouvelle console `/admin/identities` refuse l’auto-suspension. La recette
+réelle a créé une session éphémère auditée pour l’identité **Fred TRAVERS —
+Recette**, puis l’a suspendue depuis l’interface. Le résultat contrôlé est
+`suspended`, zéro session active, une session révoquée ; les événements
+`identity.suspended` et `application_session.revoked` partagent la même
+corrélation et la chaîne d’audit reste valide. L’identité principale demeure
+active avec ses deux sessions.
+
+Le garde-fou de démarrage a refusé une première tentative à cause d’un marqueur
+de provenance mal placé, sans laisser démarrer une version incomplète. Après
+correction et nouveau contrôle, le service est actif sur `releases/551db4b`,
+`/health` répond `200`, le worker interne est sain et les canaux externes restent
+fermés. `releases/0e01ac1` et la sauvegarde du lot 54 sont conservés pour retour
+arrière. La production et N09 – Énergie n’ont pas été modifiées.
