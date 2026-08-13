@@ -1,6 +1,6 @@
 # Lot 55 — réactivation gouvernée des identités
 
-Statut : **implémenté et validé localement — non déployé**
+Statut : **déployé et recetté en préproduction**
 
 Date : **13 août 2026**
 
@@ -69,14 +69,49 @@ La validation complète réussit :
   permission exacte ;
 - chaîne d’audit valide et absence de restauration de session.
 
-## Activation prévue en préproduction
+## Activation en préproduction
 
-La mise en service devra suivre les mêmes garde-fous que le lot 54 : sauvegarde
-vérifiée, release immuable, publication du catalogue version 6, attribution
-auditée du rôle par son amorçage séparé, redémarrage contrôlé, recette avec l’identité de recette
-actuellement suspendue, puis contrôle direct de la base et de la chaîne d’audit.
+Le **13 août 2026**, le commit canonique
+`5d64bc17e5b27cf31b242450b7b8b5850b8de9c0` a été activé dans la release
+immuable `releases/5d64bc1`. L’archive complète porte l’empreinte SHA-256
+`258db8933ca3b79091d6f17fefda04524a28c5c369cf78adce5d2904ef451c7c` ;
+**192 fichiers source**, **242 tests Node.js** et **63 tests Python** ont été
+validés sur Infomaniak avant le gel en lecture seule.
 
-La recette devra prouver que l’identité redevient active avec **zéro session
-active restaurée**, puis qu’une nouvelle authentification est nécessaire. La
-production et N09 – Énergie restent hors périmètre tant que cette recette n’est
-pas formellement terminée.
+La sauvegarde préalable
+`/srv/customer/backups/preprod-admin/lot55-pre-identity-reactivation-20260813T213558Z.sql.gz`
+pèse **32 921 octets**, est valide au format gzip et porte l’empreinte
+`47237d701af58da710c82f95b13d626f36b51b53194372442b22a18e727884`.
+Le catalogue Administration v6 est publié avec l’empreinte
+`23be37690476002a7b79e58a8fb17e7127a39ce30b530804cfdc99fe5bed3a33`.
+L’amorçage séparé a attribué le seul rôle
+`identity-reactivation-administrator` à l’identité principale ; sa seconde
+exécution est restée strictement idempotente.
+
+Le changement de commande de démarrage a été accepté par Infomaniak, mais la
+recette a détecté que le processus en mémoire servait encore le lot 54. Aucun
+état métier n’a alors été modifié. Après un redémarrage explicite et contrôlé,
+la console a présenté les pouvoirs distincts de suspension et de réactivation
+du lot 55.
+
+La recette réelle a réactivé **Fred TRAVERS — Recette** depuis l’interface avec
+une justification explicite. Le contrôle direct de MariaDB confirme :
+
+- identité `active` ;
+- **0 session active** ;
+- **0 ancienne session restaurée** ;
+- la session historiquement révoquée reste révoquée ;
+- dernier événement `identity.reactivated` conforme ;
+- chaîne d’audit valide.
+
+`/health` répond `200`, l’administration anonyme répond `401` et un cycle réel
+du worker de notifications se termine avec succès, sans élément réclamé,
+réessayé ni placé en quarantaine. Les émissions externes restent désactivées.
+La preuve scellée est conservée dans
+`/srv/customer/backups/preprod-admin/lot55-recipe-20260813T2200Z.txt`, en mode
+`600`, avec l’empreinte
+`4928140aa32c7d29f208bdb791c4640050e8927b004b98bd0ad2de4962395a19`.
+
+La release précédente `releases/551db4b` et la sauvegarde préalable restent
+disponibles pour retour arrière. La production et N09 – Énergie n’ont pas été
+modifiées.

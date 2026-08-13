@@ -524,3 +524,41 @@ correction et nouveau contrôle, le service est actif sur `releases/551db4b`,
 `/health` répond `200`, le worker interne est sain et les canaux externes restent
 fermés. `releases/0e01ac1` et la sauvegarde du lot 54 sont conservés pour retour
 arrière. La production et N09 – Énergie n’ont pas été modifiées.
+
+## Lot 55 — réactivation gouvernée des identités déployée
+
+Le **13 août 2026**, le commit canonique
+`5d64bc17e5b27cf31b242450b7b8b5850b8de9c0` a été activé dans la release
+immuable `releases/5d64bc1`. L’archive porte l’empreinte SHA-256
+`258db8933ca3b79091d6f17fefda04524a28c5c369cf78adce5d2904ef451c7c` ;
+**192 fichiers source**, **242 tests Node.js** et **63 tests Python** ont été
+validés sur Infomaniak avant le gel en lecture seule.
+
+La sauvegarde préalable
+`/srv/customer/backups/preprod-admin/lot55-pre-identity-reactivation-20260813T213558Z.sql.gz`
+pèse **32 921 octets**, est valide et porte l’empreinte
+`47237d701af58da710c82f95b13d626f36b51b53194372442b22a18e727884`.
+Le catalogue Administration v6 est publié avec l’empreinte
+`23be37690476002a7b79e58a8fb17e7127a39ce30b530804cfdc99fe5bed3a33`
+et l’identité principale possède l’affectation gouvernée
+`identity-reactivation-administrator`.
+
+La recette a détecté que l’enregistrement de la nouvelle commande Infomaniak
+n’avait pas remplacé le processus déjà en mémoire. Elle n’a déclenché aucune
+transition métier avant le redémarrage explicite. Le lot 55 actif a ensuite
+réactivé **Fred TRAVERS — Recette** depuis `/admin/identities`, avec une
+justification humaine.
+
+Le résultat contrôlé est `active`, avec **0 session active** et **0 ancienne
+session restaurée**. La session révoquée par le lot 54 reste révoquée,
+l’événement `identity.reactivated` est présent et la chaîne d’audit est valide.
+`/health` répond `200`, l’administration anonyme répond `401`, le worker interne
+termine son cycle sans erreur ni quarantaine et les émissions externes restent
+fermées.
+
+La preuve scellée
+`/srv/customer/backups/preprod-admin/lot55-recipe-20260813T2200Z.txt` est
+protégée en mode `600` et porte l’empreinte
+`4928140aa32c7d29f208bdb791c4640050e8927b004b98bd0ad2de4962395a19`.
+`releases/551db4b` et la sauvegarde du lot 55 restent disponibles pour retour
+arrière. La production et N09 – Énergie n’ont pas été modifiées.
