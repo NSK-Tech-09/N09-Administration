@@ -1,17 +1,17 @@
 # Lot 46 — Activation contrôlée de l'observation des sessions en préproduction
 
-Statut : **préparé localement ; préproduction constatée en lecture seule ; aucune migration ni activation effectuée**
+Statut : **activé et recetté en préproduction en mode inopposable `observe` ; production inchangée**
 
 Date : **13 août 2026**
 
 ## Objet
 
-Ce lot prépare l'activation réelle, mais toujours inopposable, du registre de
+Ce lot réalise l'activation réelle, mais toujours inopposable, du registre de
 sessions de N09 – Administration. Il applique la deuxième étape de `ADR-020`
 sans ouvrir l'étape d'opposabilité.
 
-Le commit de code fusionné à déployer est le commit de fusion de la PR #47 :
-`4d4284b26d9a64fb696cfac719e3e8e064a10a4c`.
+Le commit de code fusionné et déployé est le commit de fusion de la PR #48 :
+`958f3566595525ab89ca9e38897d62e0d81a76d9`.
 
 ## Constat initial en lecture seule
 
@@ -88,7 +88,9 @@ Puis exécuter le fichier de contrôles associé. Les résultats attendus sont :
 
 - une table InnoDB ;
 - 15 colonnes ;
-- 4 index distincts ;
+- 5 index distincts sur MariaDB 10.11 : les 4 index fonctionnels du schéma,
+  complétés par l'index technique `application_sessions_revoker_fk` créé
+  automatiquement pour la clé étrangère `revoked_by_identity_id` ;
 - 3 clés étrangères ;
 - zéro session avant la première connexion de recette.
 
@@ -137,6 +139,32 @@ session.
 La recette ne doit afficher, copier ou conserver ni secret brut, ni empreinte,
 ni contenu du cookie.
 
+## Résultat de l'exécution
+
+L'activation du 13 août 2026 a respecté la séquence préparée :
+
+- sauvegarde logique vérifiée avant migration ;
+- migration additive appliquée uniquement sur `6p7h3x_n09_admin_preprod` ;
+- compte d'exécution confirmé sans droit `CREATE`, avec écriture
+  transactionnelle réussie puis annulée ;
+- release immuable `releases/958f356` construite depuis le commit fusionné ;
+- 180 tests Node.js et 63 tests Python réussis sur Infomaniak ;
+- démarrage confirmé par `session_shadow_mode=observe` ;
+- une seule session centrale active et un seul audit de création ;
+- aucune occurrence de `session_id`, `secret_hash`, `fingerprint` ou `cookie`
+  dans l'audit de création ;
+- chaîne d'audit complète valide après création et consolidation ;
+- cinq lectures protégées réussies sans changement d'accès ;
+- aucune consolidation avant cinq minutes, puis mise à jour à 317 secondes ;
+- Administration, Suivi des tâches et Énergie restés disponibles ;
+- ancienne release et sauvegarde d'environnement conservées pour le retour
+  arrière.
+
+MariaDB 10.11 a matérialisé cinq index : les quatre index fonctionnels prévus
+et l'index technique `application_sessions_revoker_fk` créé automatiquement
+pour la clé étrangère `revoked_by_identity_id`. Cet écart explicable a été
+contrôlé avant la bascule et ne change ni les données ni le comportement.
+
 ## Retour arrière
 
 Le retour arrière immédiat consiste à restaurer la release et la commande de
@@ -164,15 +192,18 @@ Après bascule, revenir au mode `disabled` si le service ne démarre pas, si la
 santé n'est pas `200`, si une donnée sensible apparaît dans les journaux ou si
 le comportement d'accès change.
 
-## Preuves à compléter après exécution
+## Preuves d'exécution
 
-- fichier, taille et SHA-256 de la sauvegarde : **à compléter** ;
+- sauvegarde : **`/srv/customer/backups/preprod-admin/lot46-pre-session-shadow-20260813T063310Z.sql.gz`, 18 487 octets, gzip valide, fin d'export présente, SHA-256 `fd561c349d2a4dd017753ea708c9d73c218256f36dc47a23372bd2673ce7afd7`** ;
 - release précédente : **`releases/3338ea8`, constatée intacte avec ses marqueurs** ;
-- release activée : **à compléter** ;
-- tests exécutés sur Infomaniak : **à compléter** ;
-- résultat des contrôles de schéma : **à compléter** ;
-- première session et audit observés sans donnée sensible : **à compléter** ;
-- résultat du retour arrière à blanc : **à compléter**.
+- release activée : **`releases/958f356`, commit exact `958f3566595525ab89ca9e38897d62e0d81a76d9`, fichiers en lecture seule** ;
+- tests exécutés sur Infomaniak : **180/180 Node.js et 63/63 Python réussis** ;
+- schéma : **1 table InnoDB, 15 colonnes, 5 index dont 1 index technique MariaDB, 3 clés étrangères, 0 ligne avant recette** ;
+- compte d'exécution : **lecture/écriture sans droit `CREATE`, essai transactionnel 1 insertion puis 0 ligne après rollback** ;
+- première session : **1 session active, 1 audit `application_session.created`, 0 donnée interdite détectée** ;
+- consolidation : **aucune écriture avant le seuil ; mise à jour observée à 317 secondes** ;
+- chaîne d'audit : **valide après création et après consolidation** ;
+- retour arrière à blanc : **`releases/3338ea8` et ses sept marqueurs présents ; `.env.pre-lot46-20260813T065233Z` présent sans réglage de session**.
 
 ## Références
 
@@ -180,4 +211,4 @@ le comportement d'accès change.
 - `LOT-43-SOCLE-REGISTRE-SESSIONS.md`
 - `LOT-44-PERSISTANCE-AUDIT-SESSIONS.md`
 - `LOT-45-OBSERVATION-INOPPOSABLE-SESSIONS.md`
-- PR GitHub `NSK-Tech-09/N09-Administration#47`
+- PR GitHub `NSK-Tech-09/N09-Administration#48`
