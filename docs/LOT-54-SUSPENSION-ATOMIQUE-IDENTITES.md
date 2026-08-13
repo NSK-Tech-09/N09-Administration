@@ -1,6 +1,6 @@
 # Lot 54 — suspension atomique des identités
 
-Statut : **implémenté et validé localement ; activation distante séparée**
+Statut : **déployé et recetté en préproduction**
 
 Date : **13 août 2026**
 
@@ -66,9 +66,50 @@ La validation complète réussit :
 - preuve de rollback complet lorsqu’une version de session devient périmée ;
 - chaîne d’audit toujours valide et sans identifiant complet de session.
 
-## Déploiement ultérieur
+## Exécution réelle en préproduction
 
-L’activation en préproduction formera une opération séparée : sauvegarde vérifiée,
-publication du catalogue v5, affectation gouvernée de la permission, release
-immuable, recette avec une identité de démonstration non privilégiée et retour
-arrière conservé. La production et N09 – Énergie ne sont pas modifiées par ce lot.
+Le **13 août 2026**, le commit canonique
+`551db4b4725ca61d591d8e1376924421c3ded024` a été déployé dans la release
+immuable `releases/551db4b`. L’archive complète porte l’empreinte SHA-256
+`2cccb8152043ff9d7231a9c94a3fc45c3a53e2b874aef265d526b8f3127b5181`.
+Les **190 fichiers** de source ont été contrôlés par manifeste, puis le dossier
+a été figé en lecture seule. Les dépendances ont été réinstallées avec
+`pnpm 11.16.0` depuis le verrou officiel et `mysql2 3.23.2`.
+
+La sauvegarde préalable est conservée sous
+`/srv/customer/backups/preprod-admin/lot54-pre-identity-suspension-20260813T185145Z.sql.gz`.
+Elle pèse **31 283 octets**, passe le contrôle gzip, contient la fin d’export et
+porte l’empreinte SHA-256
+`6d325682b4da14bc25cf0c24497d0d7138f5bc10d71f503edf4a23fef548a01c`.
+Comme au lot 53, l’export utilise `--skip-triggers` sans élargir les privilèges
+du compte d’exécution ; les déclencheurs restent versionnés dans la release.
+
+La release a réussi **236 tests Node.js** et **63 tests Python** sur Infomaniak.
+Le catalogue Administration **version 5** a été publié avec l’empreinte
+`fe48460d21d7a6239c23d96ac0875999759c9c5e10bbffd9913627c89a45115e`,
+puis le rôle `identity-suspension-administrator` a été attribué à l’identité
+principale par l’amorçage borné à la préproduction. La chaîne d’audit était
+valide après chacune de ces opérations.
+
+Le premier redémarrage a été refusé par le garde-fou parce que le marqueur de
+provenance avait été placé un niveau trop haut. Aucun service incomplet n’a donc
+démarré. Le marqueur a été remis dans la release scellée, tous les contrôles ont
+été rejoués, puis Infomaniak a démarré normalement `releases/551db4b`. La santé
+publique répond `200` avec `{"status":"ok"}`, la route non authentifiée
+`/admin/identities` répond `401`, le worker interne termine ses cycles avec
+succès et les canaux externes demeurent fermés.
+
+La recette a utilisé l’identité non privilégiée **Fred TRAVERS — Recette**
+(`travers.fred.09@gmail.com`). Une session N09 – Suivi des tâches éphémère et
+auditée a été créée uniquement pour éprouver la fermeture atomique. La console
+a affiché une session active, puis a suspendu l’identité avec une justification
+explicite. Le contrôle final confirme : identité `suspended`, **zéro session
+active**, **une session révoquée**, événements `identity.suspended` et
+`application_session.revoked` partageant la même corrélation, chaîne d’audit
+valide. Une ancienne session déjà expirée est restée non révoquée, conformément
+à la règle de non-réécriture de l’histoire.
+
+L’identité principale est restée active avec ses deux sessions et la console a
+continué à refuser son auto-suspension. `releases/0e01ac1` ainsi que la
+sauvegarde ci-dessus constituent le retour arrière immédiat. Aucune modification
+n’a touché la production ni N09 – Énergie.
