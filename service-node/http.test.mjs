@@ -130,6 +130,20 @@ function adminCookie(csrf = "csrf-value", centralSession = null, sessionVersion 
   return `${OIDC_SESSION_COOKIE}=${seal(session, oidcConfig.sessionSecret, "oidc-session")}`;
 }
 
+function linkRequiredCookie(sessionVersion = 2) {
+  const session = {
+    sessionVersion,
+    issuer: "https://login.infomaniak.com",
+    subject: "candidate-provider-subject",
+    displayName: "Personne candidate",
+    status: "link_required",
+    requestId: randomUUID(),
+    requestExpiresAt: new Date(Date.now() + 60_000).toISOString(),
+    expiresAt: Date.now() + 60_000,
+  };
+  return `${OIDC_SESSION_COOKIE}=${seal(session, oidcConfig.sessionSecret, "oidc-session")}`;
+}
+
 const tasksWriterCatalog = {
   application_id: "n09-suivi-taches", catalog_version: 1,
   permissions: [
@@ -339,6 +353,28 @@ test("confirme la déconnexion seulement après révocation centrale", async () 
   });
   assert.equal(revocations.length, 2);
   assert.deepEqual(revocations[0], { credential, identityId: adminIdentity.identityId });
+});
+
+test("ferme localement une session en attente de rattachement sans révocation centrale fictive", async () => {
+  let revocations = 0;
+  const administrationSessionAuthority = {
+    mode: "enforce",
+    revokeCurrent: async () => {
+      revocations += 1;
+      return { revoked: false, reasonCode: "session_registry_unavailable" };
+    },
+  };
+  await withServer({ oidcConfig, administrationSessionAuthority }, async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/auth/logout`, {
+      method: "POST",
+      redirect: "manual",
+      headers: { cookie: linkRequiredCookie() },
+    });
+    assert.equal(response.status, 303);
+    assert.equal(response.headers.get("location"), "/");
+    assert.match(response.headers.get("set-cookie"), /Max-Age=0/);
+  });
+  assert.equal(revocations, 0);
 });
 
 test("refuse l’administration à une identité rattachée sans permission dédiée", async () => {
