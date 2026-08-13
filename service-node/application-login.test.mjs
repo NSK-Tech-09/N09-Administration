@@ -66,6 +66,34 @@ test("un mauvais PKCE ne consomme pas le code légitime", async () => {
   assert.equal((await exchangeApplicationLoginCode({ repository, principal, payload: { ...base, code_verifier: verifier } })).identity_id, identity.identityId);
 });
 
+test("remet une preuve de session applicative uniquement par l'échange serveur à serveur", async () => {
+  const repository = seeded();
+  const verifier = "v".repeat(64);
+  const { code } = await issueApplicationLoginCode({
+    repository, session: { status: "authenticated", identityId: identity.identityId }, request: request(verifier),
+  });
+  const sessionAuthority = {
+    issue: async ({ identityId, applicationId }) => {
+      assert.equal(identityId, identity.identityId);
+      assert.equal(applicationId, application.applicationId);
+      return {
+        credential: { sessionId: "00000000-0000-4000-8000-000000000042", secret: "S".repeat(43) },
+        idleExpiresAt: "2026-08-13T09:00:00.000Z",
+        absoluteExpiresAt: "2026-08-13T12:00:00.000Z",
+      };
+    },
+  };
+  const result = await exchangeApplicationLoginCode({
+    repository,
+    principal: { applicationId: application.applicationId, audience: application.applicationId },
+    payload: { code, code_verifier: verifier, redirect_uri: redirectUri, client_id: application.applicationId },
+    sessionAuthority,
+  });
+  assert.equal(result.session_id, "00000000-0000-4000-8000-000000000042");
+  assert.equal(result.session_secret, "S".repeat(43));
+  assert.equal(JSON.stringify(repository.auditSnapshot()).includes(result.session_secret), false);
+});
+
 test("refuse une adresse de retour non enregistrée et les demandes ambiguës", async () => {
   const repository = seeded();
   await assert.rejects(issueApplicationLoginCode({

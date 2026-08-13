@@ -333,733 +333,4 @@ export class MariaDbRepository {
     if (auditEvent.actor_id !== decidedBy || auditEvent.subject_id !== identityId) throw new Error("audit identities must match approval");
     return this.#transaction(async (connection) => {
       const [requests] = await connection.execute(
-        "SELECT * FROM external_identity_link_requests WHERE request_id = ? FOR UPDATE", [requestId],
-      );
-      const request = requests[0];
-      if (!request) throw new Error("link request not found");
-      if (request.status !== "pending") throw new Error("link request is not pending");
-      if (now >= new Date(request.expires_at)) throw new Error("link request has expired");
-      const [identities] = await connection.execute(
-        "SELECT status FROM identities WHERE identity_id = ? FOR UPDATE", [identityId],
-      );
-      if (!identities.length) throw new Error("NSK identity not found");
-      if (identities[0].status !== "active") throw new Error("NSK identity is not active");
-      const link = {
-        externalIdentityId: randomUUID(), identityId, issuer: request.issuer,
-        subject: request.subject, providerKey: request.provider_key, status: "active",
-        linkedAt: now.toISOString(),
-      };
-      await connection.execute(
-        `INSERT INTO external_identities(
-           external_identity_id, identity_id, issuer, subject, provider_key, principal_hash, status, linked_at
-         ) VALUES (?, ?, ?, ?, ?, ?, 'active', ?)`,
-        [link.externalIdentityId, identityId, link.issuer, link.subject, link.providerKey,
-         externalPrincipalKey(link.issuer, link.subject), asMariaDate(link.linkedAt)],
-      );
-      await connection.execute(
-        `UPDATE external_identity_link_requests SET status = 'approved', target_identity_id = ?,
-           decided_by = ?, decision_justification = ? WHERE request_id = ?`,
-        [identityId, decidedBy, justification.trim(), requestId],
-      );
-      await this.#appendAudit(connection, auditEvent);
-      return link;
-    });
-  }
-
-  async rejectLinkRequest(requestId, decidedBy, justification, auditEvent) {
-    if (!String(justification ?? "").trim()) throw new Error("rejection justification is required");
-    if (auditEvent.action !== "external_identity.link_rejected") throw new Error("invalid audit action for link rejection");
-    if (auditEvent.actor_id !== decidedBy) throw new Error("audit actor must match decision maker");
-    return this.#transaction(async (connection) => {
-      const [requests] = await connection.execute(
-        "SELECT * FROM external_identity_link_requests WHERE request_id = ? FOR UPDATE", [requestId],
-      );
-      const request = requests[0];
-      if (!request) throw new Error("link request not found");
-      if (request.status !== "pending") throw new Error("link request is not pending");
-      await connection.execute(
-        `UPDATE external_identity_link_requests SET status = 'rejected', decided_by = ?,
-           decision_justification = ? WHERE request_id = ?`,
-        [decidedBy, justification.trim(), requestId],
-      );
-      await this.#appendAudit(connection, auditEvent);
-    });
-  }
-
-  async saveAssignment(assignment, auditEvent) {
-    if (auditEvent.subject_id !== assignment.subjectId || auditEvent.application_id !== assignment.applicationId) {
-      throw new Error("audit context must match assignment");
-    }
-    return this.#transaction(async (connection) => {
-      const [existing] = await connection.execute(
-        "SELECT version FROM access_assignments WHERE assignment_id = ? FOR UPDATE", [assignment.assignmentId],
-      );
-      const previousVersion = existing[0]?.version;
-      if (previousVersion === undefined && assignment.version !== 1) throw new Error("new assignment version must be 1");
-      if (previousVersion !== undefined && assignment.version !== previousVersion + 1) throw new Error("stale assignment version");
-      if (previousVersion !== undefined && !auditEvent.previous_value) throw new Error("previous value is required for update");
-      await connection.execute(
-        `INSERT INTO access_assignments(
-           assignment_id, subject_id, application_id, role_id, permissions_json,
-           scope_type, scope_id, conditions_json, status, valid_from, valid_until,
-           reason, decided_by, inherited_from_group, version
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-         ON DUPLICATE KEY UPDATE role_id = VALUES(role_id), permissions_json = VALUES(permissions_json),
-           scope_type = VALUES(scope_type), scope_id = VALUES(scope_id), conditions_json = VALUES(conditions_json),
-           status = VALUES(status), valid_from = VALUES(valid_from), valid_until = VALUES(valid_until),
-           reason = VALUES(reason), decided_by = VALUES(decided_by),
-           inherited_from_group = VALUES(inherited_from_group), version = VALUES(version)`,
-        [assignment.assignmentId, assignment.subjectId, assignment.applicationId, assignment.roleId,
-         JSON.stringify([...assignment.permissions].sort()), assignment.scopeType, assignment.scopeId,
-         JSON.stringify([...assignment.conditions].sort()), assignment.status, asMariaDate(assignment.validFrom),
-         asMariaDate(assignment.validUntil), assignment.reason ?? "", assignment.decidedBy ?? null,
-         assignment.inheritedFromGroup ?? null, assignment.version],
-      );
-      await this.#appendAudit(connection, auditEvent);
-    });
-  }
-
-  async getIdentity(identityId) {
-    const [rows] = await this.pool.execute(
-      "SELECT identity_id, email, display_name, status FROM identities WHERE identity_id = ?", [identityId],
-    );
-    const row = rows[0];
-    return row ? { identityId: row.identity_id, email: row.email, displayName: row.display_name, status: row.status } : null;
-  }
-
-  async listIdentities(status = null) {
-    const [rows] = status
-      ? await this.pool.execute(
-        "SELECT identity_id, email, display_name, status FROM identities WHERE status = ? ORDER BY display_name, identity_id", [status],
-      )
-      : await this.pool.execute(
-        "SELECT identity_id, email, display_name, status FROM identities ORDER BY display_name, identity_id",
-      );
-    return rows.map((row) => ({
-      identityId: row.identity_id, email: row.email,
-      displayName: row.display_name, status: row.status,
-    }));
-  }
-
-  async getApplication(applicationId) {
-    const [rows] = await this.pool.execute(
-      "SELECT application_id, display_name, status, registration_policy FROM applications WHERE application_id = ?",
-      [applicationId],
-    );
-    const row = rows[0];
-    return row ? { applicationId: row.application_id, displayName: row.display_name, status: row.status, registrationPolicy: row.registration_policy } : null;
-  }
-
-  async listApplications() {
-    const [rows] = await this.pool.execute(
-      "SELECT application_id, display_name, status, registration_policy FROM applications ORDER BY display_name, application_id",
-    );
-    return rows.map((row) => ({
-      applicationId: row.application_id, displayName: row.display_name,
-      status: row.status, registrationPolicy: row.registration_policy,
-    }));
-  }
-
-  async getLatestApplicationAccessCatalog(applicationId) {
-    const [rows] = await this.pool.execute(
-      `SELECT * FROM application_access_catalog_versions
-       WHERE application_id = ? ORDER BY catalog_version DESC LIMIT 1`, [applicationId],
-    );
-    return mapApplicationAccessCatalog(rows[0]);
-  }
-
-  async listLatestApplicationAccessCatalogs() {
-    const [rows] = await this.pool.execute(
-      `SELECT catalog.* FROM application_access_catalog_versions catalog
-       INNER JOIN (
-         SELECT application_id, MAX(catalog_version) AS catalog_version
-         FROM application_access_catalog_versions GROUP BY application_id
-       ) latest ON latest.application_id = catalog.application_id
-         AND latest.catalog_version = catalog.catalog_version
-       ORDER BY catalog.application_id`,
-    );
-    return rows.map(mapApplicationAccessCatalog);
-  }
-
-  async saveApplicationRedirectUri(applicationId, redirectUri, auditEvent) {
-    const redirectHash = createHash("sha256").update(redirectUri, "utf8").digest("hex");
-    return this.#transaction(async (connection) => {
-      await connection.execute(
-        `INSERT INTO application_redirect_uris(application_id, redirect_uri, redirect_uri_hash, status)
-         VALUES (?, ?, ?, 'active')
-         ON DUPLICATE KEY UPDATE redirect_uri = VALUES(redirect_uri), status = 'active'`,
-        [applicationId, redirectUri, redirectHash],
-      );
-      await this.#appendAudit(connection, auditEvent);
-    });
-  }
-
-  async isApplicationRedirectUriAllowed(applicationId, redirectUri) {
-    const redirectHash = createHash("sha256").update(redirectUri, "utf8").digest("hex");
-    const [rows] = await this.pool.execute(
-      `SELECT 1 FROM application_redirect_uris
-       WHERE application_id = ? AND redirect_uri_hash = ? AND redirect_uri = ? AND status = 'active'`,
-      [applicationId, redirectHash, redirectUri],
-    );
-    return rows.length === 1;
-  }
-
-  async getApplicationRedirectUri(applicationId, redirectUri) {
-    const redirectHash = createHash("sha256").update(redirectUri, "utf8").digest("hex");
-    const [rows] = await this.pool.execute(
-      `SELECT application_id, redirect_uri, status FROM application_redirect_uris
-       WHERE application_id = ? AND redirect_uri_hash = ? AND redirect_uri = ?`,
-      [applicationId, redirectHash, redirectUri],
-    );
-    const row = rows[0];
-    return row ? { applicationId: row.application_id, redirectUri: row.redirect_uri, status: row.status } : null;
-  }
-
-  async saveApplicationLoginPolicy(applicationId, requiredPermission, auditEvent) {
-    return this.#transaction(async (connection) => {
-      await connection.execute(
-        `INSERT INTO application_login_policies(application_id, required_permission, status)
-         VALUES (?, ?, 'active')
-         ON DUPLICATE KEY UPDATE required_permission = VALUES(required_permission), status = 'active'`,
-        [applicationId, requiredPermission],
-      );
-      await this.#appendAudit(connection, auditEvent);
-    });
-  }
-
-  async getApplicationLoginPolicy(applicationId) {
-    const [rows] = await this.pool.execute(
-      `SELECT application_id, required_permission, status FROM application_login_policies
-       WHERE application_id = ?`, [applicationId],
-    );
-    const row = rows[0];
-    return row ? { applicationId: row.application_id, requiredPermission: row.required_permission, status: row.status } : null;
-  }
-
-  async saveApplicationAuthorizationCode(record, auditEvent) {
-    return this.#transaction(async (connection) => {
-      await connection.execute(
-        `INSERT INTO application_authorization_codes(
-           code_hash, identity_id, application_id, redirect_uri, code_challenge, issued_at, expires_at, consumed_at
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, NULL)`,
-        [record.codeHash, record.identityId, record.applicationId, record.redirectUri,
-         record.codeChallenge, asMariaDate(record.issuedAt), asMariaDate(record.expiresAt)],
-      );
-      await this.#appendAudit(connection, auditEvent);
-    });
-  }
-
-  async consumeApplicationAuthorizationCode({ codeHash, applicationId, redirectUri, codeChallenge, now = new Date() }, auditEvent) {
-    return this.#transaction(async (connection) => {
-      const [rows] = await connection.execute(
-        `SELECT * FROM application_authorization_codes WHERE code_hash = ? FOR UPDATE`, [codeHash],
-      );
-      const row = rows[0];
-      if (!row || row.consumed_at || row.application_id !== applicationId || row.redirect_uri !== redirectUri ||
-          row.code_challenge !== codeChallenge || new Date(row.expires_at) <= now) return null;
-      await connection.execute(
-        "UPDATE application_authorization_codes SET consumed_at = ? WHERE code_hash = ?",
-        [asMariaDate(now), codeHash],
-      );
-      await this.#appendAudit(connection, auditEvent);
-      return {
-        codeHash: row.code_hash, identityId: row.identity_id, applicationId: row.application_id,
-        redirectUri: row.redirect_uri, codeChallenge: row.code_challenge,
-        issuedAt: asIso(row.issued_at), expiresAt: asIso(row.expires_at), consumedAt: now.toISOString(),
-      };
-    });
-  }
-
-  async saveApplicationSession(record, auditEvent) {
-    assertApplicationSessionAudit(record, auditEvent, "application_session.created");
-    assertNewApplicationSessionRecord(record);
-    return this.#transaction(async (connection) => {
-      await connection.execute(
-        `INSERT INTO application_sessions(
-           session_id, secret_hash, identity_id, application_id, issued_at, last_seen_at,
-           idle_expires_at, absolute_expires_at, authenticated_at, idle_ttl_ms,
-           context_label, revoked_at, revoked_by_identity_id, revocation_reason, version
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, '', ?)`,
-        [record.sessionId, record.secretHash, record.identityId, record.applicationId,
-         asMariaDate(record.issuedAt), asMariaDate(record.lastSeenAt),
-         asMariaDate(record.idleExpiresAt), asMariaDate(record.absoluteExpiresAt),
-         asMariaDate(record.authenticatedAt), record.idleTtlMs, record.contextLabel, record.version],
-      );
-      await this.#appendAudit(connection, auditEvent);
-      return structuredClone(record);
-    });
-  }
-
-  async getApplicationSession(sessionId) {
-    const [rows] = await this.pool.execute(
-      "SELECT * FROM application_sessions WHERE session_id = ?", [sessionId],
-    );
-    return mapApplicationSession(rows[0]);
-  }
-
-  async listApplicationSessions(identityId) {
-    const [rows] = await this.pool.execute(
-      `SELECT * FROM application_sessions WHERE identity_id = ?
-       ORDER BY last_seen_at DESC, session_id`, [identityId],
-    );
-    return rows.map(mapApplicationSession);
-  }
-
-  async touchApplicationSession(record, expectedVersion) {
-    if (record.version !== expectedVersion + 1) throw new Error("stale application session version");
-    return this.#transaction(async (connection) => {
-      const [rows] = await connection.execute(
-        "SELECT * FROM application_sessions WHERE session_id = ? FOR UPDATE", [record.sessionId],
-      );
-      const previous = mapApplicationSession(rows[0]);
-      if (!previous || previous.version !== expectedVersion) throw new Error("stale application session version");
-      assertApplicationSessionImmutableContext(previous, record);
-      assertApplicationSessionActivityProgress(previous, record);
-      if (previous.revokedAt !== record.revokedAt ||
-          previous.revokedByIdentityId !== record.revokedByIdentityId ||
-          previous.revocationReason !== record.revocationReason || previous.revokedAt) {
-        throw new Error("inactive application session cannot be touched");
-      }
-      const [result] = await connection.execute(
-        `UPDATE application_sessions
-         SET last_seen_at = ?, idle_expires_at = ?, version = ?
-         WHERE session_id = ? AND version = ? AND revoked_at IS NULL
-           AND last_seen_at < ? AND absolute_expires_at > ? AND idle_expires_at > ?`,
-        [asMariaDate(record.lastSeenAt), asMariaDate(record.idleExpiresAt), record.version,
-         record.sessionId, expectedVersion, asMariaDate(record.lastSeenAt),
-         asMariaDate(record.lastSeenAt), asMariaDate(record.lastSeenAt)],
-      );
-      if (result.affectedRows !== 1) throw new Error("stale or inactive application session");
-      return structuredClone(record);
-    });
-  }
-
-  async revokeApplicationSession(record, expectedVersion, auditEvent) {
-    assertApplicationSessionAudit(record, auditEvent, "application_session.revoked");
-    return this.#transaction(async (connection) => {
-      const [rows] = await connection.execute(
-        "SELECT * FROM application_sessions WHERE session_id = ? FOR UPDATE", [record.sessionId],
-      );
-      const previous = mapApplicationSession(rows[0]);
-      if (!previous || previous.version !== expectedVersion || record.version !== expectedVersion + 1) {
-        throw new Error("stale application session version");
-      }
-      assertApplicationSessionImmutableContext(previous, record);
-      if (previous.lastSeenAt !== record.lastSeenAt || previous.idleExpiresAt !== record.idleExpiresAt) {
-        throw new Error("application session activity is immutable during revocation");
-      }
-      if (previous.revokedAt || !record.revokedAt || !record.revocationReason) {
-        throw new Error("invalid application session revocation");
-      }
-      const [result] = await connection.execute(
-        `UPDATE application_sessions
-         SET revoked_at = ?, revoked_by_identity_id = ?, revocation_reason = ?, version = ?
-         WHERE session_id = ? AND version = ? AND revoked_at IS NULL`,
-        [asMariaDate(record.revokedAt), record.revokedByIdentityId, record.revocationReason,
-         record.version, record.sessionId, expectedVersion],
-      );
-      if (result.affectedRows !== 1) throw new Error("stale application session version");
-      await this.#appendAudit(connection, auditEvent);
-      return structuredClone(record);
-    });
-  }
-
-  async listAssignments(identityId, applicationId) {
-    const [rows] = await this.pool.execute(
-      `SELECT * FROM access_assignments WHERE subject_id = ? AND application_id = ?
-       ORDER BY assignment_id`, [identityId, applicationId],
-    );
-    return rows.map((row) => ({
-      assignmentId: row.assignment_id, subjectId: row.subject_id, applicationId: row.application_id,
-      roleId: row.role_id, permissions: parseJson(row.permissions_json), scopeType: row.scope_type,
-      scopeId: row.scope_id, conditions: parseJson(row.conditions_json), status: row.status,
-      validFrom: row.valid_from, validUntil: row.valid_until, reason: row.reason,
-      decidedBy: row.decided_by, inheritedFromGroup: row.inherited_from_group, version: row.version,
-    }));
-  }
-
-  async listAllAssignments() {
-    const [rows] = await this.pool.execute(
-      `SELECT * FROM access_assignments
-       ORDER BY subject_id, application_id, role_id, assignment_id`,
-    );
-    return rows.map((row) => ({
-      assignmentId: row.assignment_id, subjectId: row.subject_id, applicationId: row.application_id,
-      roleId: row.role_id, permissions: parseJson(row.permissions_json), scopeType: row.scope_type,
-      scopeId: row.scope_id, conditions: parseJson(row.conditions_json), status: row.status,
-      validFrom: row.valid_from, validUntil: row.valid_until, reason: row.reason,
-      decidedBy: row.decided_by, inheritedFromGroup: row.inherited_from_group, version: row.version,
-    }));
-  }
-
-  async receiveNotificationEvents(events, audits) {
-    return this.#transaction(async (connection) => {
-      let created = 0;
-      let alreadyPresent = 0;
-      for (const event of events) {
-        const [rows] = await connection.execute(
-          `SELECT event_hash FROM notification_events
-           WHERE source_application_id = ? AND source_event_id = ? FOR UPDATE`,
-          [event.sourceApplicationId, event.eventId],
-        );
-        if (rows.length) {
-          if (rows[0].event_hash !== event.eventHash) {
-            throw new NotificationIngressError("notification_event_identity_conflict", 409);
-          }
-          alreadyPresent += 1;
-          continue;
-        }
-        const audit = audits.get(event.eventId);
-        if (!audit) throw new Error("notification audit event is required");
-        await connection.execute(
-          `INSERT INTO notification_events(
-             source_application_id, source_event_id, event_type, event_hash,
-             task_id, site_id, actor_id, aggregate_id, payload_json,
-             occurred_at, received_at, status, processing_attempts, available_at
-           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', 0, ?)`,
-          [event.sourceApplicationId, event.eventId, event.eventType, event.eventHash,
-           event.taskId, event.siteId, event.actorId, event.aggregateId,
-           JSON.stringify(event.payload), asMariaDate(event.occurredAt),
-           asMariaDate(event.receivedAt), asMariaDate(event.receivedAt)],
-        );
-        await this.#appendAudit(connection, audit);
-        created += 1;
-      }
-      return { created, alreadyPresent };
-    });
-  }
-
-  async claimNotificationEvents({ workerId, limit, now, leaseMs }) {
-    return this.#transaction(async (connection) => {
-      const safeLimit = Number(limit);
-      if (!Number.isInteger(safeLimit) || safeLimit < 1 || safeLimit > 100) throw new Error("invalid notification claim limit");
-      const staleBefore = new Date(now.valueOf() - leaseMs);
-      const [rows] = await connection.execute(
-        `SELECT * FROM notification_events
-         WHERE ((status IN ('pending', 'retry') AND available_at <= ?)
-           OR (status = 'processing' AND claimed_at <= ?))
-         ORDER BY available_at, occurred_at, source_application_id, source_event_id
-         LIMIT ${safeLimit} FOR UPDATE SKIP LOCKED`,
-        [asMariaDate(now), asMariaDate(staleBefore)],
-      );
-      const claimed = [];
-      for (const row of rows) {
-        await connection.execute(
-          `UPDATE notification_events SET status = 'processing',
-             processing_attempts = processing_attempts + 1,
-             claimed_at = ?, claimed_by = ?, last_error_code = NULL
-           WHERE source_application_id = ? AND source_event_id = ?`,
-          [asMariaDate(now), workerId, row.source_application_id, row.source_event_id],
-        );
-        claimed.push(mapNotificationEvent({
-          ...row, status: "processing", processing_attempts: Number(row.processing_attempts) + 1,
-          claimed_at: now, claimed_by: workerId, last_error_code: null,
-        }));
-      }
-      return claimed;
-    });
-  }
-
-  async completeNotificationEvent({ sourceApplicationId, eventId, workerId, processedAt }) {
-    const [result] = await this.pool.execute(
-      `UPDATE notification_events SET status = 'processed', claimed_at = NULL,
-         claimed_by = NULL, processed_at = ?, last_error_code = NULL
-       WHERE source_application_id = ? AND source_event_id = ?
-         AND status = 'processing' AND claimed_by = ?`,
-      [asMariaDate(processedAt), sourceApplicationId, eventId, workerId],
-    );
-    if (result.affectedRows !== 1) throw new Error("notification lease is not owned by worker");
-  }
-
-  async failNotificationEvent({
-    sourceApplicationId, eventId, workerId, availableAt, errorCode, quarantined,
-  }) {
-    const [result] = await this.pool.execute(
-      `UPDATE notification_events SET status = ?, available_at = ?, claimed_at = NULL,
-         claimed_by = NULL, processed_at = NULL, last_error_code = ?
-       WHERE source_application_id = ? AND source_event_id = ?
-         AND status = 'processing' AND claimed_by = ?`,
-      [quarantined ? "quarantined" : "retry", asMariaDate(availableAt), errorCode,
-       sourceApplicationId, eventId, workerId],
-    );
-    if (result.affectedRows !== 1) throw new Error("notification lease is not owned by worker");
-  }
-
-  async getNotificationEvent(sourceApplicationId, eventId) {
-    const [rows] = await this.pool.execute(
-      `SELECT * FROM notification_events
-       WHERE source_application_id = ? AND source_event_id = ?`,
-      [sourceApplicationId, eventId],
-    );
-    return mapNotificationEvent(rows[0]);
-  }
-
-  async materializeNotificationResolution({
-    event, policyVersion, resolutionHash, suppressed, notifications, externalDeliveries, resolvedAt, auditEvent,
-  }) {
-    return this.#transaction(async (connection) => {
-      const [existing] = await connection.execute(
-        `SELECT resolution_hash, internal_notification_count, blocked_external_delivery_count
-         FROM notification_resolutions
-         WHERE source_application_id = ? AND source_event_id = ? FOR UPDATE`,
-        [event.sourceApplicationId, event.eventId],
-      );
-      if (existing.length) {
-        if (existing[0].resolution_hash !== resolutionHash) {
-          throw Object.assign(new Error("notification resolution conflict"), { code: "notification_resolution_conflict" });
-        }
-        return {
-          created: false,
-          notifications: Number(existing[0].internal_notification_count),
-          externalDeliveriesBlocked: Number(existing[0].blocked_external_delivery_count),
-        };
-      }
-      const [events] = await connection.execute(
-        `SELECT event_hash, status FROM notification_events
-         WHERE source_application_id = ? AND source_event_id = ? FOR UPDATE`,
-        [event.sourceApplicationId, event.eventId],
-      );
-      if (!events.length || events[0].event_hash !== event.eventHash || events[0].status !== "processing") {
-        throw Object.assign(new Error("notification event is not owned for processing"), { code: "notification_event_unavailable" });
-      }
-      const recipientIds = [...new Set(notifications.map((notification) => notification.recipientIdentityId))];
-      if (recipientIds.length) {
-        const placeholders = recipientIds.map(() => "?").join(", ");
-        const [identities] = await connection.execute(
-          `SELECT identity_id FROM identities WHERE status = 'active' AND identity_id IN (${placeholders}) FOR UPDATE`,
-          recipientIds,
-        );
-        const activeIds = new Set(identities.map((identity) => identity.identity_id));
-        if (recipientIds.some((identityId) => !activeIds.has(identityId))) {
-          throw Object.assign(new Error("notification recipient identity is unavailable"), { code: "recipient_identity_unavailable" });
-        }
-      }
-      await connection.execute(
-        `INSERT INTO notification_resolutions(
-           source_application_id, source_event_id, policy_version, resolution_hash, suppressed_json,
-           internal_notification_count, blocked_external_delivery_count, resolved_at
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-        [event.sourceApplicationId, event.eventId, policyVersion, resolutionHash, JSON.stringify(suppressed),
-         notifications.length, externalDeliveries.length, asMariaDate(resolvedAt)],
-      );
-      for (const notification of notifications) {
-        await connection.execute(
-          `INSERT INTO notifications(
-             notification_id, source_application_id, source_event_id, recipient_identity_id,
-             category, importance, title, message, context_application_id, context_resource_type,
-             context_resource_id, occurred_at, created_at, read_at, archived_at
-           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL)`,
-          [notification.notificationId, event.sourceApplicationId, event.eventId,
-           notification.recipientIdentityId, notification.category, notification.importance,
-           notification.title, notification.message, notification.contextApplicationId,
-           notification.contextResourceType, notification.contextResourceId,
-           asMariaDate(notification.occurredAt), asMariaDate(notification.createdAt)],
-        );
-      }
-      for (const delivery of externalDeliveries) {
-        await connection.execute(
-          `INSERT INTO notification_external_deliveries(
-             delivery_id, notification_id, channel, status, blocked_reason,
-             processing_attempts, available_at, claimed_at, claimed_by, delivered_at, last_error_code, created_at
-           ) VALUES (?, ?, ?, 'blocked', ?, 0, NULL, NULL, NULL, NULL, NULL, ?)`,
-          [delivery.deliveryId, delivery.notificationId, delivery.channel,
-           delivery.blockedReason, asMariaDate(delivery.createdAt)],
-        );
-      }
-      await this.#appendAudit(connection, auditEvent);
-      return { created: true, notifications: notifications.length, externalDeliveriesBlocked: externalDeliveries.length };
-    });
-  }
-
-  async listNotifications(identityId, limit = 100) {
-    const safeLimit = Number(limit);
-    if (!Number.isInteger(safeLimit) || safeLimit < 1 || safeLimit > 200) throw new Error("invalid notification list limit");
-    const [rows] = await this.pool.execute(
-      `SELECT n.notification_id, n.source_application_id, a.display_name AS source_application_name,
-         n.category, n.importance, n.title, n.message, n.context_application_id,
-         n.context_resource_type, n.context_resource_id, n.occurred_at, n.created_at,
-         n.read_at, n.archived_at
-       FROM notifications n
-       JOIN identities i ON i.identity_id = n.recipient_identity_id AND i.status = 'active'
-       JOIN applications a ON a.application_id = n.source_application_id
-       WHERE n.recipient_identity_id = ? AND n.archived_at IS NULL
-       ORDER BY n.occurred_at DESC, n.notification_id DESC LIMIT ${safeLimit}`,
-      [identityId],
-    );
-    return rows.map((row) => ({
-      notificationId: row.notification_id, sourceApplicationId: row.source_application_id,
-      sourceApplicationName: row.source_application_name, category: row.category,
-      importance: row.importance, title: row.title, message: row.message,
-      contextApplicationId: row.context_application_id, contextResourceType: row.context_resource_type,
-      contextResourceId: row.context_resource_id, occurredAt: asIso(row.occurred_at),
-      createdAt: asIso(row.created_at), readAt: asIso(row.read_at), archivedAt: asIso(row.archived_at),
-    }));
-  }
-
-  async countUnreadNotifications(identityId) {
-    const [rows] = await this.pool.execute(
-      `SELECT COUNT(*) AS count FROM notifications n
-       JOIN identities i ON i.identity_id = n.recipient_identity_id AND i.status = 'active'
-       WHERE n.recipient_identity_id = ? AND n.read_at IS NULL AND n.archived_at IS NULL`,
-      [identityId],
-    );
-    return Number(rows[0]?.count ?? 0);
-  }
-
-  async recordNotificationProcessingRun({
-    status, startedAt, finishedAt, errorCode, claimed, processed, retried, quarantined,
-  }) {
-    const validErrorCode = typeof errorCode === "string" && /^[a-z][a-z0-9_:-]{0,79}$/.test(errorCode);
-    if (!["succeeded", "failed"].includes(status) || !(startedAt instanceof Date) ||
-        !(finishedAt instanceof Date) || finishedAt < startedAt ||
-        (status === "failed") !== validErrorCode || (status === "succeeded" && errorCode !== null)) {
-      throw new Error("invalid notification processing outcome");
-    }
-    const counts = [claimed, processed, retried, quarantined].map(Number);
-    if (counts.some((value) => !Number.isInteger(value) || value < 0 || value > 100)) {
-      throw new Error("invalid notification processing counts");
-    }
-    await this.pool.execute(
-      `INSERT INTO notification_processing_state(
-         consumer_id, last_started_at, last_finished_at, last_status, last_error_code,
-         last_claimed, last_processed, last_retried, last_quarantined, version
-       ) VALUES ('internal-materializer-v1', ?, ?, ?, ?, ?, ?, ?, ?, 1)
-       ON DUPLICATE KEY UPDATE
-         last_started_at = VALUES(last_started_at), last_finished_at = VALUES(last_finished_at),
-         last_status = VALUES(last_status), last_error_code = VALUES(last_error_code),
-         last_claimed = VALUES(last_claimed), last_processed = VALUES(last_processed),
-         last_retried = VALUES(last_retried), last_quarantined = VALUES(last_quarantined),
-         version = version + 1`,
-      [asMariaDate(startedAt), asMariaDate(finishedAt), status, errorCode,
-       counts[0], counts[1], counts[2], counts[3]],
-    );
-  }
-
-  async getNotificationOperationsSnapshot(limit = 50) {
-    const safeLimit = Number(limit);
-    if (!Number.isInteger(safeLimit) || safeLimit < 1 || safeLimit > 100) {
-      throw new Error("invalid notification operations limit");
-    }
-    const [eventRows, notificationRows, deliveryRows, suppressionRows, recentRows, processorRows] = await Promise.all([
-      this.pool.execute(
-        `SELECT COUNT(*) AS total,
-           COALESCE(SUM(status = 'pending'), 0) AS pending,
-           COALESCE(SUM(status = 'processing'), 0) AS processing,
-           COALESCE(SUM(status = 'retry'), 0) AS retrying,
-           COALESCE(SUM(status = 'processed'), 0) AS processed,
-           COALESCE(SUM(status = 'quarantined'), 0) AS quarantined,
-           MIN(CASE WHEN status IN ('pending', 'retry') THEN available_at END) AS oldest_available_at,
-           MAX(received_at) AS last_received_at,
-           MAX(processed_at) AS last_processed_at
-         FROM notification_events`,
-      ),
-      this.pool.execute(
-        `SELECT COUNT(*) AS total,
-           COALESCE(SUM(read_at IS NULL AND archived_at IS NULL), 0) AS unread,
-           COALESCE(SUM(archived_at IS NOT NULL), 0) AS archived
-         FROM notifications`,
-      ),
-      this.pool.execute(
-        `SELECT COUNT(*) AS total,
-           COALESCE(SUM(status = 'blocked'), 0) AS blocked,
-           COALESCE(SUM(status <> 'blocked'), 0) AS non_blocked,
-           COALESCE(SUM(status = 'pending'), 0) AS pending,
-           COALESCE(SUM(status = 'processing'), 0) AS processing,
-           COALESCE(SUM(status = 'retry'), 0) AS retrying,
-           COALESCE(SUM(status = 'delivered'), 0) AS delivered,
-           COALESCE(SUM(status = 'quarantined'), 0) AS quarantined
-         FROM notification_external_deliveries`,
-      ),
-      this.pool.execute(
-        `SELECT
-           COALESCE(SUM(CAST(JSON_UNQUOTE(JSON_EXTRACT(suppressed_json, '$.own_action')) AS UNSIGNED)), 0) AS own_action,
-           COALESCE(SUM(CAST(JSON_UNQUOTE(JSON_EXTRACT(suppressed_json, '$.preferences')) AS UNSIGNED)), 0) AS preferences,
-           COALESCE(SUM(CAST(JSON_UNQUOTE(JSON_EXTRACT(suppressed_json, '$.unlinked_identity')) AS UNSIGNED)), 0) AS unlinked_identity
-         FROM notification_resolutions`,
-      ),
-      this.pool.execute(
-        `SELECT source_application_id, source_event_id, policy_version, suppressed_json,
-           internal_notification_count, blocked_external_delivery_count, resolved_at
-         FROM notification_resolutions
-         ORDER BY resolved_at DESC, source_application_id, source_event_id
-         LIMIT ${safeLimit}`,
-      ),
-      this.pool.execute(
-        `SELECT last_started_at, last_finished_at, last_status, last_error_code,
-           last_claimed, last_processed, last_retried, last_quarantined, version
-         FROM notification_processing_state
-         WHERE consumer_id = 'internal-materializer-v1'`,
-      ),
-    ]);
-    const events = eventRows[0][0] ?? {};
-    const notifications = notificationRows[0][0] ?? {};
-    const deliveries = deliveryRows[0][0] ?? {};
-    const suppressions = suppressionRows[0][0] ?? {};
-    const processor = processorRows[0][0] ?? null;
-    const number = (value) => Number(value ?? 0);
-    return {
-      events: {
-        total: number(events.total), pending: number(events.pending), processing: number(events.processing),
-        retrying: number(events.retrying), processed: number(events.processed), quarantined: number(events.quarantined),
-        oldestAvailableAt: asIso(events.oldest_available_at), lastReceivedAt: asIso(events.last_received_at),
-        lastProcessedAt: asIso(events.last_processed_at),
-      },
-      notifications: {
-        total: number(notifications.total), unread: number(notifications.unread), archived: number(notifications.archived),
-      },
-      externalDeliveries: {
-        total: number(deliveries.total), blocked: number(deliveries.blocked), nonBlocked: number(deliveries.non_blocked),
-        pending: number(deliveries.pending), processing: number(deliveries.processing), retrying: number(deliveries.retrying),
-        delivered: number(deliveries.delivered), quarantined: number(deliveries.quarantined),
-      },
-      suppressions: {
-        ownAction: number(suppressions.own_action), preferences: number(suppressions.preferences),
-        unlinkedIdentity: number(suppressions.unlinked_identity),
-      },
-      processor: processor ? {
-        status: processor.last_status, lastStartedAt: asIso(processor.last_started_at),
-        lastFinishedAt: asIso(processor.last_finished_at), errorCode: processor.last_error_code,
-        claimed: number(processor.last_claimed), processed: number(processor.last_processed),
-        retried: number(processor.last_retried), quarantined: number(processor.last_quarantined),
-        version: number(processor.version),
-      } : { status: "never_run", lastStartedAt: null, lastFinishedAt: null, errorCode: null,
-        claimed: 0, processed: 0, retried: 0, quarantined: 0, version: 0 },
-      recentResolutions: recentRows[0].map((row) => ({
-        sourceApplicationId: row.source_application_id, eventId: row.source_event_id,
-        policyVersion: row.policy_version, suppressed: parseJson(row.suppressed_json),
-        internalNotificationCount: number(row.internal_notification_count),
-        blockedExternalDeliveryCount: number(row.blocked_external_delivery_count),
-        resolvedAt: asIso(row.resolved_at),
-      })),
-    };
-  }
-
-  async markNotificationRead({ identityId, notificationId, readAt }) {
-    const [result] = await this.pool.execute(
-      `UPDATE notifications SET read_at = ?
-       WHERE notification_id = ? AND recipient_identity_id = ? AND read_at IS NULL AND archived_at IS NULL
-         AND EXISTS (SELECT 1 FROM identities i WHERE i.identity_id = ? AND i.status = 'active')`,
-      [asMariaDate(readAt), notificationId, identityId, identityId],
-    );
-    return { changed: result.affectedRows === 1 };
-  }
-
-  async markAllNotificationsRead({ identityId, readAt }) {
-    const [result] = await this.pool.execute(
-      `UPDATE notifications SET read_at = ?
-       WHERE recipient_identity_id = ? AND read_at IS NULL AND archived_at IS NULL
-         AND EXISTS (SELECT 1 FROM identities i WHERE i.identity_id = ? AND i.status = 'active')`,
-      [asMariaDate(readAt), identityId, identityId],
-    );
-    return { changed: Number(result.affectedRows) };
-  }
-
-  async verifyAuditChain() {
-    const [rows] = await this.pool.execute(
-      "SELECT event_payload_json, previous_hash, event_hash FROM audit_events ORDER BY sequence",
-    );
-    return verifyAuditChain(rows.map((row) => ({
-      event: parseJson(row.event_payload_json), previousHash: row.previous_hash, eventHash: row.event_hash,
-    })));
-  }
-}
+        "SELECT * FROM external_identity_link_requests WHERE request_id = ? FOR UPDATE", [requestï®|¶‰ËkºwµçL¹Á½½°¹•á•ÕÑ” (€€€€€M1P€¨I=4¹½Ñ¥™¥…Ñ¥½¹}•Ù•¹ÑÌ(€€€€€€]!IÍ½ÕÉ•}…ÁÁ±¥…Ñ¥½¹}¥€ô€ü9Í½ÕÉ•}•Ù•¹Ñ}¥€ô€ı€°(€€€€€mÍ½ÕÉ•ÁÁ±¥…Ñ¥½¹%°•Ù•¹Ñ%‘t°(€€€€¤ì(€€€É•ÑÕÉ¸µ…Á9½Ñ¥™¥…Ñ¥½¹Ù•¹Ğ¡É½İÍlÁt¤ì(€ô((€…Íå¹Œµ…Ñ•É¥…±¥é•9½Ñ¥™¥…Ñ¥½¹I•Í½±ÕÑ¥½¸¡ì(€€€•Ù•¹Ğ°Á½±¥åY•ÉÍ¥½¸°É•Í½±ÕÑ¥½¹!…Í °ÍÕÁÁÉ•ÍÍ•°¹½Ñ¥™¥…Ñ¥½¹Ì°•áÑ•É¹…±•±¥Ù•É¥•Ì°É•Í½±Ù•‘Ğ°…Õ‘¥ÑÙ•¹Ğ°(€ô¤ì(€€€É•ÑÕÉ¸Ñ¡¥Ì¸ÑÉ…¹Í…Ñ¥½¸¡…Íå¹Œ€¡½¹¹•Ñ¥½¸¤€ôøì(€€€€€½¹ÍĞm•á¥ÍÑ¥¹t€ô…İ…¥Ğ½¹¹•Ñ¥½¸¹•á•ÕÑ” (€€€€€€€M1PÉ•Í½±ÕÑ¥½¹}¡…Í °¥¹Ñ•É¹…±}¹½Ñ¥™¥…Ñ¥½¹}½Õ¹Ğ°‰±½­•‘}•áÑ•É¹…±}‘•±¥Ù•Éå}½Õ¹Ğ(€€€€€€€€I=4¹½Ñ¥™¥…Ñ¥½¹}É•Í½±ÕÑ¥½¹Ì(€€€€€€€€]!IÍ½ÕÉ•}…ÁÁ±¥…Ñ¥½¹}¥€ô€ü9Í½ÕÉ•}•Ù•¹Ñ}¥€ô€ü=HUAQ€°(€€€€€€€m•Ù•¹Ğ¹Í½ÕÉ•ÁÁ±¥…Ñ¥½¹%°•Ù•¹Ğ¹•Ù•¹Ñ%‘t°(€€€€€€¤ì(€€€€€¥˜€¡•á¥ÍÑ¥¹œ¹±•¹Ñ ¤ì(€€€€€€€¥˜€¡•á¥ÍÑ¥¹lÁt¹É•Í½±ÕÑ¥½¹}¡…Í €„ôôÉ•Í½±ÕÑ¥½¹!…Í ¤ì(€€€€€€€€€Ñ¡É½Ü=‰©•Ğ¹…ÍÍ¥¸¡¹•ÜÉÉ½È ‰¹½Ñ¥™¥…Ñ¥½¸É•Í½±ÕÑ¥½¸½¹™±¥Ğˆ¤°ì½‘”è€‰¹½Ñ¥™¥…Ñ¥½¹}É•Í½±ÕÑ¥½¹}½¹™±¥Ğˆô¤ì(€€€€€€€ô(€€€€€€€É•ÑÕÉ¸ì(€€€€€€€€€É•…Ñ•è™…±Í”°(€€€€€€€€€¹½Ñ¥™¥…Ñ¥½¹Ìè9Õµ‰•È¡•á¥ÍÑ¥¹lÁt¹¥¹Ñ•É¹…±}¹½Ñ¥™¥…Ñ¥½¹}½Õ¹Ğ¤°(€€€€€€€€€•áÑ•É¹…±•±¥Ù•É¥•Í	±½­•è9Õµ‰•È¡•á¥ÍÑ¥¹lÁt¹‰±½­•‘}•áÑ•É¹…±}‘•±¥Ù•Éå}½Õ¹Ğ¤°(€€€€€€€ôì(€€€€€ô(€€€€€½¹ÍĞm•Ù•¹ÑÍt€ô…İ…¥Ğ½¹¹•Ñ¥½¸¹•á•ÕÑ” (€€€€€€€M1P•Ù•¹Ñ}¡…Í °ÍÑ…ÑÕÌI=4¹½Ñ¥™¥…Ñ¥½¹}•Ù•¹ÑÌ(€€€€€€€€]!IÍ½ÕÉ•}…ÁÁ±¥…Ñ¥½¹}¥€ô€ü9Í½ÕÉ•}•Ù•¹Ñ}¥€ô€ü=HUAQ€°(€€€€€€€m•Ù•¹Ğ¹Í½ÕÉ•ÁÁ±¥…Ñ¥½¹%°•Ù•¹Ğ¹•Ù•¹Ñ%‘t°(€€€€€€¤ì(€€€€€¥˜€ …•Ù•¹ÑÌ¹±•¹Ñ ñğ•Ù•¹ÑÍlÁt¹•Ù•¹Ñ}¡…Í €„ôô•Ù•¹Ğ¹•Ù•¹Ñ!…Í ñğ•Ù•¹ÑÍlÁt¹ÍÑ…ÑÕÌ€„ôô€‰ÁÉ½•ÍÍ¥¹œˆ¤ì(€€€€€€€Ñ¡É½Ü=‰©•Ğ¹…ÍÍ¥¸¡¹•ÜÉÉ½È ‰¹½Ñ¥™¥…Ñ¥½¸•Ù•¹Ğ¥Ì¹½Ğ½İ¹•™½ÈÁÉ½•ÍÍ¥¹œˆ¤°ì½‘”è€‰¹½Ñ¥™¥…Ñ¥½¹}•Ù•¹Ñ}Õ¹…Ù…¥±…‰±”ˆô¤ì(€€€€€ô(€€€€€½¹ÍĞÉ•¥Á¥•¹Ñ%‘Ì€ôl¸¸¹¹•ÜM•Ğ¡¹½Ñ¥™¥…Ñ¥½¹Ì¹µ…À ¡¹½Ñ¥™¥…Ñ¥½¸¤€ôø¹½Ñ¥™¥…Ñ¥½¸¹É•¥Á¥•¹Ñ%‘•¹Ñ¥Ñå%¤¥tì(€€€€€¥˜€¡É•¥Á¥•¹Ñ%‘Ì¹±•¹Ñ ¤ì(€€€€€€€½¹ÍĞÁ±…•¡½±‘•ÉÌ€ôÉ•¥Á¥•¹Ñ%‘Ì¹µ…À  ¤€ôø€ˆüˆ¤¹©½¥¸ ˆ°€ˆ¤ì(€€€€€€€½¹ÍĞm¥‘•¹Ñ¥Ñ¥•Ít€ô…İ…¥Ğ½¹¹•Ñ¥½¸¹•á•ÕÑ” (€€€€€€€€€M1P¥‘•¹Ñ¥Ñå}¥I=4¥‘•¹Ñ¥Ñ¥•Ì]!IÍÑ…ÑÕÌ€ô€…Ñ¥Ù”œ9¥‘•¹Ñ¥Ñå}¥%8€ ‘íÁ±…•¡½±‘•ÉÍô¤=HUAQ€°(€€€€€€€€€É•¥Á¥•¹Ñ%‘Ì°(€€€€€€€€¤ì(€€€€€€€½¹ÍĞ…Ñ¥Ù•%‘Ì€ô¹•ÜM•Ğ¡¥‘•¹Ñ¥Ñ¥•Ì¹µ…À ¡¥‘•¹Ñ¥Ñä¤€ôø¥‘•¹Ñ¥Ñä¹¥‘•¹Ñ¥Ñå}¥¤¤ì(€€€€€€€¥˜€¡É•¥Á¥•¹Ñ%‘Ì¹Í½µ” ¡¥‘•¹Ñ¥Ñå%¤€ôø€……Ñ¥Ù•%‘Ì¹¡…Ì¡¥‘•¹Ñ¥Ñå%¤¤¤ì(€€€€€€€€€Ñ¡É½Ü=‰©•Ğ¹…ÍÍ¥¸¡¹•ÜÉÉ½È ‰¹½Ñ¥™¥…Ñ¥½¸É•¥Á¥•¹Ğ¥‘•¹Ñ¥Ñä¥ÌÕ¹…Ù…¥±…‰±”ˆ¤°ì½‘”è€‰É•¥Á¥•¹Ñ}¥‘•¹Ñ¥Ñå}Õ¹…Ù…¥±…‰±”ˆô¤ì(€€€€€€€ô(€€€€€ô(€€€€€…İ…¥Ğ½¹¹•Ñ¥½¸¹•á•ÕÑ” (€€€€€€€%9MIP%9Q<¹½Ñ¥™¥…Ñ¥½¹}É•Í½±ÕÑ¥½¹Ì (€€€€€€€€€€Í½ÕÉ•}…ÁÁ±¥…Ñ¥½¹}¥°Í½ÕÉ•}•Ù•¹Ñ}¥°Á½±¥å}Ù•ÉÍ¥½¸°É•Í½±ÕÑ¥½¹}¡…Í °ÍÕÁÁÉ•ÍÍ•‘}©Í½¸°(€€€€€€€€€€¥¹Ñ•É¹…±}¹½Ñ¥™¥…Ñ¥½¹}½Õ¹Ğ°‰±½­•‘}•áÑ•É¹…±}‘•±¥Ù•Éå}½Õ¹Ğ°É•Í½±Ù•‘}…Ğ(€€€€€€€€€¤Y1UL€ ü°€ü°€ü°€ü°€ü°€ü°€ü°€ü¥€°(€€€€€€€m•Ù•¹Ğ¹Í½ÕÉ•ÁÁ±¥…Ñ¥½¹%°•Ù•¹Ğ¹•Ù•¹Ñ%°Á½±¥åY•ÉÍ¥½¸°É•Í½±ÕÑ¥½¹!…Í °)M=8¹ÍÑÉ¥¹¥™ä¡ÍÕÁÁÉ•ÍÍ•¤°(€€€€€€€€¹½Ñ¥™¥…Ñ¥½¹Ì¹±•¹Ñ °•áÑ•É¹…±•±¥Ù•É¥•Ì¹±•¹Ñ °…Í5…É¥……Ñ”¡É•Í½±Ù•‘Ğ¥t°(€€€€€€¤ì(€€€€€™½È€¡½¹ÍĞ¹½Ñ¥™¥…Ñ¥½¸½˜¹½Ñ¥™¥…Ñ¥½¹Ì¤ì(€€€€€€€…İ…¥Ğ½¹¹•Ñ¥½¸¹•á•ÕÑ” (€€€€€€€€€%9MIP%9Q<¹½Ñ¥™¥…Ñ¥½¹Ì (€€€€€€€€€€€€¹½Ñ¥™¥…Ñ¥½¹}¥°Í½ÕÉ•}…ÁÁ±¥…Ñ¥½¹}¥°Í½ÕÉ•}•Ù•¹Ñ}¥°É•¥Á¥•¹Ñ}¥‘•¹Ñ¥Ñå}¥°(€€€€€€€€€€€€…Ñ•½Éä°¥µÁ½ÉÑ…¹”°Ñ¥Ñ±”°µ•ÍÍ…”°½¹Ñ•áÑ}…ÁÁ±¥…Ñ¥½¹}¥°½¹Ñ•áÑ}É•Í½ÕÉ•}ÑåÁ”°(€€€€€€€€€€€€½¹Ñ•áÑ}É•Í½ÕÉ•}¥°½ÕÉÉ•‘}…Ğ°É•…Ñ•‘}…Ğ°É•…‘}…Ğ°…É¡¥Ù•‘}…Ğ(€€€€€€€€€€€¤Y1UL€ ü°€ü°€ü°€ü°€ü°€ü°€ü°€ü°€ü°€ü°€ü°€ü°€ü°9U10°9U10¥€°(€€€€€€€€€m¹½Ñ¥™¥…Ñ¥½¸¹¹½Ñ¥™¥…Ñ¥½¹%°•Ù•¹Ğ¹Í½ÕÉ•ÁÁ±¥…Ñ¥½¹%°•Ù•¹Ğ¹•Ù•¹Ñ%°(€€€€€€€€€€¹½Ñ¥™¥…Ñ¥½¸¹É•¥Á¥•¹Ñ%‘•¹Ñ¥Ñå%°¹½Ñ¥™¥…Ñ¥½¸¹…Ñ•½Éä°¹½Ñ¥™¥…Ñ¥½¸¹¥µÁ½ÉÑ…¹”°(€€€€€€€€€€¹½Ñ¥™¥…Ñ¥½¸¹Ñ¥Ñ±”°¹½Ñ¥™¥…Ñ¥½¸¹µ•ÍÍ…”°¹½Ñ¥™¥…Ñ¥½¸¹½¹Ñ•áÑÁÁ±¥…Ñ¥½¹%°(€€€€€€€€€€¹½Ñ¥™¥…Ñ¥½¸¹½¹Ñ•áÑI•Í½ÕÉ•QåÁ”°¹½Ñ¥™¥…Ñ¥½¸¹½¹Ñ•áÑI•Í½ÕÉ•%°(€€€€€€€€€€…Í5…É¥……Ñ”¡¹½Ñ¥™¥…Ñ¥½¸¹½ÕÉÉ•‘Ğ¤°…Í5…É¥……Ñ”¡¹½Ñ¥™¥…Ñ¥½¸¹É•…Ñ•‘Ğ¥t°(€€€€€€€€¤ì(€€€€€ô(€€€€€™½È€¡½¹ÍĞ‘•±¥Ù•Éä½˜•áÑ•É¹…±•±¥Ù•É¥•Ì¤ì(€€€€€€€…İ…¥Ğ½¹¹•Ñ¥½¸¹•á•ÕÑ” (€€€€€€€€€%9MIP%9Q<¹½Ñ¥™¥…Ñ¥½¹}•áÑ•É¹…±}‘•±¥Ù•É¥•Ì (€€€€€€€€€€€€‘•±¥Ù•Éå}¥°¹½Ñ¥™¥…Ñ¥½¹}¥°¡…¹¹•°°ÍÑ…ÑÕÌ°‰±½­•‘}É•…Í½¸°(€€€€€€€€€€€€ÁÉ½•ÍÍ¥¹}…ÑÑ•µÁÑÌ°…Ù…¥±…‰±•}…Ğ°±…¥µ•‘}…Ğ°±…¥µ•‘}‰ä°‘•±¥Ù•É•‘}…Ğ°±…ÍÑ}•ÉÉ½É}½‘”°É•…Ñ•‘}…Ğ(€€€€€€€€€€€¤Y1UL€ ü°€ü°€ü°€‰±½­•œ°€ü°€À°9U10°9U10°9U10°9U10°9U10°€ü¥€°(€€€€€€€€€m‘•±¥Ù•Éä¹‘•±¥Ù•Éå%°‘•±¥Ù•Éä¹¹½Ñ¥™¥…Ñ¥½¹%°‘•±¥Ù•Éä¹¡…¹¹•°°(€€€€€€€€€€‘•±¥Ù•Éä¹‰±½­•‘I•…Í½¸°…Í5…É¥……Ñ”¡‘•±¥Ù•Éä¹É•…Ñ•‘Ğ¥t°(€€€€€€€€¤ì(€€€€€ô(€€€€€…İ…¥ĞÑ¡¥Ì¸…ÁÁ•¹‘Õ‘¥Ğ¡½¹¹•Ñ¥½¸°…Õ‘¥ÑÙ•¹Ğ¤ì(€€€€€É•ÑÕÉ¸ìÉ•…Ñ•èÑÉÕ”°¹½Ñ¥™¥…Ñ¥½¹Ìè¹½Ñ¥™¥…Ñ¥½¹Ì¹±•¹Ñ °•áÑ•É¹…±•±¥Ù•É¥•Í	±½­•è•áÑ•É¹…±•±¥Ù•É¥•Ì¹±•¹Ñ ôì(€€€ô¤ì(€ô((€…Íå¹Œ±¥ÍÑ9½Ñ¥™¥…Ñ¥½¹Ì¡¥‘•¹Ñ¥Ñå%°±¥µ¥Ğ€ô€ÄÀÀ¤ì(€€€½¹ÍĞÍ…™•1¥µ¥Ğ€ô9Õµ‰•È¡±¥µ¥Ğ¤ì(€€€¥˜€ …9Õµ‰•È¹¥Í%¹Ñ••È¡Í…™•1¥µ¥Ğ¤ñğÍ…™•1¥µ¥Ğ€ğ€ÄñğÍ…™•1¥µ¥Ğ€ø€ÈÀÀ¤Ñ¡É½Ü¹•ÜÉÉ½È ‰¥¹Ù…±¥¹½Ñ¥™¥…Ñ¥½¸±¥ÍĞ±¥µ¥Ğˆ¤ì(€€€½¹ÍĞmÉ½İÍt€ô…İ…¥ĞÑ¡¥Ì¹Á½½°¹•á•ÕÑ” (€€€€€M1P¸¹¹½Ñ¥™¥…Ñ¥½¹}¥°¸¹Í½ÕÉ•}…ÁÁ±¥…Ñ¥½¹}¥°„¹‘¥ÍÁ±…å}¹…µ”LÍ½ÕÉ•}…ÁÁ±¥…Ñ¥½¹}¹…µ”°(€€€€€€€€¸¹…Ñ•½Éä°¸¹¥µÁ½ÉÑ…¹”°¸¹Ñ¥Ñ±”°¸¹µ•ÍÍ…”°¸¹½¹Ñ•áÑ}…ÁÁ±¥…Ñ¥½¹}¥°(€€€€€€€€¸¹½¹Ñ•áÑ}É•Í½ÕÉ•}ÑåÁ”°¸¹½¹Ñ•áÑ}É•Í½ÕÉ•}¥°¸¹½ÕÉÉ•‘}…Ğ°¸¹É•…Ñ•‘}…Ğ°(€€€€€€€€¸¹É•…‘}…Ğ°¸¹…É¡¥Ù•‘}…Ğ(€€€€€€I=4¹½Ñ¥™¥…Ñ¥½¹Ì¸(€€€€€€)=%8¥‘•¹Ñ¥Ñ¥•Ì¤=8¤¹¥‘•¹Ñ¥Ñå}¥€ô¸¹É•¥Á¥•¹Ñ}¥‘•¹Ñ¥Ñå}¥9¤¹ÍÑ…ÑÕÌ€ô€…Ñ¥Ù”œ(€€€€€€)=%8…ÁÁ±¥…Ñ¥½¹Ì„=8„¹…ÁÁ±¥…Ñ¥½¹}¥€ô¸¹Í½ÕÉ•}…ÁÁ±¥…Ñ¥½¹}¥(€€€€€€]!I¸¹É•¥Á¥•¹Ñ}¥‘•¹Ñ¥Ñå}¥€ô€ü9¸¹…É¡¥Ù•‘}…Ğ%L9U10(€€€€€€=IH	d¸¹½ÕÉÉ•‘}…ĞM°¸¹¹½Ñ¥™¥…Ñ¥½¹}¥M1%5%P€‘íÍ…™•1¥µ¥Ñõ€°(€€€€€m¥‘•¹Ñ¥Ñå%‘t°(€€€€¤ì(€€€É•ÑÕÉ¸É½İÌ¹µ…À ¡É½Ü¤€ôø€¡ì(€€€€€¹½Ñ¥™¥…Ñ¥½¹%èÉ½Ü¹¹½Ñ¥™¥…Ñ¥½¹}¥°Í½ÕÉ•ÁÁ±¥…Ñ¥½¹%èÉ½Ü¹Í½ÕÉ•}…ÁÁ±¥…Ñ¥½¹}¥°(€€€€€Í½ÕÉ•ÁÁ±¥…Ñ¥½¹9…µ”èÉ½Ü¹Í½ÕÉ•}…ÁÁ±¥…Ñ¥½¹}¹…µ”°…Ñ•½ÉäèÉ½Ü¹…Ñ•½Éä°(€€€€€¥µÁ½ÉÑ…¹”èÉ½Ü¹¥µÁ½ÉÑ…¹”°Ñ¥Ñ±”èÉ½Ü¹Ñ¥Ñ±”°µ•ÍÍ…”èÉ½Ü¹µ•ÍÍ…”°(€€€€€½¹Ñ•áÑÁÁ±¥…Ñ¥½¹%èÉ½Ü¹½¹Ñ•áÑ}…ÁÁ±¥…Ñ¥½¹}¥°½¹Ñ•áÑI•Í½ÕÉ•QåÁ”èÉ½Ü¹½¹Ñ•áÑ}É•Í½ÕÉ•}ÑåÁ”°(€€€€€½¹Ñ•áÑI•Í½ÕÉ•%èÉ½Ü¹½¹Ñ•áÑ}É•Í½ÕÉ•}¥°½ÕÉÉ•‘Ğè…Í%Í¼¡É½Ü¹½ÕÉÉ•‘}…Ğ¤°(€€€€€É•…Ñ•‘Ğè…Í%Í¼¡É½Ü¹É•…Ñ•‘}…Ğ¤°É•…‘Ğè…Í%Í¼¡É½Ü¹É•…‘}…Ğ¤°…É¡¥Ù•‘Ğè…Í%Í¼¡É½Ü¹…É¡¥Ù•‘}…Ğ¤°(€€€ô¤¤ì(€ô((€…Íå¹Œ½Õ¹ÑU¹É•…‘9½Ñ¥™¥…Ñ¥½¹Ì¡¥‘•¹Ñ¥Ñå%¤ì(€€€½¹ÍĞmÉ½İÍt€ô…İ…¥ĞÑ¡¥Ì¹Á½½°¹•á•ÕÑ” (€€€€€M1P=U9P ¨¤L½Õ¹ĞI=4¹½Ñ¥™¥…Ñ¥½¹Ì¸(€€€€€€)=%8¥‘•¹Ñ¥Ñ¥•Ì¤=8¤¹¥‘•¹Ñ¥Ñå}¥€ô¸¹É•¥Á¥•¹Ñ}¥‘•¹Ñ¥Ñå}¥9¤¹ÍÑ…ÑÕÌ€ô€…Ñ¥Ù”œ(€€€€€€]!I¸¹É•¥Á¥•¹Ñ}¥‘•¹Ñ¥Ñå}¥€ô€ü9¸¹É•…‘}…Ğ%L9U109¸¹…É¡¥Ù•‘}…Ğ%L9U11€°(€€€€€m¥‘•¹Ñ¥Ñå%‘t°(€€€€¤ì(€€€É•ÑÕÉ¸9Õµ‰•È¡É½İÍlÁtü¹½Õ¹Ğ€üü€À¤ì(€ô((€…Íå¹ŒÉ•½É‘9½Ñ¥™¥…Ñ¥½¹AÉ½•ÍÍ¥¹IÕ¸¡ì(€€€ÍÑ…ÑÕÌ°ÍÑ…ÉÑ•‘Ğ°™¥¹¥Í¡•‘Ğ°•ÉÉ½É½‘”°±…¥µ•°ÁÉ½•ÍÍ•°É•ÑÉ¥•°ÅÕ…É…¹Ñ¥¹•°(€ô¤ì(€€€½¹ÍĞÙ…±¥‘ÉÉ½É½‘”€ôÑåÁ•½˜•ÉÉ½É½‘”€ôôô€‰ÍÑÉ¥¹œˆ€˜˜€½ym„µéum„µèÀ´å|èµuìÀ°Üåô¼¹Ñ•ÍĞ¡•ÉÉ½É½‘”¤ì(€€€¥˜€ …l‰ÍÕ••‘•ˆ°€‰™…¥±•‰t¹¥¹±Õ‘•Ì¡ÍÑ…ÑÕÌ¤ñğ€„¡ÍÑ…ÉÑ•‘Ğ¥¹ÍÑ…¹•½˜…Ñ”¤ñğ(€€€€€€€€„¡™¥¹¥Í¡•‘Ğ¥¹ÍÑ…¹•½˜…Ñ”¤ñğ™¥¹¥Í¡•‘Ğ€ğÍÑ…ÉÑ•‘Ğñğ(€€€€€€€€¡ÍÑ…ÑÕÌ€ôôô€‰™…¥±•ˆ¤€„ôôÙ…±¥‘ÉÉ½É½‘”ñğ€¡ÍÑ…ÑÕÌ€ôôô€‰ÍÕ••‘•ˆ€˜˜•ÉÉ½É½‘”€„ôô¹Õ±°¤¤ì(€€€€€Ñ¡É½Ü¹•ÜÉÉ½È ‰¥¹Ù…±¥¹½Ñ¥™¥…Ñ¥½¸ÁÉ½•ÍÍ¥¹œ½ÕÑ½µ”ˆ¤ì(€€€ô(€€€½¹ÍĞ½Õ¹ÑÌ€ôm±…¥µ•°ÁÉ½•ÍÍ•°É•ÑÉ¥•°ÅÕ…É…¹Ñ¥¹•‘t¹µ…À¡9Õµ‰•È¤ì(€€€¥˜€¡½Õ¹ÑÌ¹Í½µ” ¡Ù…±Õ”¤€ôø€…9Õµ‰•È¹¥Í%¹Ñ••È¡Ù…±Õ”¤ñğÙ…±Õ”€ğ€ÀñğÙ…±Õ”€ø€ÄÀÀ¤¤ì(€€€€€Ñ¡É½Ü¹•ÜÉÉ½È ‰¥¹Ù…±¥¹½Ñ¥™¥…Ñ¥½¸ÁÉ½•ÍÍ¥¹œ½Õ¹ÑÌˆ¤ì(€€€ô(€€€…İ…¥ĞÑ¡¥Ì¹Á½½°¹•á•ÕÑ” (€€€€€%9MIP%9Q<¹½Ñ¥™¥…Ñ¥½¹}ÁÉ½•ÍÍ¥¹}ÍÑ…Ñ” (€€€€€€€€½¹ÍÕµ•É}¥°±…ÍÑ}ÍÑ…ÉÑ•‘}…Ğ°±…ÍÑ}™¥¹¥Í¡•‘}…Ğ°±…ÍÑ}ÍÑ…ÑÕÌ°±…ÍÑ}•ÉÉ½É}½‘”°(€€€€€€€€±…ÍÑ}±…¥µ•°±…ÍÑ}ÁÉ½•ÍÍ•°±…ÍÑ}É•ÑÉ¥•°±…ÍÑ}ÅÕ…É…¹Ñ¥¹•°Ù•ÉÍ¥½¸(€€€€€€€¤Y1UL€ ¥¹Ñ•É¹…°µµ…Ñ•É¥…±¥é•ÈµØÄœ°€ü°€ü°€ü°€ü°€ü°€ü°€ü°€ü°€Ä¤(€€€€€€=8UA1%Q-dUAQ(€€€€€€€€±…ÍÑ}ÍÑ…ÉÑ•‘}…Ğ€ôY1UL¡±…ÍÑ}ÍÑ…ÉÑ•‘}…Ğ¤°±…ÍÑ}™¥¹¥Í¡•‘}…Ğ€ôY1UL¡±…ÍÑ}™¥¹¥Í¡•‘}…Ğ¤°(€€€€€€€€±…ÍÑ}ÍÑ…ÑÕÌ€ôY1UL¡±…ÍÑ}ÍÑ…ÑÕÌ¤°±…ÍÑ}•ÉÉ½É}½‘”€ôY1UL¡±…ÍÑ}•ÉÉ½É}½‘”¤°(€€€€€€€€±…ÍÑ}±…¥µ•€ôY1UL¡±…ÍÑ}±…¥µ•¤°±…ÍÑ}ÁÉ½•ÍÍ•€ôY1UL¡±…ÍÑ}ÁÉ½•ÍÍ•¤°(€€€€€€€€±…ÍÑ}É•ÑÉ¥•€ôY1UL¡±…ÍÑ}É•ÑÉ¥•¤°±…ÍÑ}ÅÕ…É…¹Ñ¥¹•€ôY1UL¡±…ÍÑ}ÅÕ…É…¹Ñ¥¹•¤°(€€€€€€€€Ù•ÉÍ¥½¸€ôÙ•ÉÍ¥½¸€¬€Å€°(€€€€€m…Í5…É¥……Ñ”¡ÍÑ…ÉÑ•‘Ğ¤°…Í5…É¥……Ñ”¡™¥¹¥Í¡•‘Ğ¤°ÍÑ…ÑÕÌ°•ÉÉ½É½‘”°(€€€€€€½Õ¹ÑÍlÁt°½Õ¹ÑÍlÅt°½Õ¹ÑÍlÉt°½Õ¹ÑÍlÍut°(€€€€¤ì(€ô((€…Íå¹Œ•Ñ9½Ñ¥™¥…Ñ¥½¹=Á•É…Ñ¥½¹ÍM¹…ÁÍ¡½Ğ¡±¥µ¥Ğ€ô€ÔÀ¤ì(€€€½¹ÍĞÍ…™•1¥µ¥Ğ€ô9Õµ‰•È¡±¥µ¥Ğ¤ì(€€€¥˜€ …9Õµ‰•È¹¥Í%¹Ñ••È¡Í…™•1¥µ¥Ğ¤ñğÍ…™•1¥µ¥Ğ€ğ€ÄñğÍ…™•1¥µ¥Ğ€ø€ÄÀÀ¤ì(€€€€€Ñ¡É½Ü¹•ÜÉÉ½È ‰¥¹Ù…±¥¹½Ñ¥™¥…Ñ¥½¸½Á•É…Ñ¥½¹Ì±¥µ¥Ğˆ¤ì(€€€ô(€€€½¹ÍĞm•Ù•¹ÑI½İÌ°¹½Ñ¥™¥…Ñ¥½¹I½İÌ°‘•±¥Ù•ÉåI½İÌ°ÍÕÁÁÉ•ÍÍ¥½¹I½İÌ°É••¹ÑI½İÌ°ÁÉ½•ÍÍ½ÉI½İÍt€ô…İ…¥ĞAÉ½µ¥Í”¹…±°¡l(€€€€€Ñ¡¥Ì¹Á½½°¹•á•ÕÑ” (€€€€€€€M1P=U9P ¨¤LÑ½Ñ…°°(€€€€€€€€€€=1M¡MU4¡ÍÑ…ÑÕÌ€ô€Á•¹‘¥¹œœ¤°€À¤LÁ•¹‘¥¹œ°(€€€€€€€€€€=1M¡MU4¡ÍÑ…ÑÕÌ€ô€ÁÉ½•ÍÍ¥¹œœ¤°€À¤LÁÉ½•ÍÍ¥¹œ°(€€€€€€€€€€=1M¡MU4¡ÍÑ…ÑÕÌ€ô€É•ÑÉäœ¤°€À¤LÉ•ÑÉå¥¹œ°(€€€€€€€€€€=1M¡MU4¡ÍÑ…ÑÕÌ€ô€ÁÉ½•ÍÍ•œ¤°€À¤LÁÉ½•ÍÍ•°(€€€€€€€€€€=1M¡MU4¡ÍÑ…ÑÕÌ€ô€ÅÕ…É…¹Ñ¥¹•œ¤°€À¤LÅÕ…É…¹Ñ¥¹•°(€€€€€€€€€€5%8¡M]!8ÍÑ…ÑÕÌ%8€ Á•¹‘¥¹œœ°€É•ÑÉäœ¤Q!8…Ù…¥±…‰±•}…Ğ9¤L½±‘•ÍÑ}…Ù…¥±…‰±•}…Ğ°(€€€€€€€€€€5`¡É••¥Ù•‘}…Ğ¤L±…ÍÑ}É••¥Ù•‘}…Ğ°(€€€€€€€€€€5`¡ÁÉ½•ÍÍ•‘}…Ğ¤L±…ÍÑ}ÁÉ½•ÍÍ•‘}…Ğ(€€€€€€€€I=4¹½Ñ¥™¥…Ñ¥½¹}•Ù•¹ÑÍ€°(€€€€€€¤°(€€€€€Ñ¡¥Ì¹Á½½°¹•á•ÕÑ” (€€€€€€€M1P=U9P ¨¤LÑ½Ñ…°°(€€€€€€€€€€=1M¡MU4¡É•…‘}…Ğ%L9U109…É¡¥Ù•‘}…Ğ%L9U10¤°€À¤LÕ¹É•…°(€€€€€€€€€€=1M¡MU4¡…É¡¥Ù•‘}…Ğ%L9=P9U10¤°€À¤L…É¡¥Ù•(€€€€€€€€I=4¹½Ñ¥™¥…Ñ¥½¹Í€°(€€€€€€¤°(€€€€€Ñ¡¥Ì¹Á½½°¹•á•ÕÑ” (€€€€€€€M1P=U9P ¨¤LÑ½Ñ…°°(€€€€€€€€€€=1M¡MU4¡ÍÑ…ÑÕÌ€ô€‰±½­•œ¤°€À¤L‰±½­•°(€€€€€€€€€€=1M¡MU4¡ÍÑ…ÑÕÌ€ğø€‰±½­•œ¤°€À¤L¹½¹}‰±½­•°(€€€€€€€€€€=1M¡MU4¡ÍÑ…ÑÕÌ€ô€Á•¹‘¥¹œœ¤°€À¤LÁ•¹‘¥¹œ°(€€€€€€€€€€=1M¡MU4¡ÍÑ…ÑÕÌ€ô€ÁÉ½•ÍÍ¥¹œœ¤°€À¤LÁÉ½•ÍÍ¥¹œ°(€€€€€€€€€€=1M¡MU4¡ÍÑ…ÑÕÌ€ô€É•ÑÉäœ¤°€À¤LÉ•ÑÉå¥¹œ°(€€€€€€€€€€=1M¡MU4¡ÍÑ…ÑÕÌ€ô€‘•±¥Ù•É•œ¤°€À¤L‘•±¥Ù•É•°(€€€€€€€€€€=1M¡MU4¡ÍÑ…ÑÕÌ€ô€ÅÕ…É…¹Ñ¥¹•œ¤°€À¤LÅÕ…É…¹Ñ¥¹•(€€€€€€€€I=4¹½Ñ¥™¥…Ñ¥½¹}•áÑ•É¹…±}‘•±¥Ù•É¥•Í€°(€€€€€€¤°(€€€€€Ñ¡¥Ì¹Á½½°¹•á•ÕÑ” (€€€€€€€M1P(€€€€€€€€€€=1M¡MU4¡MP¡)M=9}U9EU=Q¡)M=9}aQIP¡ÍÕÁÁÉ•ÍÍ•‘}©Í½¸°€œ¹½İ¹}…Ñ¥½¸œ¤¤LU9M%9¤¤°€À¤L½İ¹}…Ñ¥½¸°(€€€€€€€€€€=1M¡MU4¡MP¡)M=9}U9EU=Q¡)M=9}aQIP¡ÍÕÁÁÉ•ÍÍ•‘}©Í½¸°€œ¹ÁÉ•™•É•¹•Ìœ¤¤LU9M%9¤¤°€À¤LÁÉ•™•É•¹•Ì°(€€€€€€€€€€=1M¡MU4¡MP¡)M=9}U9EU=Q¡)M=9}aQIP¡ÍÕÁÁÉ•ÍÍ•‘}©Í½¸°€œ¹Õ¹±¥¹­•‘}¥‘•¹Ñ¥Ñäœ¤¤LU9M%9¤¤°€À¤LÕ¹±¥¹­•‘}¥‘•¹Ñ¥Ñä(€€€€€€€€I=4¹½Ñ¥™¥…Ñ¥½¹}É•Í½±ÕÑ¥½¹Í€°(€€€€€€¤°(€€€€€Ñ¡¥Ì¹Á½½°¹•á•ÕÑ” (€€€€€€€M1PÍ½ÕÉ•}…ÁÁ±¥…Ñ¥½¹}¥°Í½ÕÉ•}•Ù•¹Ñ}¥°Á½±¥å}Ù•ÉÍ¥½¸°ÍÕÁÁÉ•ÍÍ•‘}©Í½¸°(€€€€€€€€€€¥¹Ñ•É¹…±}¹½Ñ¥™¥…Ñ¥½¹}½Õ¹Ğ°‰±½­•‘}•áÑ•É¹…±}‘•±¥Ù•Éå}½Õ¹Ğ°É•Í½±Ù•‘}…Ğ(€€€€€€€€I=4¹½Ñ¥™¥…Ñ¥½¹}É•Í½±ÕÑ¥½¹Ì(€€€€€€€€=IH	dÉ•Í½±Ù•‘}…ĞM°Í½ÕÉ•}…ÁÁ±¥…Ñ¥½¹}¥°Í½ÕÉ•}•Ù•¹Ñ}¥(€€€€€€€€1%5%P€‘íÍ…™•1¥µ¥Ñõ€°(€€€€€€¤°(€€€€€Ñ¡¥Ì¹Á½½°¹•á•ÕÑ” (€€€€€€€M1P±…ÍÑ}ÍÑ…ÉÑ•‘}…Ğ°±…ÍÑ}™¥¹¥Í¡•‘}…Ğ°±…ÍÑ}ÍÑ…ÑÕÌ°±…ÍÑ}•ÉÉ½É}½‘”°(€€€€€€€€€€±…ÍÑ}±…¥µ•°±…ÍÑ}ÁÉ½•ÍÍ•°±…ÍÑ}É•ÑÉ¥•°±…ÍÑ}ÅÕ…É…¹Ñ¥¹•°Ù•ÉÍ¥½¸(€€€€€€€€I=4¹½Ñ¥™¥…Ñ¥½¹}ÁÉ½•ÍÍ¥¹}ÍÑ…Ñ”(€€€€€€€€]!I½¹ÍÕµ•É}¥€ô€¥¹Ñ•É¹…°µµ…Ñ•É¥…±¥é•ÈµØÄ€°(€€€€€€¤°(€€€t¤ì(€€€½¹ÍĞ•Ù•¹ÑÌ€ô•Ù•¹ÑI½İÍlÁulÁt€üüíôì(€€€½¹ÍĞ¹½Ñ¥™¥…Ñ¥½¹Ì€ô¹½Ñ¥™¥…Ñ¥½¹I½İÍlÁulÁt€üüíôì(€€€½¹ÍĞ‘•±¥Ù•É¥•Ì€ô‘•±¥Ù•ÉåI½İÍlÁulÁt€üüíôì(€€€½¹ÍĞÍÕÁÁÉ•ÍÍ¥½¹Ì€ôÍÕÁÁÉ•ÍÍ¥½¹I½İÍlÁulÁt€üüíôì(€€€½¹ÍĞÁÉ½•ÍÍ½È€ôÁÉ½•ÍÍ½ÉI½İÍlÁulÁt€üü¹Õ±°ì(€€€½¹ÍĞ¹Õµ‰•È€ô€¡Ù…±Õ”¤€ôø9Õµ‰•È¡Ù…±Õ”€üü€À¤ì(€€€É•ÑÕÉ¸ì(€€€€€•Ù•¹ÑÌèì(€€€€€€€Ñ½Ñ…°è¹Õµ‰•È¡•Ù•¹ÑÌ¹Ñ½Ñ…°¤°Á•¹‘¥¹œè¹Õµ‰•È¡•Ù•¹ÑÌ¹Á•¹‘¥¹œ¤°ÁÉ½•ÍÍ¥¹œè¹Õµ‰•È¡•Ù•¹ÑÌ¹ÁÉ½•ÍÍ¥¹œ¤°(€€€€€€€É•ÑÉå¥¹œè¹Õµ‰•È¡•Ù•¹ÑÌ¹É•ÑÉå¥¹œ¤°ÁÉ½•ÍÍ•è¹Õµ‰•È¡•Ù•¹ÑÌ¹ÁÉ½•ÍÍ•¤°ÅÕ…É…¹Ñ¥¹•è¹Õµ‰•È¡•Ù•¹ÑÌ¹ÅÕ…É…¹Ñ¥¹•¤°(€€€€€€€½±‘•ÍÑÙ…¥±…‰±•Ğè…Í%Í¼¡•Ù•¹ÑÌ¹½±‘•ÍÑ}…Ù…¥±…‰±•}…Ğ¤°±…ÍÑI••¥Ù•‘Ğè…Í%Í¼¡•Ù•¹ÑÌ¹±…ÍÑ}É••¥Ù•‘}…Ğ¤°(€€€€€€€±…ÍÑAÉ½•ÍÍ•‘Ğè…Í%Í¼¡•Ù•¹ÑÌ¹±…ÍÑ}ÁÉ½•ÍÍ•‘}…Ğ¤°(€€€€€ô°(€€€€€¹½Ñ¥™¥…Ñ¥½¹Ìèì(€€€€€€€Ñ½Ñ…°è¹Õµ‰•È¡¹½Ñ¥™¥…Ñ¥½¹Ì¹Ñ½Ñ…°¤°Õ¹É•…è¹Õµ‰•È¡¹½Ñ¥™¥…Ñ¥½¹Ì¹Õ¹É•…¤°…É¡¥Ù•è¹Õµ‰•È¡¹½Ñ¥™¥…Ñ¥½¹Ì¹…É¡¥Ù•¤°(€€€€€ô°(€€€€€•áÑ•É¹…±•±¥Ù•É¥•Ìèì(€€€€€€€Ñ½Ñ…°è¹Õµ‰•È¡‘•±¥Ù•É¥•Ì¹Ñ½Ñ…°¤°‰±½­•è¹Õµ‰•È¡‘•±¥Ù•É¥•Ì¹‰±½­•¤°¹½¹	±½­•è¹Õµ‰•È¡‘•±¥Ù•É¥•Ì¹¹½¹}‰±½­•¤°(€€€€€€€Á•¹‘¥¹œè¹Õµ‰•È¡‘•±¥Ù•É¥•Ì¹Á•¹‘¥¹œ¤°ÁÉ½•ÍÍ¥¹œè¹Õµ‰•È¡‘•±¥Ù•É¥•Ì¹ÁÉ½•ÍÍ¥¹œ¤°É•ÑÉå¥¹œè¹Õµ‰•È¡‘•±¥Ù•É¥•Ì¹É•ÑÉå¥¹œ¤°(€€€€€€€‘•±¥Ù•É•è¹Õµ‰•È¡‘•±¥Ù•É¥•Ì¹‘•±¥Ù•É•¤°ÅÕ…É…¹Ñ¥¹•è¹Õµ‰•È¡‘•±¥Ù•É¥•Ì¹ÅÕ…É…¹Ñ¥¹•¤°(€€€€€ô°(€€€€€ÍÕÁÁÉ•ÍÍ¥½¹Ìèì(€€€€€€€½İ¹Ñ¥½¸è¹Õµ‰•È¡ÍÕÁÁÉ•ÍÍ¥½¹Ì¹½İ¹}…Ñ¥½¸¤°ÁÉ•™•É•¹•Ìè¹Õµ‰•È¡ÍÕÁÁÉ•ÍÍ¥½¹Ì¹ÁÉ•™•É•¹•Ì¤°(€€€€€€€Õ¹±¥¹­•‘%‘•¹Ñ¥Ñäè¹Õµ‰•È¡ÍÕÁÁÉ•ÍÍ¥½¹Ì¹Õ¹±¥¹­•‘}¥‘•¹Ñ¥Ñä¤°(€€€€€ô°(€€€€€ÁÉ½•ÍÍ½ÈèÁÉ½•ÍÍ½È€üì(€€€€€€€ÍÑ…ÑÕÌèÁÉ½•ÍÍ½È¹±…ÍÑ}ÍÑ…ÑÕÌ°±…ÍÑMÑ…ÉÑ•‘Ğè…Í%Í¼¡ÁÉ½•ÍÍ½È¹±…ÍÑ}ÍÑ…ÉÑ•‘}…Ğ¤°(€€€€€€€±…ÍÑ¥¹¥Í¡•‘Ğè…Í%Í¼¡ÁÉ½•ÍÍ½È¹±…ÍÑ}™¥¹¥Í¡•‘}…Ğ¤°•ÉÉ½É½‘”èÁÉ½•ÍÍ½È¹±…ÍÑ}•ÉÉ½É}½‘”°(€€€€€€€±…¥µ•è¹Õµ‰•È¡ÁÉ½•ÍÍ½È¹±…ÍÑ}±…¥µ•¤°ÁÉ½•ÍÍ•è¹Õµ‰•È¡ÁÉ½•ÍÍ½È¹±…ÍÑ}ÁÉ½•ÍÍ•¤°(€€€€€€€É•ÑÉ¥•è¹Õµ‰•È¡ÁÉ½•ÍÍ½È¹±…ÍÑ}É•ÑÉ¥•¤°ÅÕ…É…¹Ñ¥¹•è¹Õµ‰•È¡ÁÉ½•ÍÍ½È¹±…ÍÑ}ÅÕ…É…¹Ñ¥¹•¤°(€€€€€€€Ù•ÉÍ¥½¸è¹Õµ‰•È¡ÁÉ½•ÍÍ½È¹Ù•ÉÍ¥½¸¤°(€€€€€ô€èìÍÑ…ÑÕÌè€‰¹•Ù•É}ÉÕ¸ˆ°±…ÍÑMÑ…ÉÑ•‘Ğè¹Õ±°°±…ÍÑ¥¹¥Í¡•‘Ğè¹Õ±°°•ÉÉ½É½‘”è¹Õ±°°(€€€€€€€±…¥µ•è€À°ÁÉ½•ÍÍ•è€À°É•ÑÉ¥•è€À°ÅÕ…É…¹Ñ¥¹•è€À°Ù•ÉÍ¥½¸è€Àô°(€€€€€É••¹ÑI•Í½±ÕÑ¥½¹ÌèÉ••¹ÑI½İÍlÁt¹µ…À ¡É½Ü¤€ôø€¡ì(€€€€€€€Í½ÕÉ•ÁÁ±¥…Ñ¥½¹%èÉ½Ü¹Í½ÕÉ•}…ÁÁ±¥…Ñ¥½¹}¥°•Ù•¹Ñ%èÉ½Ü¹Í½ÕÉ•}•Ù•¹Ñ}¥°(€€€€€€€Á½±¥åY•ÉÍ¥½¸èÉ½Ü¹Á½±¥å}Ù•ÉÍ¥½¸°ÍÕÁÁÉ•ÍÍ•èÁ…ÉÍ•)Í½¸¡É½Ü¹ÍÕÁÁÉ•ÍÍ•‘}©Í½¸¤°(€€€€€€€¥¹Ñ•É¹…±9½Ñ¥™¥…Ñ¥½¹½Õ¹Ğè¹Õµ‰•È¡É½Ü¹¥¹Ñ•É¹…±}¹½Ñ¥™¥…Ñ¥½¹}½Õ¹Ğ¤°(€€€€€€€‰±½­•‘áÑ•É¹…±•±¥Ù•Éå½Õ¹Ğè¹Õµ‰•È¡É½Ü¹‰±½­•‘}•áÑ•É¹…±}‘•±¥Ù•Éå}½Õ¹Ğ¤°(€€€€€€€É•Í½±Ù•‘Ğè…Í%Í¼¡É½Ü¹É•Í½±Ù•‘}…Ğ¤°(€€€€€ô¤¤°(€€€ôì(€ô((€…Íå¹Œµ…É­9½Ñ¥™¥…Ñ¥½¹I•…¡ì¥‘•¹Ñ¥Ñå%°¹½Ñ¥™¥…Ñ¥½¹%°É•…‘Ğô¤ì(€€€½¹ÍĞmÉ•ÍÕ±Ñt€ô…İ…¥ĞÑ¡¥Ì¹Á½½°¹•á•ÕÑ” (€€€€€UAQ¹½Ñ¥™¥…Ñ¥½¹ÌMPÉ•…‘}…Ğ€ô€ü(€€€€€€]!I¹½Ñ¥™¥…Ñ¥½¹}¥€ô€ü9É•¥Á¥•¹Ñ}¥‘•¹Ñ¥Ñå}¥€ô€ü9É•…‘}…Ğ%L9U109…É¡¥Ù•‘}…Ğ%L9U10(€€€€€€€€9a%MQL€¡M1P€ÄI=4¥‘•¹Ñ¥Ñ¥•Ì¤]!I¤¹¥‘•¹Ñ¥Ñå}¥€ô€ü9¤¹ÍÑ…ÑÕÌ€ô€…Ñ¥Ù”œ¥€°(€€€€€m…Í5…É¥……Ñ”¡É•…‘Ğ¤°¹½Ñ¥™¥…Ñ¥½¹%°¥‘•¹Ñ¥Ñå%°¥‘•¹Ñ¥Ñå%‘t°(€€€€¤ì(€€€É•ÑÕÉ¸ì¡…¹•èÉ•ÍÕ±Ğ¹…™™•Ñ•‘I½İÌ€ôôô€Äôì(€ô((€…Íå¹Œµ…É­±±9½Ñ¥™¥…Ñ¥½¹ÍI•…¡ì¥‘•¹Ñ¥Ñå%°É•…‘Ğô¤ì(€€€½¹ÍĞmÉ•ÍÕ±Ñt€ô…İ…¥ĞÑ¡¥Ì¹Á½½°¹•á•ÕÑ” (€€€€€UAQ¹½Ñ¥™¥…Ñ¥½¹ÌMPÉ•…‘}…Ğ€ô€ü(€€€€€€]!IÉ•¥Á¥•¹Ñ}¥‘•¹Ñ¥Ñå}¥€ô€ü9É•…‘}…Ğ%L9U109…É¡¥Ù•‘}…Ğ%L9U10(€€€€€€€€9a%MQL€¡M1P€ÄI=4¥‘•¹Ñ¥Ñ¥•Ì¤]!I¤¹¥‘•¹Ñ¥Ñå}¥€ô€ü9¤¹ÍÑ…ÑÕÌ€ô€…Ñ¥Ù”œ¥€°(€€€€€m…Í5…É¥……Ñ”¡É•…‘Ğ¤°¥‘•¹Ñ¥Ñå%°¥‘•¹Ñ¥Ñå%‘t°(€€€€¤ì(€€€É•ÑÕÉ¸ì¡…¹•è9Õµ‰•È¡É•ÍÕ±Ğ¹…™™•Ñ•‘I½İÌ¤ôì(€ô((€…Íå¹ŒÙ•É¥™åÕ‘¥Ñ¡…¥¸ ¤ì(€€€½¹ÍĞmÉ½İÍt€ô…İ…¥ĞÑ¡¥Ì¹Á½½°¹•á•ÕÑ” (€€€€€€‰M1P•Ù•¹Ñ}Á…å±½…‘}©Í½¸°ÁÉ•Ù¥½ÕÍ}¡…Í °•Ù•¹Ñ}¡…Í I=4…Õ‘¥Ñ}•Ù•¹ÑÌ=IH	dÍ•ÅÕ•¹”ˆ°(€€€€¤ì(€€€É•ÑÕÉ¸Ù•É¥™åÕ‘¥Ñ¡…¥¸¡É½İÌ¹µ…À ¡É½Ü¤€ôø€¡ì(€€€€€•Ù•¹ĞèÁ…ÉÍ•)Í½¸¡É½Ü¹•Ù•¹Ñ}Á…å±½…‘}©Í½¸¤°ÁÉ•Ù¥½ÕÍ!…Í èÉ½Ü¹ÁÉ•Ù¥½ÕÍ}¡…Í °•Ù•¹Ñ!…Í èÉ½Ü¹•Ù•¹Ñ}¡…Í °(€€€ô¤¤¤ì(€ô)ô(

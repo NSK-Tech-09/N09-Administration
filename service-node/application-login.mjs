@@ -64,7 +64,13 @@ export async function issueApplicationLoginCode({ repository, session, request, 
   return { code, record };
 }
 
-export async function exchangeApplicationLoginCode({ repository, principal, payload, now = Date.now() }) {
+export async function exchangeApplicationLoginCode({
+  repository,
+  principal,
+  payload,
+  sessionAuthority = null,
+  now = Date.now(),
+}) {
   if (!principal || principal.applicationId !== payload?.client_id || principal.audience !== principal.applicationId) {
     throw new Error("invalid_technical_client");
   }
@@ -82,10 +88,23 @@ export async function exchangeApplicationLoginCode({ repository, principal, payl
   if (!record) throw new Error("invalid_or_consumed_code");
   const identity = await repository.getIdentity(record.identityId);
   if (!identity || identity.status !== "active") throw new Error("identity_not_active");
+  const applicationSession = sessionAuthority
+    ? await sessionAuthority.issue({
+      identityId: identity.identityId,
+      applicationId: principal.applicationId,
+      authenticatedAt: new Date(now),
+    })
+    : null;
   return {
     identity_id: identity.identityId,
     display_name: identity.displayName,
     email: identity.email,
     application_id: principal.applicationId,
+    ...(applicationSession ? {
+      session_id: applicationSession.credential.sessionId,
+      session_secret: applicationSession.credential.secret,
+      session_idle_expires_at: applicationSession.idleExpiresAt,
+      session_absolute_expires_at: applicationSession.absoluteExpiresAt,
+    } : {}),
   };
 }

@@ -87,7 +87,7 @@ export function assertApplicationSessionAudit(record, auditEvent, expectedAction
   if (serialized.includes(record.sessionId) || serialized.includes(record.secretHash)) {
     throw new Error("audit must not contain application session identifiers or secret hashes");
   }
-  if (expectedAction === "application_session.revoked" &&
+  if (["application_session.revoked", "application_session.expired"].includes(expectedAction) &&
       auditEvent.actor_id !== record.revokedByIdentityId) {
     throw new Error("audit actor must match application session revoker");
   }
@@ -231,6 +231,21 @@ export function revokeApplicationSession(record, {
   });
 }
 
+export function expireApplicationSession(record, {
+  reasonCode,
+  now = new Date(),
+}) {
+  if (!["session_idle_expired", "session_absolute_expired"].includes(reasonCode)) {
+    throw new Error("invalid_session_expiration_reason");
+  }
+  return revokeApplicationSession(record, {
+    reason: reasonCode === "session_idle_expired"
+      ? "Expiration de la session après inactivité"
+      : "Expiration absolue de la session",
+    now,
+  });
+}
+
 export function createApplicationSessionAuditEvent({
   record,
   action,
@@ -239,11 +254,13 @@ export function createApplicationSessionAuditEvent({
   correlationId = randomUUID(),
   occurredAt = new Date(),
 }) {
-  if (!["application_session.created", "application_session.revoked"].includes(action)) {
+  if (!["application_session.created", "application_session.revoked", "application_session.expired"].includes(action)) {
     throw new Error("invalid_application_session_audit_action");
   }
   const revoked = action === "application_session.revoked";
-  if (revoked && (!record.revokedAt || !record.revocationReason)) {
+  const expired = action === "application_session.expired";
+  const closed = revoked || expired;
+  if (closed && (!record.revokedAt || !record.revocationReason)) {
     throw new Error("invalid_application_session_audit_state");
   }
   return createAuditEvent({
@@ -254,15 +271,15 @@ export function createApplicationSessionAuditEvent({
     actorId,
     subjectId: record.identityId,
     applicationId: record.applicationId,
-    cause: revoked ? "explicit_revocation" : "authenticated_session_opened",
-    previousValue: revoked ? { state: "active", version: record.version - 1 } : null,
+    cause: revoked ? "explicit_revocation" : expired ? "session_expiration" : "authenticated_session_opened",
+    previousValue: closed ? { state: "active", version: record.version - 1 } : null,
     newValue: {
-      state: revoked ? "revoked" : "active",
+      state: revoked ? "revoked" : expired ? "expired" : "active",
       version: record.version,
       idle_expires_at: record.idleExpiresAt,
       absolute_expires_at: record.absoluteExpiresAt,
     },
-    justification: revoked ? (justification || record.revocationReason) : justification,
+    justification: closed ? (justification || record.revocationReason) : justification,
     occurredAt,
   });
 }

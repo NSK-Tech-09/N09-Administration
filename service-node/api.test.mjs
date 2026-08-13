@@ -53,3 +53,36 @@ test("la frontière asynchrone conserve exactement la décision", async () => {
   assert.deepEqual(response.body, { allowed: true, reason_code: "access_granted" });
   assert.equal(response.correlationId, "correlation-1");
 });
+
+test("rend la preuve de session applicative opposable avant le calcul des droits", async () => {
+  const asynchronousRepository = {
+    getIdentity: async (id) => repository.getIdentity(id),
+    getApplication: async (id) => repository.getApplication(id),
+    listAssignments: async (...args) => repository.listAssignments(...args),
+  };
+  let credential;
+  const sessionAuthority = {
+    assess: async (request) => {
+      credential = request.credential;
+      return { allowed: false, reasonCode: "session_revoked" };
+    },
+  };
+  const response = await evaluateAccessRequestAsync({
+    repository: asynchronousRepository,
+    principal,
+    sessionAuthority,
+    payload: { ...payload, session_id: "session-1", session_secret: "secret-1" },
+  });
+  assert.deepEqual(credential, { sessionId: "session-1", secret: "secret-1" });
+  assert.deepEqual(response.body, { allowed: false, reason_code: "session_revoked" });
+  assert.equal(response.status, 200);
+});
+
+test("refuse une preuve de session partielle avant toute consultation", async () => {
+  const response = await evaluateAccessRequestAsync({
+    repository,
+    principal,
+    payload: { ...payload, session_id: "session-1" },
+  });
+  assert.equal(response.status, 400);
+});
