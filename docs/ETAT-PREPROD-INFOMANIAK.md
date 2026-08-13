@@ -401,9 +401,16 @@ authentification Infomaniak a créé une session Administration saine. L'écran
 tâches distincte. Cette dernière a été fermée à distance puis refusée par
 l'application cible dès la requête suivante, avant d'être recréée proprement.
 
+La recette a ensuite créé une seconde session Suivi des tâches réelle par le
+parcours SSO normal. « Fermer toutes les autres sessions (2) » a fermé les deux
+sessions Tâches en une opération, conservé la session Administration courante
+et provoqué le refus immédiat du cookie Tâches au contrôle suivant. Une nouvelle
+session Tâches saine a enfin été créée.
+
 L'état final contrôlé contient une session active par application. La chaîne
-d'audit est valide avec **11 créations**, **2 expirations** et **5 révocations**.
-La fermeture groupée reste prouvée par les tests automatisés ; sa recette avec
-plusieurs navigateurs indépendants devra être complétée avant la promotion en
-production. Aucune mutation n'a été effectuée en production ni dans N09 –
-Énergie.
+d'audit est valide avec **13 créations**, **2 expirations** et **7 révocations**,
+et la file locale de révocation Tâches contient **0** élément. La fermeture
+groupée réelle de plusieurs sessions est donc recettée. L'isolation vis-à-vis
+d'une autre identité reste couverte par les tests automatisés et attend une
+seconde identité NSK Tech 09 réelle pour sa recette humaine. Aucune mutation
+n'a été effectuée en production ni dans N09 – Énergie.
