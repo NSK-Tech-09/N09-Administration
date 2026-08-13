@@ -111,15 +111,23 @@ La page `/account/sessions` est déployée dans la release Administration
 - passage immédiat de la cible à l'état « Fermée », puis refus effectif par
   Suivi des tâches au prochain contrôle serveur ;
 - recréation d'une session Tâches saine et accès nominal aux données ;
-- chaîne d'audit valide après la mutation et file de révocation Tâches vide ;
+- création successive de deux sessions Tâches réelles par le parcours SSO
+  normal, toutes deux visibles comme actives depuis Administration ;
+- fermeture atomique des deux sessions par « Fermer toutes les autres sessions
+  (2) », sans fermer la session Administration courante ;
+- refus du cookie Tâches au contrôle serveur suivant, puis recréation d'une
+  session saine ;
+- chaîne d'audit valide avec **13 créations**, **2 expirations** et **7
+  révocations**, et file de révocation Tâches vide ;
 - état final composé d'une session active par application.
 
-La fermeture groupée atomique, les refus de cible étrangère ou altérée et les
-concurrences restent validés par la suite automatisée de la release immuable.
-Leur recette avec plusieurs navigateurs indépendants n'a pas été simulée avec
-des données artificielles : aucun second navigateur de contrôle n'était
-disponible pendant l'opération. Cette limite de preuve n'affecte pas la recette
-individuelle réelle, mais reste à compléter avant une promotion en production.
+La fermeture groupée atomique est ainsi recettée avec plusieurs sessions
+centrales réelles, sans manipulation de cookie ni donnée artificielle. Les
+refus de cible étrangère ou altérée et les concurrences restent validés par la
+suite automatisée de la release immuable. La vérification humaine de
+l'isolation entre deux identités distinctes nécessite encore une seconde
+identité NSK Tech 09 réelle ; aucune identité fictive n'a été introduite pour
+contourner cette limite de preuve.
 
 ## Références
 
