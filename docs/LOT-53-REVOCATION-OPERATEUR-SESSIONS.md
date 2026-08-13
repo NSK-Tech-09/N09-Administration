@@ -86,6 +86,62 @@ Le retour arrière applicatif restaure la release précédente. Le catalogue
 version 4 reste additif et peut demeurer publié ; l’affectation opérateur peut
 être révoquée par la procédure de gouvernance prévue, sans supprimer son histoire.
 
+## Exécution réelle en préproduction
+
+Le **13 août 2026**, la PR **#61** a été fusionnée dans `main` avec le commit
+canonique `0e01ac1a4756704f7ea2fd41031912e67491df10`. La release immuable
+`releases/0e01ac1` a été construite depuis l'archive complète de ce commit,
+dont l'empreinte SHA-256 est
+`bc7a51dfa2973d2cbb55b96fd30926968f8aa3cd9e24641b8e69cf836aec99be`.
+Les **183 fichiers** du manifeste ont été vérifiés avant le gel de la release.
+
+La sauvegarde préalable est conservée sous
+`/srv/customer/backups/preprod-admin/lot53-pre-operator-session-revocation-20260813T173642Z.sql.gz`.
+Elle pèse **28 412 octets**, passe le test gzip, contient la fin d'export du
+**13 août 2026 à 17:36:56 UTC** et porte l'empreinte SHA-256
+`0b56debebfe68f2f3304b5a8031fda46f9ba4313a732bceee67cc64c619b8892`.
+Le compte d'exécution a correctement refusé `SHOW CREATE TRIGGER` faute du
+privilège `TRIGGER` ; l'export a donc été produit avec `--skip-triggers`, sans
+élargir les droits. Une restauration complète associe cet export au schéma et
+aux déclencheurs versionnés dans la release.
+
+La release complète a réussi **223 tests Node.js** et **63 tests Python** sur
+Infomaniak. Les marqueurs de source, tests, sauvegarde, catalogue, dépendances
+et renouvellement de session ont été contrôlés avant le démarrage, puis le
+dossier a été figé en lecture seule. Une première reconstruction incrémentale
+a été refusée par le manifeste et supprimée avant activation. Le premier
+redémarrage de diagnostic a ensuite rencontré un port temporairement occupé ;
+le processus de diagnostic a été fermé et le démarrage géré par Infomaniak a
+confirmé `service_started`. Les contrôles local et public de `/health` ont
+répondu `200` avec `{"status":"ok"}`.
+
+Le catalogue Administration **version 4** a été publié avec l'empreinte
+`4598c3412bba808c149abf9bf83241c26037fdf61ce560320accd315c1c94f9a`.
+Avant tout octroi, `/admin/sessions` a affiché **Accès refusé** pour l'identité
+principale, prouvant l'absence de droit implicite. L'amorçage borné à la
+préproduction a ensuite créé l'affectation
+`session-revocation-administrator` de Fred TRAVERS, avec la justification du
+lot 53 et une chaîne d'audit valide.
+
+La console a recensé la session Administration courante et une session Tâches
+distincte. Elle n'a proposé aucune action sur la session opérateur courante. La
+session Tâches nouvellement créée a été révoquée avec une justification de
+recette ; la requête suivante sur N09 – Suivi des tâches a redirigé vers la page
+de connexion. Une nouvelle authentification SSO saine a ensuite restauré
+l'accès normal à Tâches.
+
+Le registre affiche désormais le catalogue v4, le rôle et la permission
+`administration:sessions:revoke`, ainsi que **sept affectations actives**. La
+lecture finale de l'audit montre `application_session.revoked` en succès, puis
+la création de la nouvelle session Tâches ; `verifyAuditChain()` renvoie
+`true`. La page d'exploitation des notifications reste opérationnelle, son
+dernier cycle interne est réussi et tous les canaux externes demeurent bloqués.
+
+Les releases `releases/16399df` et `releases/dbf951a`, ainsi que la sauvegarde,
+restent disponibles pour retour arrière. Les fichiers temporaires de transfert
+ont été supprimés. Aucune mutation n'a été effectuée en production ni dans
+N09 – Énergie.
+
 ## Validation automatisée
 
 Les tests dédiés prouvent :
