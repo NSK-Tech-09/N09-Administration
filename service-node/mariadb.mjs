@@ -684,6 +684,40 @@ export class MariaDbRepository {
     });
   }
 
+  async reactivateIdentity({ identity, expectedStatus, observedAt, identityAuditEvent }) {
+    if (identity.status !== "active" || expectedStatus !== "suspended" ||
+        identityAuditEvent?.action !== "identity.reactivated" ||
+        identityAuditEvent.subject_id !== identity.identityId ||
+        identityAuditEvent.previous_value?.status !== expectedStatus ||
+        identityAuditEvent.new_value?.status !== "active" ||
+        identityAuditEvent.new_value?.active_sessions !== 0 ||
+        identityAuditEvent.new_value?.restored_sessions !== 0) {
+      throw new Error("invalid identity reactivation bundle");
+    }
+    const decisionTime = new Date(observedAt);
+    if (!Number.isFinite(decisionTime.valueOf())) throw new Error("invalid identity reactivation time");
+    return this.#transaction(async (connection) => {
+      const [identities] = await connection.execute(
+        "SELECT status FROM identities WHERE identity_id = ? FOR UPDATE", [identity.identityId],
+      );
+      if (identities.length !== 1 || identities[0].status !== expectedStatus) throw new Error("stale identity status");
+      const [activeRows] = await connection.execute(
+        `SELECT session_id FROM application_sessions
+         WHERE identity_id = ? AND revoked_at IS NULL AND idle_expires_at > ? AND absolute_expires_at > ?
+         ORDER BY session_id FOR UPDATE`,
+        [identity.identityId, asMariaDate(decisionTime), asMariaDate(decisionTime)],
+      );
+      if (activeRows.length) throw new Error("suspended identity still has active sessions");
+      const [result] = await connection.execute(
+        "UPDATE identities SET status = 'active' WHERE identity_id = ? AND status = ?",
+        [identity.identityId, expectedStatus],
+      );
+      if (result.affectedRows !== 1) throw new Error("stale identity status");
+      await this.#appendAudit(connection, identityAuditEvent);
+      return structuredClone(identity);
+    });
+  }
+
   async listAllApplicationSessions() {
     const [rows] = await this.pool.execute(
       `SELECT * FROM application_sessions

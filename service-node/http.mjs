@@ -15,7 +15,7 @@ import {
   authorizeSessionRevocationAdministration, OperatorSessionError,
 } from "./operator-session-management.mjs";
 import {
-  authorizeIdentitySuspensionAdministration, IdentityStateError,
+  authorizeIdentityLifecycleAdministration, IdentityStateError,
 } from "./identity-state-management.mjs";
 import {
   exchangeApplicationLoginCode, issueApplicationLoginCode, validateAuthorizationRequest,
@@ -112,7 +112,8 @@ function validOperatorTarget(target) {
 
 function validIdentityStateTarget(target) {
   const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-  return target && uuid.test(String(target.targetIdentityId ?? "")) && target.expectedStatus === "active";
+  return target && uuid.test(String(target.targetIdentityId ?? "")) &&
+    ["active", "suspended"].includes(target.expectedStatus);
 }
 
 function redirect(response, location) {
@@ -266,12 +267,18 @@ function renderOperatorSessions(sessions, csrf, actionToken) {
 function renderIdentityStateAdministration(identities, csrf, actionToken) {
   const cards = identities.map((identity) => {
     const sessions = `${identity.activeSessionCount} session${identity.activeSessionCount > 1 ? "s" : ""} active${identity.activeSessionCount > 1 ? "s" : ""}`;
-    const action = identity.current
+    let action = identity.current
       ? '<p class="muted">Ta propre identité ne peut pas être suspendue depuis cette console.</p>'
-      : `<form class="grant" method="post" action="/admin/identities/suspend"><input type="hidden" name="csrf" value="${escapeHtml(csrf)}"><input type="hidden" name="target" value="${escapeHtml(actionToken(identity))}"><label>Justification de la suspension<input name="justification" minlength="20" maxlength="500" required placeholder="Pourquoi cette identité doit-elle être suspendue ?"></label><button class="secondary" type="submit">Suspendre l’identité et fermer ses sessions</button></form>`;
-    return `<article class="entry"><p><span class="pill">Identité active</span> · ${escapeHtml(sessions)}</p><h3>${escapeHtml(identity.displayName)}</h3><p>${escapeHtml(identity.email)}</p>${action}</article>`;
+      : identity.canSuspend
+        ? `<form class="grant" method="post" action="/admin/identities/suspend"><input type="hidden" name="csrf" value="${escapeHtml(csrf)}"><input type="hidden" name="target" value="${escapeHtml(actionToken(identity))}"><label>Justification de la suspension<input name="justification" minlength="20" maxlength="500" required placeholder="Pourquoi cette identité doit-elle être suspendue ?"></label><button class="secondary" type="submit">Suspendre l’identité et fermer ses sessions</button></form>`
+        : identity.canReactivate
+          ? `<form class="grant" method="post" action="/admin/identities/reactivate"><input type="hidden" name="csrf" value="${escapeHtml(csrf)}"><input type="hidden" name="target" value="${escapeHtml(actionToken(identity))}"><label>Justification de la réactivation<input name="justification" minlength="20" maxlength="500" required placeholder="Pourquoi cette identité peut-elle être réactivée ?"></label><button type="submit">Réactiver sans restaurer les anciennes sessions</button></form>`
+          : '<p class="muted">Aucune action autorisée pour cette identité.</p>';
+    const active = identity.status === "active";
+    const state = active ? "Identité active" : "Identité suspendue";
+    return `<article class="entry"><p><span class="pill${active ? "" : " inactive"}">${state}</span> · ${escapeHtml(sessions)}</p><h3>${escapeHtml(identity.displayName)}</h3><p>${escapeHtml(identity.email)}</p>${action}</article>`;
   }).join("");
-  return `<h1>Cycle de vie des identités</h1><p>Cette console suspend une identité active et ferme toutes ses sessions actives dans une seule opération auditée. Elle ne supprime ni la personne, ni ses affectations, ni son histoire.</p><div class="facts"><p><strong>Refus par défaut :</strong> seule la permission dédiée <code>administration:identities:suspend</code> ouvre cette action.</p><p><strong>Atomicité :</strong> si une session change pendant la décision, aucune suspension partielle n’est conservée.</p></div><div class="directory">${cards || '<div class="facts"><p>Aucune identité active enregistrée.</p></div>'}</div><nav><a class="button secondary" href="/">Retour à l’accueil</a><a class="button secondary" href="/admin/sessions">Sessions actives</a></nav>`;
+  return `<h1>Cycle de vie des identités</h1><p>Cette console suspend une identité active avec ses sessions ou réactive une identité suspendue sans restaurer aucune ancienne connexion. Elle ne supprime ni la personne, ni ses affectations, ni son histoire.</p><div class="facts"><p><strong>Refus par défaut :</strong> les permissions distinctes <code>administration:identities:suspend</code> et <code>administration:identities:reactivate</code> ouvrent uniquement leur action respective.</p><p><strong>Atomicité :</strong> si l’état ou une session change pendant la décision, aucune transition partielle n’est conservée.</p><p><strong>Non-résurrection :</strong> une réactivation rend seulement l’identité à nouveau admissible à une connexion future ; toutes les anciennes sessions restent expirées ou révoquées.</p></div><div class="directory">${cards || '<div class="facts"><p>Aucune identité active ou suspendue enregistrée.</p></div>'}</div><nav><a class="button secondary" href="/">Retour à l’accueil</a><a class="button secondary" href="/admin/sessions">Sessions actives</a></nav>`;
 }
 
 function renderNotificationOperations(snapshot) {
@@ -429,7 +436,7 @@ export function createHttpHandler({
           if (decision.allowed) administrationLinks.push('<a class="button" href="/admin/sessions">Gérer les sessions actives</a>');
         } catch { /* no administrative affordance on repository failure */ }
         try {
-          const decision = await authorizeIdentitySuspensionAdministration(repository, session.identityId);
+          const decision = await authorizeIdentityLifecycleAdministration(repository, session.identityId);
           if (decision.allowed) administrationLinks.push('<a class="button" href="/admin/identities">Gérer le cycle de vie des identités</a>');
         } catch { /* no administrative affordance on repository failure */ }
         if (typeof repository.countUnreadNotifications === "function") {
@@ -447,7 +454,8 @@ export function createHttpHandler({
     }
     const identityStateRoot = url.pathname === "/admin/identities";
     const identitySuspendRoute = url.pathname === "/admin/identities/suspend";
-    if (identityStateRoot || identitySuspendRoute) {
+    const identityReactivateRoute = url.pathname === "/admin/identities/reactivate";
+    if (identityStateRoot || identitySuspendRoute || identityReactivateRoute) {
       let session;
       try {
         if (!oidcConfig) throw new Error("oidc_not_configured");
@@ -463,13 +471,13 @@ export function createHttpHandler({
       }
       let access;
       try {
-        access = await authorizeIdentitySuspensionAdministration(repository, session.identityId);
+        access = await authorizeIdentityLifecycleAdministration(repository, session.identityId);
       } catch {
-        writeHtml(response, 503, "Identités indisponibles", '<h1>Administration momentanément indisponible</h1><p>Le pouvoir de suspension ne peut pas être vérifié. Aucune identité n’a été modifiée.</p><a class="button" href="/">Retour</a>');
+        writeHtml(response, 503, "Identités indisponibles", '<h1>Administration momentanément indisponible</h1><p>Les pouvoirs de cycle de vie ne peuvent pas être vérifiés. Aucune identité n’a été modifiée.</p><a class="button" href="/">Retour</a>');
         return;
       }
       if (!access.allowed) {
-        writeHtml(response, 403, "Accès refusé", '<h1>Accès refusé</h1><p>Cette identité ne possède pas la permission dédiée à la suspension des identités. Aucun droit implicite n’est accordé.</p><a class="button" href="/">Retour</a>');
+        writeHtml(response, 403, "Accès refusé", '<h1>Accès refusé</h1><p>Cette identité ne possède aucune permission dédiée au cycle de vie des identités. Aucun droit implicite n’est accordé.</p><a class="button" href="/">Retour</a>');
         return;
       }
       if (!identityStateManagement) {
@@ -478,7 +486,7 @@ export function createHttpHandler({
       }
       if (identityStateRoot && request.method === "GET") {
         try {
-          const identities = await identityStateManagement.listActive({ operatorIdentityId: session.identityId });
+          const identities = await identityStateManagement.listLifecycle({ operatorIdentityId: session.identityId });
           const actionToken = (target) => seal({
             operatorIdentityId: session.identityId,
             targetIdentityId: target.identityId,
@@ -491,7 +499,7 @@ export function createHttpHandler({
         }
         return;
       }
-      if (identitySuspendRoute && request.method === "POST") {
+      if ((identitySuspendRoute || identityReactivateRoute) && request.method === "POST") {
         try {
           const form = await readForm(request, maxBodyBytes);
           if (!safeEqual(form.get("csrf"), session.csrf)) throw new HttpInputError(403, "invalid_csrf");
@@ -505,7 +513,9 @@ export function createHttpHandler({
           if (justification.length < 20 || justification.length > 500) {
             throw new HttpInputError(400, "invalid_justification");
           }
-          await identityStateManagement.suspend({
+          const operation = identitySuspendRoute
+            ? identityStateManagement.suspend : identityStateManagement.reactivate;
+          await operation({
             operatorIdentityId: session.identityId,
             targetIdentityId: target.targetIdentityId,
             expectedStatus: target.expectedStatus,
@@ -514,7 +524,7 @@ export function createHttpHandler({
           redirect(response, "/admin/identities");
         } catch (error) {
           const status = error instanceof HttpInputError || error instanceof IdentityStateError ? error.status : 503;
-          writeHtml(response, status, "Identité non modifiée", '<h1>Identité non modifiée</h1><p>La demande est invalide, périmée, hors périmètre ou concurrente. Aucune suspension partielle n’a été conservée.</p><a class="button" href="/admin/identities">Retour</a>');
+          writeHtml(response, status, "Identité non modifiée", '<h1>Identité non modifiée</h1><p>La demande est invalide, périmée, hors périmètre ou concurrente. Aucune transition partielle n’a été conservée et aucune ancienne session n’a été restaurée.</p><a class="button" href="/admin/identities">Retour</a>');
         }
         return;
       }

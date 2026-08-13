@@ -8,6 +8,7 @@ import {
 import { ADMIN_APPLICATION_ID } from "./identity-link-admin.mjs";
 
 export const IDENTITY_SUSPENSION_PERMISSION = "administration:identities:suspend";
+export const IDENTITY_REACTIVATION_PERMISSION = "administration:identities:reactivate";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -24,6 +25,14 @@ function activeSession(record, now) {
 }
 
 export async function authorizeIdentitySuspensionAdministration(repository, identityId, now = new Date()) {
+  return authorizeIdentityStatePermission(repository, identityId, IDENTITY_SUSPENSION_PERMISSION, now);
+}
+
+export async function authorizeIdentityReactivationAdministration(repository, identityId, now = new Date()) {
+  return authorizeIdentityStatePermission(repository, identityId, IDENTITY_REACTIVATION_PERMISSION, now);
+}
+
+async function authorizeIdentityStatePermission(repository, identityId, requiredPermission, now) {
   if (!UUID.test(String(identityId ?? ""))) return { allowed: false, reasonCode: "authentication_required" };
   const [identity, application, assignments] = await Promise.all([
     repository.getIdentity(identityId),
@@ -35,29 +44,54 @@ export async function authorizeIdentitySuspensionAdministration(repository, iden
     identity,
     application,
     assignments,
-    requiredPermission: IDENTITY_SUSPENSION_PERMISSION,
+    requiredPermission,
     scopeType: null,
     scopeId: null,
     now,
   });
 }
 
+export async function authorizeIdentityLifecycleAdministration(repository, identityId, now = new Date()) {
+  const [suspension, reactivation] = await Promise.all([
+    authorizeIdentitySuspensionAdministration(repository, identityId, now),
+    authorizeIdentityReactivationAdministration(repository, identityId, now),
+  ]);
+  return Object.freeze({
+    allowed: suspension.allowed || reactivation.allowed,
+    canSuspend: suspension.allowed,
+    canReactivate: reactivation.allowed,
+    reasonCode: suspension.allowed || reactivation.allowed
+      ? "allowed"
+      : suspension.reasonCode === reactivation.reasonCode ? suspension.reasonCode : "permission_missing",
+  });
+}
+
 export function createIdentityStateManagement({ repository, now = () => new Date() } = {}) {
   if (!repository || typeof repository.listIdentities !== "function" ||
       typeof repository.listApplicationSessions !== "function" ||
-      typeof repository.suspendIdentityAndRevokeSessions !== "function") {
+      typeof repository.suspendIdentityAndRevokeSessions !== "function" ||
+      typeof repository.reactivateIdentity !== "function") {
     throw new Error("identity state repository is required");
   }
 
-  async function assertOperator(operatorIdentityId, observedAt) {
-    const access = await authorizeIdentitySuspensionAdministration(repository, operatorIdentityId, observedAt);
-    if (!access.allowed) throw new IdentityStateError("identity_suspension_not_allowed", 403);
+  async function assertOperator(operatorIdentityId, permission, observedAt) {
+    const authorize = permission === IDENTITY_SUSPENSION_PERMISSION
+      ? authorizeIdentitySuspensionAdministration
+      : authorizeIdentityReactivationAdministration;
+    const access = await authorize(repository, operatorIdentityId, observedAt);
+    if (!access.allowed) throw new IdentityStateError(
+      permission === IDENTITY_SUSPENSION_PERMISSION
+        ? "identity_suspension_not_allowed" : "identity_reactivation_not_allowed",
+      403,
+    );
   }
 
-  async function listActive({ operatorIdentityId }) {
+  async function listLifecycle({ operatorIdentityId }) {
     const observedAt = now();
-    await assertOperator(operatorIdentityId, observedAt);
-    const identities = await repository.listIdentities("active");
+    const access = await authorizeIdentityLifecycleAdministration(repository, operatorIdentityId, observedAt);
+    if (!access.allowed) throw new IdentityStateError("identity_lifecycle_not_allowed", 403);
+    const identities = (await repository.listIdentities())
+      .filter((identity) => ["active", "suspended"].includes(identity.status));
     return Promise.all(identities.map(async (identity) => {
       const sessions = await repository.listApplicationSessions(identity.identityId);
       return Object.freeze({
@@ -67,6 +101,8 @@ export function createIdentityStateManagement({ repository, now = () => new Date
         status: identity.status,
         activeSessionCount: sessions.filter((record) => activeSession(record, observedAt)).length,
         current: identity.identityId === operatorIdentityId,
+        canSuspend: access.canSuspend && identity.status === "active" && identity.identityId !== operatorIdentityId,
+        canReactivate: access.canReactivate && identity.status === "suspended",
       });
     }));
   }
@@ -89,7 +125,7 @@ export function createIdentityStateManagement({ repository, now = () => new Date
     }
 
     const observedAt = now();
-    await assertOperator(operatorIdentityId, observedAt);
+    await assertOperator(operatorIdentityId, IDENTITY_SUSPENSION_PERMISSION, observedAt);
     const target = await repository.getIdentity(targetIdentityId);
     if (!target) throw new IdentityStateError("target_identity_not_found", 404);
     if (target.status !== expectedStatus) throw new IdentityStateError("identity_state_conflict");
@@ -139,5 +175,47 @@ export function createIdentityStateManagement({ repository, now = () => new Date
     return Object.freeze({ correlationId, identity: suspended, revokedSessions: closures.length });
   }
 
-  return Object.freeze({ listActive, suspend });
+  async function reactivate({
+    operatorIdentityId,
+    targetIdentityId,
+    expectedStatus,
+    justification,
+    correlationId = randomUUID(),
+  }) {
+    if (!UUID.test(String(operatorIdentityId ?? "")) || !UUID.test(String(targetIdentityId ?? ""))) {
+      throw new IdentityStateError("invalid_identity", 400);
+    }
+    if (expectedStatus !== "suspended") throw new IdentityStateError("invalid_identity_target", 400);
+    const reason = typeof justification === "string" ? justification.trim() : "";
+    if (reason.length < 20 || reason.length > 500) throw new IdentityStateError("invalid_justification", 400);
+
+    const observedAt = now();
+    await assertOperator(operatorIdentityId, IDENTITY_REACTIVATION_PERMISSION, observedAt);
+    const target = await repository.getIdentity(targetIdentityId);
+    if (!target) throw new IdentityStateError("target_identity_not_found", 404);
+    if (target.status !== expectedStatus) throw new IdentityStateError("identity_state_conflict");
+    const reactivated = Object.freeze({ ...target, status: "active" });
+    const identityAuditEvent = createAuditEvent({
+      action: "identity.reactivated",
+      result: "success",
+      source: "identity-state-administration",
+      correlationId,
+      actorId: operatorIdentityId,
+      subjectId: targetIdentityId,
+      cause: "operator_reactivation",
+      previousValue: { status: target.status },
+      newValue: { status: reactivated.status, active_sessions: 0, restored_sessions: 0 },
+      justification: reason,
+      occurredAt: observedAt,
+    });
+    await repository.reactivateIdentity({
+      identity: reactivated,
+      expectedStatus,
+      observedAt,
+      identityAuditEvent,
+    });
+    return Object.freeze({ correlationId, identity: reactivated, restoredSessions: 0 });
+  }
+
+  return Object.freeze({ listLifecycle, suspend, reactivate });
 }

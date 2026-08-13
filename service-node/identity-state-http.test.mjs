@@ -4,7 +4,10 @@ import test from "node:test";
 import { createAuditEvent } from "./audit.mjs";
 import { createHttpHandler } from "./http.mjs";
 import { ADMIN_APPLICATION_ID } from "./identity-link-admin.mjs";
-import { IDENTITY_SUSPENSION_PERMISSION } from "./identity-state-management.mjs";
+import {
+  IDENTITY_REACTIVATION_PERMISSION,
+  IDENTITY_SUSPENSION_PERMISSION,
+} from "./identity-state-management.mjs";
 import { OIDC_SESSION_COOKIE, seal } from "./oidc.mjs";
 import { TransactionalMemoryRepository } from "./repository.mjs";
 
@@ -59,8 +62,8 @@ function sessionCookie() {
 }
 
 const identities = [
-  { identityId: operatorId, displayName: "Opérateur", email: "operator@example.test", status: "active", activeSessionCount: 1, current: true },
-  { identityId: targetId, displayName: "Personne cible", email: "target@example.test", status: "active", activeSessionCount: 2, current: false },
+  { identityId: operatorId, displayName: "Opérateur", email: "operator@example.test", status: "active", activeSessionCount: 1, current: true, canSuspend: false, canReactivate: false },
+  { identityId: targetId, displayName: "Personne cible", email: "target@example.test", status: "active", activeSessionCount: 2, current: false, canSuspend: true, canReactivate: false },
 ];
 
 async function withServer({ repository = repositoryWithPermission(), identityStateManagement }, operation) {
@@ -83,7 +86,7 @@ test("affiche la console seulement avec la permission dédiée", async () => {
 });
 
 test("présente les identités sans identifiant technique et protège l’auto-suspension", async () => {
-  await withServer({ identityStateManagement: { listActive: async () => identities } }, async (origin) => {
+  await withServer({ identityStateManagement: { listLifecycle: async () => identities } }, async (origin) => {
     const response = await fetch(`${origin}/admin/identities`, { headers: { cookie: sessionCookie() } });
     const html = await response.text();
     assert.equal(response.status, 200);
@@ -100,7 +103,7 @@ test("transmet uniquement la cible scellée avec CSRF et justification", async (
   let suspended;
   await withServer({
     identityStateManagement: {
-      listActive: async () => identities,
+      listLifecycle: async () => identities,
       suspend: async (input) => { suspended = input; return { revokedSessions: 2 }; },
     },
   }, async (origin) => {
@@ -127,7 +130,7 @@ test("transmet uniquement la cible scellée avec CSRF et justification", async (
 test("refuse permission absente, CSRF et jeton altéré sans mutation", async () => {
   await withServer({
     repository: repositoryWithPermission("administration:sessions:revoke"),
-    identityStateManagement: { listActive: async () => identities },
+    identityStateManagement: { listLifecycle: async () => identities },
   }, async (origin) => {
     assert.equal((await fetch(`${origin}/admin/identities`, { headers: { cookie: sessionCookie() } })).status, 403);
   });
@@ -149,4 +152,40 @@ test("refuse permission absente, CSRF et jeton altéré sans mutation", async ()
     }
   });
   assert.equal(calls, 0);
+});
+
+test("présente et transmet une réactivation scellée sans restaurer de session", async () => {
+  const repository = repositoryWithPermission(IDENTITY_REACTIVATION_PERMISSION);
+  const suspended = [
+    { ...identities[0], canSuspend: false },
+    { ...identities[1], status: "suspended", activeSessionCount: 0, canSuspend: false, canReactivate: true },
+  ];
+  let reactivated;
+  await withServer({
+    repository,
+    identityStateManagement: {
+      listLifecycle: async () => suspended,
+      reactivate: async (input) => { reactivated = input; return { restoredSessions: 0 }; },
+    },
+  }, async (origin) => {
+    const page = await fetch(`${origin}/admin/identities`, { headers: { cookie: sessionCookie() } });
+    const html = await page.text();
+    assert.equal(page.status, 200);
+    assert.match(html, /Réactiver sans restaurer les anciennes sessions/);
+    assert.match(html, /Non-résurrection/);
+    const target = html.match(/name="target" value="([^"]+)"/)?.[1];
+    const response = await fetch(`${origin}/admin/identities/reactivate`, {
+      method: "POST", redirect: "manual",
+      headers: { cookie: sessionCookie(), "content-type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        csrf, target, justification: "Retour validé après une nouvelle décision humaine explicite",
+      }),
+    });
+    assert.equal(response.status, 303);
+    assert.equal(response.headers.get("location"), "/admin/identities");
+  });
+  assert.deepEqual(reactivated, {
+    operatorIdentityId: operatorId, targetIdentityId: targetId, expectedStatus: "suspended",
+    justification: "Retour validé après une nouvelle décision humaine explicite",
+  });
 });
