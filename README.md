@@ -116,6 +116,12 @@ explicitement recettée. Une déconnexion opposable ne présente le succès qu'a
 révocation centrale confirmée ; voir
 `docs/LOT-48-OPPOSABILITE-SESSIONS-ADMINISTRATION.md`.
 
+Le lot 49 fixe le déploiement conjoint sur Infomaniak : état initial réel,
+commits canoniques, sauvegardes, migration additive de la file de révocation,
+releases immuables, paliers `issue` puis `enforce`, recettes et retours arrière
+sans suppression de preuve ; voir
+`docs/LOT-49-DEPLOIEMENT-SESSIONS-OPPOSABLES-PREPROD.md`.
+
 ## Prérequis et démarrage local
 
 - Python 3.11 ou supérieur ;
@@ -166,6 +172,7 @@ ne contient aucun secret réel. La production reste inchangée.
 - [`docs/LOT-46-ACTIVATION-OBSERVATION-SESSIONS-PREPROD.md`](docs/LOT-46-ACTIVATION-OBSERVATION-SESSIONS-PREPROD.md)
 - [`docs/LOT-47-OPPOSABILITE-SESSIONS-SUIVI-TACHES.md`](docs/LOT-47-OPPOSABILITE-SESSIONS-SUIVI-TACHES.md)
 - [`docs/LOT-48-OPPOSABILITE-SESSIONS-ADMINISTRATION.md`](docs/LOT-48-OPPOSABILITE-SESSIONS-ADMINISTRATION.md)
+- [`docs/LOT-49-DEPLOIEMENT-SESSIONS-OPPOSABLES-PREPROD.md`](docs/LOT-49-DEPLOIEMENT-SESSIONS-OPPOSABLES-PREPROD.md)
 - [`docs/ETAT-PREPROD-INFOMANIAK.md`](docs/ETAT-PREPROD-INFOMANIAK.md)
 - [`docs/CONFORMITE-NSES.md`](docs/CONFORMITE-NSES.md)
 - [`docs/CONTRAT-API-INTERNE.md`](docs/CONTRAT-API-INTERNE.md)
