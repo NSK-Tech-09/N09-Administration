@@ -205,8 +205,9 @@ test("agrège l’exploitation des notifications sans exposer leur contenu", asy
       calls.push(sql);
       if (sql.includes("FROM notification_events")) return [[{
         total: 5, pending: 1, processing: 1, retrying: 1, processed: 2, quarantined: 0,
-        oldest_available_at: "2026-08-12 10:00:00", last_received_at: "2026-08-12 10:01:00",
-        last_processed_at: "2026-08-12 10:02:00",
+        oldest_available_at: new Date("2026-08-12T08:00:00.000Z"),
+        last_received_at: new Date("2026-08-12T08:01:00.000Z"),
+        last_processed_at: new Date("2026-08-12T08:02:00.000Z"),
       }]];
       if (sql.includes("FROM notifications")) return [[{ total: 2, unread: 1, archived: 0 }]];
       if (sql.includes("FROM notification_external_deliveries")) return [[{
@@ -219,10 +220,11 @@ test("agrège l’exploitation des notifications sans exposer leur contenu", asy
         policy_version: "tasks-notification-policy-v1",
         suppressed_json: JSON.stringify({ own_action: 1, preferences: 0, unlinked_identity: 0 }),
         internal_notification_count: 1, blocked_external_delivery_count: 2,
-        resolved_at: "2026-08-12 10:02:00",
+        resolved_at: new Date("2026-08-12T08:02:00.000Z"),
       }]];
       if (sql.includes("FROM notification_processing_state")) return [[{
-        last_started_at: "2026-08-12 10:01:59", last_finished_at: "2026-08-12 10:02:00",
+        last_started_at: new Date("2026-08-12T08:01:59.000Z"),
+        last_finished_at: new Date("2026-08-12T08:02:00.000Z"),
         last_status: "succeeded", last_error_code: null, last_claimed: 2,
         last_processed: 2, last_retried: 0, last_quarantined: 0, version: 4,
       }]];
