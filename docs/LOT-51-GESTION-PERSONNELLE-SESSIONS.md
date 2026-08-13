@@ -1,3 +1,4 @@
+
 # Lot 51 — Gestion personnelle des sessions
 
 Statut : **publié, déployé et recetté en préproduction après le lot 50**
@@ -126,4 +127,3 @@ individuelle réelle, mais reste à compléter avant une promotion en production
 - `LOT-50-FERMETURE-ANCIENNES-SESSIONS-PREPROD.md`
 - `ARC-008`, `ARC-010`, `ARC-012`, `ARC-013`, `ARC-016`
 - `ERG-016`, `ERG-032`, `TST-001`
-
