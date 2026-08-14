@@ -165,6 +165,13 @@ La recette réelle sur une identité jetable confirme l’état `disabled`, la
 révocation de son affectation temporaire et la validité de l’audit ; voir
 `docs/LOT-56-DESACTIVATION-GOUVERNEE-IDENTITES.md`.
 
+Le lot 57 prépare le passage à la production sans l’ouvrir implicitement. Un
+contrat scellé vérifie les deux artefacts immuables Administration et Suivi des
+tâches, leurs tests, les sauvegardes restaurées, les releases de repli, les
+cibles isolées et la fenêtre de changement. Il refuse tout secret, toute marque
+de préproduction, tout canal externe ouvert et toute modification de N09 –
+Énergie ; voir `docs/LOT-57-CONTRAT-PROMOTION-PRODUCTION.md`.
+
 ## Prérequis et démarrage local
 
 - Python 3.11 ou supérieur ;
@@ -224,6 +231,7 @@ ne contient aucun secret réel. La production reste inchangée.
 - [`docs/LOT-54-SUSPENSION-ATOMIQUE-IDENTITES.md`](docs/LOT-54-SUSPENSION-ATOMIQUE-IDENTITES.md)
 - [`docs/LOT-55-REACTIVATION-GOUVERNEE-IDENTITES.md`](docs/LOT-55-REACTIVATION-GOUVERNEE-IDENTITES.md)
 - [`docs/LOT-56-DESACTIVATION-GOUVERNEE-IDENTITES.md`](docs/LOT-56-DESACTIVATION-GOUVERNEE-IDENTITES.md)
+- [`docs/LOT-57-CONTRAT-PROMOTION-PRODUCTION.md`](docs/LOT-57-CONTRAT-PROMOTION-PRODUCTION.md)
 - [`docs/ETAT-PREPROD-INFOMANIAK.md`](docs/ETAT-PREPROD-INFOMANIAK.md)
 - [`docs/CONFORMITE-NSES.md`](docs/CONFORMITE-NSES.md)
 - [`docs/CONTRAT-API-INTERNE.md`](docs/CONTRAT-API-INTERNE.md)
