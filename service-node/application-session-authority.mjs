@@ -32,14 +32,14 @@ export function createApplicationSessionAuthority({
       applicationId,
       idleTtlMs: config.idleTtlMs,
       absoluteTtlMs: config.absoluteTtlMs,
-      contextLabel: "Connexion web N09 – Suivi des tâches",
+      contextLabel: config.contextLabel || "Connexion web N09 – Suivi des tâches",
       authenticatedAt,
       now: now(),
     });
     await repository.saveApplicationSession(created.record, createApplicationSessionAuditEvent({
       record: created.record,
       action: "application_session.created",
-      justification: "Ouverture de la session applicative N09 – Suivi des tâches",
+      justification: config.issueJustification || "Ouverture de la session applicative N09 – Suivi des tâches",
       occurredAt: new Date(created.record.issuedAt),
     }));
     return Object.freeze({
@@ -122,5 +122,32 @@ export function createApplicationSessionAuthority({
     return Object.freeze({ revoked: true, reasonCode: "session_revoked" });
   }
 
-  return Object.freeze({ mode: config.mode, issue, assess, revokeForApplication, enforcesFor, issuesFor });
+  return Object.freeze({ mode: config.mode, issue, assess, revokeForApplication, appliesTo, enforcesFor, issuesFor });
+}
+
+export function createCompositeApplicationSessionAuthority(authorities) {
+  if (!Array.isArray(authorities) || authorities.length === 0 ||
+      authorities.some((authority) => !authority || typeof authority.appliesTo !== "function")) {
+    throw new Error("at least one application session authority is required");
+  }
+  const authorityFor = (applicationId) => authorities.find((authority) => authority.appliesTo(applicationId));
+  return Object.freeze({
+    async issue(input) {
+      return authorityFor(input.applicationId)?.issue(input) ?? null;
+    },
+    async assess(input) {
+      return authorityFor(input.applicationId)?.assess(input) ??
+        Object.freeze({ allowed: true, reasonCode: "session_not_enforced" });
+    },
+    async revokeForApplication(input) {
+      return authorityFor(input.applicationId)?.revokeForApplication(input) ??
+        Object.freeze({ revoked: false, reasonCode: "session_context_mismatch" });
+    },
+    issuesFor(applicationId) {
+      return authorityFor(applicationId)?.issuesFor(applicationId) ?? false;
+    },
+    enforcesFor(applicationId) {
+      return authorityFor(applicationId)?.enforcesFor(applicationId) ?? false;
+    },
+  });
 }

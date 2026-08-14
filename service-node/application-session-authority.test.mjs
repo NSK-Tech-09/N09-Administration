@@ -2,7 +2,9 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import test from "node:test";
 import { createAuditEvent } from "./audit.mjs";
-import { createApplicationSessionAuthority } from "./application-session-authority.mjs";
+import {
+  createApplicationSessionAuthority, createCompositeApplicationSessionAuthority,
+} from "./application-session-authority.mjs";
 import { TransactionalMemoryRepository } from "./repository.mjs";
 
 const identityId = "00000000-0000-4000-8000-000000000001";
@@ -111,4 +113,38 @@ test("ferme et audite une expiration une seule fois sans divulguer la preuve", a
   assert.equal(serialized.includes(issued.credential.sessionId), false);
   assert.equal(serialized.includes(record.secretHash), false);
   assert.equal(repository.verifyAuditChain(), true);
+});
+
+test("route deux applications sans partager leurs preuves de session", async () => {
+  const repository = seeded();
+  const energyApplicationId = "n09-energie";
+  repository.saveApplication({
+    applicationId: energyApplicationId,
+    displayName: "N09 – Énergie",
+    status: "active",
+    registrationPolicy: "closed",
+  }, audit("application.registered", { applicationId: energyApplicationId }));
+  const clock = { value: baseTime };
+  const tasks = authority(repository, "enforce", clock);
+  const energy = createApplicationSessionAuthority({
+    repository,
+    config: {
+      mode: "enforce", applicationId: energyApplicationId,
+      idleTtlMs: 60 * 60_000, absoluteTtlMs: 4 * 60 * 60_000, touchIntervalMs: 5 * 60_000,
+      contextLabel: "Connexion web N09 – Énergie",
+      issueJustification: "Ouverture de la session applicative N09 – Énergie",
+    },
+    now: () => new Date(clock.value),
+  });
+  const composite = createCompositeApplicationSessionAuthority([tasks, energy]);
+  const issued = await composite.issue({ identityId, applicationId: energyApplicationId });
+  assert.ok(issued.credential.sessionId);
+  assert.equal((await composite.assess({
+    identityId, applicationId: energyApplicationId, credential: issued.credential,
+  })).allowed, true);
+  assert.equal((await composite.assess({
+    identityId, applicationId, credential: issued.credential,
+  })).reasonCode, "session_context_mismatch");
+  assert.equal(composite.issuesFor(energyApplicationId), true);
+  assert.equal(composite.enforcesFor("application-inconnue"), false);
 });

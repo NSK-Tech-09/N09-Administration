@@ -1,11 +1,14 @@
 import { createServer } from "node:http";
 import { createAdministrationSessionAuthority } from "./administration-session-authority.mjs";
-import { createApplicationSessionAuthority } from "./application-session-authority.mjs";
+import {
+  createApplicationSessionAuthority, createCompositeApplicationSessionAuthority,
+} from "./application-session-authority.mjs";
 import { createHttpHandler } from "./http.mjs";
 import { createInternalClientAuthenticator, internalClientsFromEnvironment } from "./internal-client-auth.mjs";
 import { createMariaDbPool, MariaDbRepository } from "./mariadb.mjs";
 import {
-  administrationSessionConfigFromEnvironment, httpConfigFromEnvironment, mariaDbConfigFromEnvironment,
+  administrationSessionConfigFromEnvironment, energyApplicationSessionConfigFromEnvironment,
+  httpConfigFromEnvironment, mariaDbConfigFromEnvironment,
   tasksApplicationSessionConfigFromEnvironment,
 } from "./runtime-config.mjs";
 import { oidcConfigFromEnvironment } from "./oidc.mjs";
@@ -19,6 +22,7 @@ async function main() {
   const oidcConfig = oidcConfigFromEnvironment(process.env);
   const administrationSessionConfig = administrationSessionConfigFromEnvironment(process.env);
   const tasksSessionConfig = tasksApplicationSessionConfigFromEnvironment(process.env);
+  const energySessionConfig = energyApplicationSessionConfigFromEnvironment(process.env);
   const authenticate = createInternalClientAuthenticator({ clients: internalClientsFromEnvironment(process.env) });
   const pool = await createMariaDbPool(databaseConfig);
   await pool.query("SELECT 1");
@@ -28,7 +32,10 @@ async function main() {
     repository,
     config: administrationSessionConfig,
   });
-  const sessionAuthority = createApplicationSessionAuthority({ repository, config: tasksSessionConfig });
+  const sessionAuthority = createCompositeApplicationSessionAuthority([
+    createApplicationSessionAuthority({ repository, config: tasksSessionConfig }),
+    createApplicationSessionAuthority({ repository, config: energySessionConfig }),
+  ]);
   const personalSessionManagement = createPersonalSessionManagement({ repository });
   const operatorSessionManagement = createOperatorSessionManagement({ repository });
   const identityStateManagement = createIdentityStateManagement({ repository });
@@ -59,6 +66,7 @@ async function main() {
     event: "service_started", host: httpConfig.host, port: httpConfig.port,
     administration_session_mode: administrationSessionConfig.mode,
     tasks_session_mode: tasksSessionConfig.mode,
+    energy_session_mode: energySessionConfig.mode,
   }));
 }
 
