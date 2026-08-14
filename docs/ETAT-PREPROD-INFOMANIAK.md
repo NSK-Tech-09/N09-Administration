@@ -562,3 +562,43 @@ protégée en mode `600` et porte l’empreinte
 `4928140aa32c7d29f208bdb791c4640050e8927b004b98bd0ad2de4962395a19`.
 `releases/551db4b` et la sauvegarde du lot 55 restent disponibles pour retour
 arrière. La production et N09 – Énergie n’ont pas été modifiées.
+
+## Lot 56 — désactivation gouvernée des identités déployée
+
+Le **14 août 2026**, le commit canonique
+`c0c260155a359993b2cea9e23e2ae30dabab1aac` a été activé dans la release
+immuable `releases/c0c2601`. L’archive porte l’empreinte SHA-256
+`d139ea4a897b3a77a458dae6c85449733ff47acee765e83e3ef5c8b2396b987d` ;
+**194 fichiers source**, **250 tests Node.js** et **63 tests Python** ont été
+validés sur Infomaniak.
+
+La sauvegarde préalable
+`/srv/customer/backups/preprod-admin/lot56-pre-identity-disablement-20260814T051834Z.sql.gz`
+pèse **34 168 octets**, est valide, protégée en mode `600` et porte l’empreinte
+`2ea373936bfd21acd1c38a78451c939dd9505b0f74c910d1b3936c388c982974`.
+Le catalogue Administration v7, d’empreinte
+`b06c3253693cf3e72013dff121f458846dc3a32e059d5c36b2da490a0af2ed13`,
+et l’affectation `identity-disablement-administrator` ont chacun passé un second
+amorçage idempotent avec chaîne d’audit valide.
+
+Le premier redémarrage proposé par Infomaniak a conservé le processus du lot 55
+en mémoire. Le contrôle de l’interface a empêché toute recette sur cette version
+ancienne. Un arrêt et un démarrage explicites ont chargé `releases/c0c2601` ;
+`/health` répond `{"status":"ok"}` et `/admin/identities` expose le pouvoir
+`administration:identities:disable` tout en refusant l’auto-désactivation.
+
+La recette finale a créé l’identité jetable
+`70b77ba9-4dbb-49e3-b8ee-e677df2a89ed`, sans droit implicite, puis lui a accordé
+temporairement `tasks-reader` sur `site_lot56_disablement_recipe`. Sa
+désactivation depuis la console a produit l’état `disabled`, **0 session active**,
+**0 affectation active** et **1 affectation révoquée**. L’affectation révoquée
+conserve la justification de la décision et sa version 2 ; la chaîne d’audit
+reste valide.
+
+Les deux identités humaines existantes restent actives et inchangées. La preuve
+scellée
+`/srv/customer/backups/preprod-admin/lot56-disablement-recipe-proof-20260814T055123Z.txt`
+est protégée en mode `600` et porte l’empreinte
+`234139ceeda169ab0dcf4d914ceb7d02f8031c1c0648048bca88f1c3b5a2bfea`.
+`releases/5d64bc1` reste disponible pour retour arrière. La production et
+N09 – Énergie n’ont pas été modifiées.

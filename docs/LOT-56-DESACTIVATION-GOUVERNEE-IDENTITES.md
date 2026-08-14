@@ -1,6 +1,6 @@
 # Lot 56 — désactivation gouvernée des identités
 
-Statut : **implémenté et validé localement, non publié et non déployé**
+Statut : **publié, déployé et validé en préproduction**
 
 Date : **14 août 2026**
 
@@ -88,22 +88,54 @@ Le démonstrateur visuel n’est pas modifié par ce lot. Ses dépendances verro
 ont été restaurées localement, sa construction Vinext réussit et son test de
 rendu est vert.
 
-## Déploiement futur en préproduction
+## Déploiement et recette en préproduction
 
-Le déploiement devra rester une opération distincte et autorisée. Il comprendra
-au minimum :
+Le **14 août 2026**, le commit canonique
+`c0c260155a359993b2cea9e23e2ae30dabab1aac` a été activé dans la release
+immuable `releases/c0c2601`. L’archive complète porte l’empreinte SHA-256
+`d139ea4a897b3a77a458dae6c85449733ff47acee765e83e3ef5c8b2396b987d` ;
+**194 fichiers source**, **250 tests Node.js** et **63 tests Python** ont été
+validés sur Infomaniak avant l’activation.
 
-1. une sauvegarde MariaDB vérifiée et empreintée ;
-2. la construction d’une release immuable depuis le commit canonique ;
-3. l’exécution des suites Node.js et Python sur Infomaniak ;
-4. la publication idempotente du catalogue Administration v7 ;
-5. l’amorçage séparé du rôle de désactivation ;
-6. le redémarrage contrôlé du service ;
-7. une recette sur une identité de test non privilégiée ;
-8. la vérification directe de l’état, des sessions, des affectations et de la
-   chaîne d’audit ;
-9. la conservation de la release précédente et de la sauvegarde pour retour
-   arrière.
+La sauvegarde MariaDB préalable
+`/srv/customer/backups/preprod-admin/lot56-pre-identity-disablement-20260814T051834Z.sql.gz`
+pèse **34 168 octets**, est valide au format gzip, protégée en mode `600` et
+porte l’empreinte
+`2ea373936bfd21acd1c38a78451c939dd9505b0f74c910d1b3936c388c982974`.
+Les déclencheurs, non exportables par le compte d’exécution sans privilège
+`TRIGGER`, restent versionnés dans le schéma de la release et n’ont pas changé.
 
-La production et N09 – Énergie ne sont pas concernées par la préparation locale
-de ce lot.
+Le catalogue Administration v7 est publié avec l’empreinte
+`b06c3253693cf3e72013dff121f458846dc3a32e059d5c36b2da490a0af2ed13`.
+Sa seconde publication n’a créé aucun doublon. L’amorçage séparé du rôle
+`identity-disablement-administrator` a créé une seule affectation pour
+l’identité principale ; son second passage est également idempotent. Les deux
+opérations ont laissé la chaîne d’audit valide.
+
+L’enregistrement de la nouvelle commande Node Builder n’a pas remplacé le
+processus déjà en mémoire. Le contrôle fonctionnel a détecté que le lot 55
+restait servi malgré un premier redémarrage. Un arrêt puis un démarrage
+explicites ont chargé `releases/c0c2601`. La sonde `/health` répond alors
+`{"status":"ok"}` et la console expose effectivement la permission
+`administration:identities:disable` ainsi que l’interdiction de
+l’auto-désactivation.
+
+La recette irréversible a utilisé une identité explicitement jetable :
+
+- identité `70b77ba9-4dbb-49e3-b8ee-e677df2a89ed` ;
+- adresse dédiée `travers.fred.09+lot56-desactivation@gmail.com` ;
+- aucune session active avant la décision ;
+- une affectation temporaire `tasks-reader` sur le périmètre
+  `site_lot56_disablement_recipe` ;
+- état final `disabled` ;
+- **0 session active**, **0 affectation active** et **1 affectation révoquée** ;
+- chaîne d’audit valide après la transaction.
+
+Les identités **Fred TRAVERS** et **Fred TRAVERS — Recette** restent actives et
+inchangées. La preuve de recette
+`/srv/customer/backups/preprod-admin/lot56-disablement-recipe-proof-20260814T055123Z.txt`
+est protégée en mode `600` et porte l’empreinte
+`234139ceeda169ab0dcf4d914ceb7d02f8031c1c0648048bca88f1c3b5a2bfea`.
+
+`releases/5d64bc1` et la sauvegarde préalable restent disponibles pour retour
+arrière. La production et N09 – Énergie n’ont pas été modifiées.
