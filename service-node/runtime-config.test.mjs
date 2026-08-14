@@ -36,9 +36,12 @@ test("prépare l'émission puis l'opposabilité des sessions Tâches uniquement 
     N09_ENVIRONMENT: "preprod",
     N09_TASKS_SESSION_MODE: "enforce",
   }).mode, "enforce");
-  assert.throws(() => tasksApplicationSessionConfigFromEnvironment({
+  assert.equal(tasksApplicationSessionConfigFromEnvironment({
     N09_ENVIRONMENT: "production", N09_TASKS_SESSION_MODE: "enforce",
-  }), /restricted to preprod/);
+  }).mode, "enforce");
+  assert.throws(() => tasksApplicationSessionConfigFromEnvironment({
+    N09_ENVIRONMENT: "development", N09_TASKS_SESSION_MODE: "issue",
+  }), /require preprod or production/);
   assert.throws(() => tasksApplicationSessionConfigFromEnvironment({
     N09_TASKS_SESSION_MODE: "observe",
   }), /disabled, issue or enforce/);
