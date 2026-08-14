@@ -24,6 +24,10 @@ import {
   authorizationRequest, cookie, exchangeAuthorizationCode, INFOMANIAK_ISSUER,
   OIDC_SESSION_COOKIE, OIDC_TRANSACTION_COOKIE, open, parseCookies, seal, verifyIdToken,
 } from "./oidc.mjs";
+import {
+  issuePortalSession, openPortalSession, portalDirectory, PORTAL_SESSION_COOKIE,
+  revokePortalSession, safePortalReturn,
+} from "./portal-session-broker.mjs";
 
 const DEFAULT_MAX_BODY_BYTES = 64 * 1024;
 const CURRENT_SESSION_VERSION = 2;
@@ -132,7 +136,8 @@ function redirect(response, location) {
 }
 
 function safeLoginReturnPath(value) {
-  if (typeof value !== "string" || !value.startsWith("/application-login/authorize?") || value.includes("\r") || value.includes("\n")) return null;
+  if (typeof value !== "string" || value.includes("\r") || value.includes("\n") ||
+      (!value.startsWith("/application-login/authorize?") && !value.startsWith("/portal/login?"))) return null;
   const parsed = new URL(value, "https://n09.invalid");
   return parsed.origin === "https://n09.invalid" ? `${parsed.pathname}${parsed.search}` : null;
 }
@@ -322,6 +327,7 @@ export function createHttpHandler({
   personalSessionManagement = null,
   operatorSessionManagement = null,
   identityStateManagement = null,
+  portalOrigins = [],
 }) {
   if (!repository) throw new Error("repository is required");
   if (typeof authenticate !== "function") throw new Error("authenticate must be a function");
@@ -413,6 +419,100 @@ export function createHttpHandler({
           writeJson(response, 400, { error: "invalid_grant" }, correlationId);
         } else writeJson(response, 503, { error: "identity_service_unavailable" }, correlationId);
       }
+      return;
+    }
+    if (url.pathname === "/portal/login" && request.method === "GET") {
+      const fallback = portalOrigins[0] ? `${portalOrigins[0]}/#applications` : null;
+      const returnTo = safePortalReturn(url.searchParams.get("return_to"), portalOrigins, fallback);
+      if (!oidcConfig || !returnTo || !sessionAuthority) {
+        writeHtml(response, 503, "Portail indisponible", '<h1>Portail momentanément indisponible</h1><p>La chaîne de connexion centrale n’est pas entièrement configurée.</p><a class="button" href="/">Retour</a>');
+        return;
+      }
+      let identitySession;
+      try { identitySession = await openCurrentSession(request); } catch { /* authenticate below */ }
+      if (!identitySession) {
+        const localReturn = `/portal/login?return_to=${encodeURIComponent(returnTo)}`;
+        redirect(response, `/auth/infomaniak/start?return_to=${encodeURIComponent(localReturn)}`);
+        return;
+      }
+      try {
+        const portalSession = await issuePortalSession({
+          repository, sessionAuthority, identitySession, sessionSecret: oidcConfig.sessionSecret,
+        });
+        response.statusCode = 303;
+        response.setHeader("cache-control", "no-store");
+        response.setHeader("location", returnTo);
+        response.setHeader("set-cookie", cookie(PORTAL_SESSION_COOKIE, portalSession, { maxAge: 4 * 60 * 60, path: "/portal" }));
+        response.end();
+      } catch (error) {
+        const denied = error?.message === "portal_access_denied";
+        writeHtml(response, denied ? 403 : 503, "Connexion au portail refusée",
+          `<h1>Connexion au portail refusée</h1><p>${denied ? "Cette identité ne possède pas l’accès central au portail." : "Le registre central n’est pas vérifiable pour le moment."} Aucun accès implicite n’a été ouvert.</p><a class="button" href="/">Retour</a>`);
+      }
+      return;
+    }
+    if (url.pathname === "/portal/session") {
+      const requestOrigin = request.headers.origin;
+      if (typeof requestOrigin !== "string" || !portalOrigins.includes(requestOrigin)) {
+        writeJson(response, 403, { error: "origin_not_allowed" });
+        return;
+      }
+      response.setHeader("access-control-allow-origin", requestOrigin);
+      response.setHeader("access-control-allow-credentials", "true");
+      response.setHeader("vary", "Origin");
+      if (request.method === "OPTIONS") {
+        response.statusCode = 204;
+        response.setHeader("access-control-allow-methods", "GET, OPTIONS");
+        response.end();
+        return;
+      }
+      if (request.method !== "GET") {
+        response.setHeader("allow", "GET, OPTIONS");
+        writeJson(response, 405, { error: "method_not_allowed" });
+        return;
+      }
+      try {
+        if (!oidcConfig || !sessionAuthority) throw new Error("portal_not_configured");
+        const portalSession = openPortalSession(
+          parseCookies(request.headers.cookie).get(PORTAL_SESSION_COOKIE), oidcConfig.sessionSecret,
+        );
+        const directory = await portalDirectory({ repository, sessionAuthority, session: portalSession });
+        writeJson(response, 200, {
+          authenticated: true,
+          user: { displayName: directory.identity.displayName, email: directory.identity.email },
+          applications: directory.applications,
+        });
+      } catch {
+        writeJson(response, 401, { authenticated: false, applications: [] });
+      }
+      return;
+    }
+    if (url.pathname === "/portal/logout" && request.method === "POST") {
+      const requestOrigin = request.headers.origin;
+      const fallback = portalOrigins[0] ? `${portalOrigins[0]}/` : null;
+      const returnTo = safePortalReturn(url.searchParams.get("return_to"), portalOrigins, fallback);
+      if (!returnTo || typeof requestOrigin !== "string" || !portalOrigins.includes(requestOrigin)) {
+        writeJson(response, 403, { error: "origin_not_allowed" });
+        return;
+      }
+      try {
+        if (!oidcConfig || !sessionAuthority) throw new Error("portal_not_configured");
+        const portalSession = openPortalSession(
+          parseCookies(request.headers.cookie).get(PORTAL_SESSION_COOKIE), oidcConfig.sessionSecret,
+        );
+        await revokePortalSession({ sessionAuthority, session: portalSession });
+        response.statusCode = 303;
+        response.setHeader("cache-control", "no-store");
+        response.setHeader("location", returnTo);
+        response.setHeader("set-cookie", cookie(PORTAL_SESSION_COOKIE, "", { maxAge: 0, path: "/portal" }));
+        response.end();
+      } catch {
+        writeHtml(response, 503, "Déconnexion en attente", '<h1>Déconnexion en attente</h1><p>La révocation centrale ne peut pas encore être confirmée. Aucun succès fictif n’est affiché.</p><a class="button" href="/">Réessayer</a>');
+      }
+      return;
+    }
+    if (url.pathname === "/portal/account" && request.method === "GET") {
+      redirect(response, "/account/sessions");
       return;
     }
     if (url.pathname === "/" && request.method === "GET") {
