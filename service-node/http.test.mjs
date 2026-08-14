@@ -173,6 +173,11 @@ test("expose une santé minimale sans information interne", async () => {
     assert.equal(response.status, 200);
     assert.deepEqual(await response.json(), { status: "ok" });
     assert.equal(response.headers.get("cache-control"), "no-store");
+    assert.equal(response.headers.get("strict-transport-security"), "max-age=31536000; includeSubDomains");
+    assert.equal(response.headers.get("x-content-type-options"), "nosniff");
+    assert.equal(response.headers.get("x-frame-options"), "DENY");
+    assert.equal(response.headers.get("referrer-policy"), "no-referrer");
+    assert.equal(response.headers.get("permissions-policy"), "camera=(), microphone=(), geolocation=(), payment=()");
   });
 });
 

@@ -17,12 +17,31 @@ export function signInternalRequest(secret, request) {
 }
 
 export function internalClientsFromEnvironment(environment = process.env) {
+  const clients = new Map();
+  const configuredClients = environment.N09_INTERNAL_CLIENTS_JSON?.trim();
+  if (configuredClients) {
+    let parsed;
+    try { parsed = JSON.parse(configuredClients); } catch { throw new Error("invalid internal clients configuration"); }
+    if (!Array.isArray(parsed) || parsed.length === 0) throw new Error("invalid internal clients configuration");
+    for (const entry of parsed) {
+      const configuredClientId = entry?.client_id?.trim();
+      const configuredSecret = entry?.secret?.trim();
+      const configuredApplicationId = entry?.application_id?.trim();
+      if (!configuredClientId || !configuredApplicationId || !configuredSecret || configuredSecret.length < 32 ||
+          clients.has(configuredClientId)) {
+        throw new Error("invalid internal clients configuration");
+      }
+      clients.set(configuredClientId, Object.freeze({ applicationId: configuredApplicationId, secret: configuredSecret }));
+    }
+  }
   const clientId = environment.N09_TASKS_INTERNAL_CLIENT_ID?.trim();
   const secret = environment.N09_TASKS_INTERNAL_CLIENT_SECRET?.trim();
   const applicationId = environment.N09_TASKS_APPLICATION_ID?.trim() || "n09-suivi-taches";
-  if (!clientId && !secret) return new Map();
+  if (!clientId && !secret) return clients;
   if (!clientId || !secret || secret.length < 32) throw new Error("invalid tasks internal client configuration");
-  return new Map([[clientId, Object.freeze({ applicationId, secret })]]);
+  if (clients.has(clientId)) throw new Error("duplicate internal client configuration");
+  clients.set(clientId, Object.freeze({ applicationId, secret }));
+  return clients;
 }
 
 export function createInternalClientAuthenticator({
