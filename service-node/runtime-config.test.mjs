@@ -3,7 +3,7 @@ import test from "node:test";
 import {
   administrationSessionConfigFromEnvironment, energyApplicationSessionConfigFromEnvironment,
   httpConfigFromEnvironment, mariaDbConfigFromEnvironment,
-  tasksApplicationSessionConfigFromEnvironment,
+  portalApplicationSessionConfigFromEnvironment, tasksApplicationSessionConfigFromEnvironment,
 } from "./runtime-config.mjs";
 
 const databaseEnvironment = {
@@ -63,6 +63,24 @@ test("borne les sessions Énergie à la production et à leur application", () =
   }), /require production/);
   assert.throws(() => energyApplicationSessionConfigFromEnvironment({
     N09_ENVIRONMENT: "production", N09_ENERGY_SESSION_MODE: "observe",
+  }), /disabled, issue or enforce/);
+});
+
+test("borne les sessions du portail à la production et à leur audience", () => {
+  assert.deepEqual(portalApplicationSessionConfigFromEnvironment({}), {
+    mode: "disabled", applicationId: "n09-portail",
+    idleTtlMs: 3_600_000, absoluteTtlMs: 14_400_000, touchIntervalMs: 300_000,
+    contextLabel: "Connexion web Portail NSK Tech 09",
+    issueJustification: "Ouverture de la session applicative du portail NSK Tech 09",
+  });
+  assert.equal(portalApplicationSessionConfigFromEnvironment({
+    N09_ENVIRONMENT: "production", N09_PORTAL_SESSION_MODE: "enforce",
+  }).mode, "enforce");
+  assert.throws(() => portalApplicationSessionConfigFromEnvironment({
+    N09_ENVIRONMENT: "preprod", N09_PORTAL_SESSION_MODE: "issue",
+  }), /require production/);
+  assert.throws(() => portalApplicationSessionConfigFromEnvironment({
+    N09_ENVIRONMENT: "production", N09_PORTAL_SESSION_MODE: "observe",
   }), /disabled, issue or enforce/);
 });
 

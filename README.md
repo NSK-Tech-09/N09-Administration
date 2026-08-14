@@ -179,6 +179,12 @@ confirme également que l’ancien hébergement ne peut pas encore être résili
 tant que le portail, les anciens noms publics et les archives historiques n’en
 sont pas sortis ; voir `docs/LOT-60-ENERGIE-PRODUCTION.md`.
 
+Le lot 61 raccorde le portail public à l'autorité centrale sans lui attribuer
+un nouvel environnement Node.js : Administration émet une session chiffrée
+limitée à l'audience `n09-portail`, filtre le catalogue d'après les
+affectations centrales actives et confirme la révocation à la déconnexion ;
+voir `docs/LOT-61-PORTAIL-CLOUD.md`.
+
 ## Prérequis et démarrage local
 
 - Python 3.11 ou supérieur ;
@@ -240,6 +246,7 @@ ne contient aucun secret réel. La production reste inchangée.
 - [`docs/LOT-56-DESACTIVATION-GOUVERNEE-IDENTITES.md`](docs/LOT-56-DESACTIVATION-GOUVERNEE-IDENTITES.md)
 - [`docs/LOT-57-CONTRAT-PROMOTION-PRODUCTION.md`](docs/LOT-57-CONTRAT-PROMOTION-PRODUCTION.md)
 - [`docs/LOT-60-ENERGIE-PRODUCTION.md`](docs/LOT-60-ENERGIE-PRODUCTION.md)
+- [`docs/LOT-61-PORTAIL-CLOUD.md`](docs/LOT-61-PORTAIL-CLOUD.md)
 - [`docs/ETAT-PREPROD-INFOMANIAK.md`](docs/ETAT-PREPROD-INFOMANIAK.md)
 - [`docs/CONFORMITE-NSES.md`](docs/CONFORMITE-NSES.md)
 - [`docs/CONTRAT-API-INTERNE.md`](docs/CONTRAT-API-INTERNE.md)

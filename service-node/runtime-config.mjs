@@ -138,3 +138,40 @@ export function energyApplicationSessionConfigFromEnvironment(environment) {
     issueJustification: "Ouverture de la session applicative N09 – Énergie",
   });
 }
+
+export function portalApplicationSessionConfigFromEnvironment(environment) {
+  const mode = environment.N09_PORTAL_SESSION_MODE?.trim() || "disabled";
+  if (!["disabled", "issue", "enforce"].includes(mode)) {
+    throw new Error("N09_PORTAL_SESSION_MODE must be disabled, issue or enforce");
+  }
+  if (mode !== "disabled" && environment.N09_ENVIRONMENT !== "production") {
+    throw new Error("portal application sessions require production");
+  }
+  const idleTtlMs = positiveInteger(
+    environment.N09_PORTAL_SESSION_IDLE_TTL_MS,
+    60 * 60_000,
+    "N09_PORTAL_SESSION_IDLE_TTL_MS",
+  );
+  const absoluteTtlMs = positiveInteger(
+    environment.N09_PORTAL_SESSION_ABSOLUTE_TTL_MS,
+    4 * 60 * 60_000,
+    "N09_PORTAL_SESSION_ABSOLUTE_TTL_MS",
+  );
+  const touchIntervalMs = positiveInteger(
+    environment.N09_PORTAL_SESSION_TOUCH_INTERVAL_MS,
+    5 * 60_000,
+    "N09_PORTAL_SESSION_TOUCH_INTERVAL_MS",
+  );
+  if (idleTtlMs > absoluteTtlMs || touchIntervalMs >= idleTtlMs) {
+    throw new Error("invalid portal session lifetime settings");
+  }
+  return Object.freeze({
+    mode,
+    applicationId: "n09-portail",
+    idleTtlMs,
+    absoluteTtlMs,
+    touchIntervalMs,
+    contextLabel: "Connexion web Portail NSK Tech 09",
+    issueJustification: "Ouverture de la session applicative du portail NSK Tech 09",
+  });
+}

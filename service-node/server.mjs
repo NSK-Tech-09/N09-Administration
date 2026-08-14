@@ -9,12 +9,13 @@ import { createMariaDbPool, MariaDbRepository } from "./mariadb.mjs";
 import {
   administrationSessionConfigFromEnvironment, energyApplicationSessionConfigFromEnvironment,
   httpConfigFromEnvironment, mariaDbConfigFromEnvironment,
-  tasksApplicationSessionConfigFromEnvironment,
+  portalApplicationSessionConfigFromEnvironment, tasksApplicationSessionConfigFromEnvironment,
 } from "./runtime-config.mjs";
 import { oidcConfigFromEnvironment } from "./oidc.mjs";
 import { createPersonalSessionManagement } from "./personal-session-management.mjs";
 import { createOperatorSessionManagement } from "./operator-session-management.mjs";
 import { createIdentityStateManagement } from "./identity-state-management.mjs";
+import { portalOriginsFromEnvironment } from "./portal-session-broker.mjs";
 
 async function main() {
   const databaseConfig = mariaDbConfigFromEnvironment(process.env);
@@ -23,6 +24,8 @@ async function main() {
   const administrationSessionConfig = administrationSessionConfigFromEnvironment(process.env);
   const tasksSessionConfig = tasksApplicationSessionConfigFromEnvironment(process.env);
   const energySessionConfig = energyApplicationSessionConfigFromEnvironment(process.env);
+  const portalSessionConfig = portalApplicationSessionConfigFromEnvironment(process.env);
+  const portalOrigins = portalOriginsFromEnvironment(process.env);
   const authenticate = createInternalClientAuthenticator({ clients: internalClientsFromEnvironment(process.env) });
   const pool = await createMariaDbPool(databaseConfig);
   await pool.query("SELECT 1");
@@ -35,6 +38,7 @@ async function main() {
   const sessionAuthority = createCompositeApplicationSessionAuthority([
     createApplicationSessionAuthority({ repository, config: tasksSessionConfig }),
     createApplicationSessionAuthority({ repository, config: energySessionConfig }),
+    createApplicationSessionAuthority({ repository, config: portalSessionConfig }),
   ]);
   const personalSessionManagement = createPersonalSessionManagement({ repository });
   const operatorSessionManagement = createOperatorSessionManagement({ repository });
@@ -48,6 +52,7 @@ async function main() {
     personalSessionManagement,
     operatorSessionManagement,
     identityStateManagement,
+    portalOrigins,
   }));
   server.on("clientError", (_error, socket) => socket.end("HTTP/1.1 400 Bad Request\r\n\r\n"));
 
@@ -67,6 +72,7 @@ async function main() {
     administration_session_mode: administrationSessionConfig.mode,
     tasks_session_mode: tasksSessionConfig.mode,
     energy_session_mode: energySessionConfig.mode,
+    portal_session_mode: portalSessionConfig.mode,
   }));
 }
 
