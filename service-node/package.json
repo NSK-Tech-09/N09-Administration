@@ -22,6 +22,7 @@
     "retire:synthetic-preprod": "node retire-synthetic-preprod-cli.mjs",
     "process:notifications": "node notification-consumer-cli.mjs",
     "seed:synthetic-preprod": "node seed-synthetic-preprod-cli.mjs",
+    "verify:production-promotion": "node production-promotion-cli.mjs",
     "test": "node --test"
   },
   "dependencies": {
