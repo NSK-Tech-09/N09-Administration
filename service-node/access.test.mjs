@@ -34,6 +34,7 @@ const vectors = [
   ["accord explicite contextualisé", {}, "access_granted", true],
   ["affectation absente", { assignments: [] }, "assignment_missing", false],
   ["identité suspendue", { identity: { ...identity, status: "suspended" } }, "identity_not_active", false],
+  ["identité désactivée", { identity: { ...identity, status: "disabled" } }, "identity_not_active", false],
   ["affectation expirée", { assignments: [assignment({ validUntil: "2026-08-09T11:59:59Z" })] }, "permission_or_validity_missing", false],
   ["permission inconnue", { requiredPermission: "tasks:admin" }, "permission_or_validity_missing", false],
   ["autre périmètre", { scopeId: "site-11" }, "scope_mismatch", false],

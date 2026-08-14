@@ -9,6 +9,7 @@ import { ADMIN_APPLICATION_ID } from "./identity-link-admin.mjs";
 
 export const IDENTITY_SUSPENSION_PERMISSION = "administration:identities:suspend";
 export const IDENTITY_REACTIVATION_PERMISSION = "administration:identities:reactivate";
+export const IDENTITY_DISABLEMENT_PERMISSION = "administration:identities:disable";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -32,6 +33,10 @@ export async function authorizeIdentityReactivationAdministration(repository, id
   return authorizeIdentityStatePermission(repository, identityId, IDENTITY_REACTIVATION_PERMISSION, now);
 }
 
+export async function authorizeIdentityDisablementAdministration(repository, identityId, now = new Date()) {
+  return authorizeIdentityStatePermission(repository, identityId, IDENTITY_DISABLEMENT_PERMISSION, now);
+}
+
 async function authorizeIdentityStatePermission(repository, identityId, requiredPermission, now) {
   if (!UUID.test(String(identityId ?? ""))) return { allowed: false, reasonCode: "authentication_required" };
   const [identity, application, assignments] = await Promise.all([
@@ -52,36 +57,45 @@ async function authorizeIdentityStatePermission(repository, identityId, required
 }
 
 export async function authorizeIdentityLifecycleAdministration(repository, identityId, now = new Date()) {
-  const [suspension, reactivation] = await Promise.all([
+  const [suspension, reactivation, disablement] = await Promise.all([
     authorizeIdentitySuspensionAdministration(repository, identityId, now),
     authorizeIdentityReactivationAdministration(repository, identityId, now),
+    authorizeIdentityDisablementAdministration(repository, identityId, now),
   ]);
   return Object.freeze({
-    allowed: suspension.allowed || reactivation.allowed,
+    allowed: suspension.allowed || reactivation.allowed || disablement.allowed,
     canSuspend: suspension.allowed,
     canReactivate: reactivation.allowed,
-    reasonCode: suspension.allowed || reactivation.allowed
+    canDisable: disablement.allowed,
+    reasonCode: suspension.allowed || reactivation.allowed || disablement.allowed
       ? "allowed"
-      : suspension.reasonCode === reactivation.reasonCode ? suspension.reasonCode : "permission_missing",
+      : suspension.reasonCode === reactivation.reasonCode && reactivation.reasonCode === disablement.reasonCode
+        ? suspension.reasonCode : "permission_missing",
   });
 }
 
 export function createIdentityStateManagement({ repository, now = () => new Date() } = {}) {
   if (!repository || typeof repository.listIdentities !== "function" ||
       typeof repository.listApplicationSessions !== "function" ||
+      typeof repository.listAllAssignments !== "function" ||
       typeof repository.suspendIdentityAndRevokeSessions !== "function" ||
-      typeof repository.reactivateIdentity !== "function") {
+      typeof repository.reactivateIdentity !== "function" ||
+      typeof repository.disableIdentityAndRevokeAccess !== "function") {
     throw new Error("identity state repository is required");
   }
 
   async function assertOperator(operatorIdentityId, permission, observedAt) {
     const authorize = permission === IDENTITY_SUSPENSION_PERMISSION
       ? authorizeIdentitySuspensionAdministration
-      : authorizeIdentityReactivationAdministration;
+      : permission === IDENTITY_REACTIVATION_PERMISSION
+        ? authorizeIdentityReactivationAdministration
+        : authorizeIdentityDisablementAdministration;
     const access = await authorize(repository, operatorIdentityId, observedAt);
     if (!access.allowed) throw new IdentityStateError(
       permission === IDENTITY_SUSPENSION_PERMISSION
-        ? "identity_suspension_not_allowed" : "identity_reactivation_not_allowed",
+        ? "identity_suspension_not_allowed"
+        : permission === IDENTITY_REACTIVATION_PERMISSION
+          ? "identity_reactivation_not_allowed" : "identity_disablement_not_allowed",
       403,
     );
   }
@@ -91,7 +105,7 @@ export function createIdentityStateManagement({ repository, now = () => new Date
     const access = await authorizeIdentityLifecycleAdministration(repository, operatorIdentityId, observedAt);
     if (!access.allowed) throw new IdentityStateError("identity_lifecycle_not_allowed", 403);
     const identities = (await repository.listIdentities())
-      .filter((identity) => ["active", "suspended"].includes(identity.status));
+      .filter((identity) => ["active", "suspended", "disabled"].includes(identity.status));
     return Promise.all(identities.map(async (identity) => {
       const sessions = await repository.listApplicationSessions(identity.identityId);
       return Object.freeze({
@@ -103,6 +117,8 @@ export function createIdentityStateManagement({ repository, now = () => new Date
         current: identity.identityId === operatorIdentityId,
         canSuspend: access.canSuspend && identity.status === "active" && identity.identityId !== operatorIdentityId,
         canReactivate: access.canReactivate && identity.status === "suspended",
+        canDisable: access.canDisable && ["active", "suspended"].includes(identity.status) &&
+          identity.identityId !== operatorIdentityId,
       });
     }));
   }
@@ -217,5 +233,120 @@ export function createIdentityStateManagement({ repository, now = () => new Date
     return Object.freeze({ correlationId, identity: reactivated, restoredSessions: 0 });
   }
 
-  return Object.freeze({ listLifecycle, suspend, reactivate });
+  async function disable({
+    operatorIdentityId,
+    targetIdentityId,
+    expectedStatus,
+    justification,
+    correlationId = randomUUID(),
+  }) {
+    if (!UUID.test(String(operatorIdentityId ?? "")) || !UUID.test(String(targetIdentityId ?? ""))) {
+      throw new IdentityStateError("invalid_identity", 400);
+    }
+    if (!["active", "suspended"].includes(expectedStatus)) {
+      throw new IdentityStateError("invalid_identity_target", 400);
+    }
+    const reason = typeof justification === "string" ? justification.trim() : "";
+    if (reason.length < 20 || reason.length > 500) throw new IdentityStateError("invalid_justification", 400);
+    if (operatorIdentityId === targetIdentityId) {
+      throw new IdentityStateError("self_disablement_requires_separate_governance");
+    }
+
+    const observedAt = now();
+    await assertOperator(operatorIdentityId, IDENTITY_DISABLEMENT_PERMISSION, observedAt);
+    const target = await repository.getIdentity(targetIdentityId);
+    if (!target) throw new IdentityStateError("target_identity_not_found", 404);
+    if (target.status !== expectedStatus) throw new IdentityStateError("identity_state_conflict");
+
+    const assignments = (await repository.listAllAssignments())
+      .filter((assignment) => assignment.subjectId === targetIdentityId && assignment.status === "active");
+    if (assignments.some((assignment) => assignment.permissions.includes(IDENTITY_DISABLEMENT_PERMISSION))) {
+      throw new IdentityStateError("disablement_authority_requires_separate_governance");
+    }
+    const assignmentRevocations = assignments.map((assignment) => {
+      const revoked = Object.freeze({
+        ...assignment,
+        status: "revoked",
+        reason,
+        decidedBy: operatorIdentityId,
+        version: assignment.version + 1,
+      });
+      return {
+        assignment: revoked,
+        expectedVersion: assignment.version,
+        auditEvent: createAuditEvent({
+          action: "assignment.revoked",
+          result: "success",
+          source: "identity-state-administration",
+          correlationId,
+          actorId: operatorIdentityId,
+          subjectId: targetIdentityId,
+          applicationId: assignment.applicationId,
+          roleId: assignment.roleId,
+          scopeType: assignment.scopeType,
+          scopeId: assignment.scopeId,
+          conditions: assignment.conditions,
+          previousValue: { status: assignment.status, version: assignment.version },
+          newValue: { status: revoked.status, version: revoked.version },
+          justification: reason,
+          occurredAt: observedAt,
+        }),
+      };
+    });
+    const sessions = (await repository.listApplicationSessions(targetIdentityId))
+      .filter((record) => activeSession(record, observedAt));
+    const closures = sessions.map((record) => {
+      const revoked = revokeApplicationSession(record, {
+        revokedByIdentityId: operatorIdentityId,
+        reason,
+        now: observedAt,
+      });
+      return {
+        record: revoked,
+        expectedVersion: record.version,
+        auditEvent: createApplicationSessionAuditEvent({
+          record: revoked,
+          action: "application_session.revoked",
+          actorId: operatorIdentityId,
+          justification: reason,
+          correlationId,
+          occurredAt: observedAt,
+        }),
+      };
+    });
+    const disabled = Object.freeze({ ...target, status: "disabled" });
+    const identityAuditEvent = createAuditEvent({
+      action: "identity.disabled",
+      result: "success",
+      source: "identity-state-administration",
+      correlationId,
+      actorId: operatorIdentityId,
+      subjectId: targetIdentityId,
+      cause: "operator_disablement",
+      previousValue: { status: target.status },
+      newValue: {
+        status: disabled.status,
+        revoked_sessions: closures.length,
+        revoked_assignments: assignmentRevocations.length,
+      },
+      justification: reason,
+      occurredAt: observedAt,
+    });
+    await repository.disableIdentityAndRevokeAccess({
+      identity: disabled,
+      expectedStatus,
+      observedAt,
+      identityAuditEvent,
+      closures,
+      assignmentRevocations,
+    });
+    return Object.freeze({
+      correlationId,
+      identity: disabled,
+      revokedSessions: closures.length,
+      revokedAssignments: assignmentRevocations.length,
+    });
+  }
+
+  return Object.freeze({ listLifecycle, suspend, reactivate, disable });
 }

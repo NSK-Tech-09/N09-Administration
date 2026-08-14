@@ -315,6 +315,109 @@ export class TransactionalMemoryRepository {
     });
   }
 
+  disableIdentityAndRevokeAccess({
+    identity, expectedStatus, observedAt, identityAuditEvent, closures, assignmentRevocations,
+  }) {
+    if (identity.status !== "disabled" || !["active", "suspended"].includes(expectedStatus) ||
+        identityAuditEvent?.action !== "identity.disabled" ||
+        identityAuditEvent.subject_id !== identity.identityId ||
+        identityAuditEvent.previous_value?.status !== expectedStatus ||
+        identityAuditEvent.new_value?.status !== "disabled" ||
+        !Array.isArray(closures) || !Array.isArray(assignmentRevocations) ||
+        identityAuditEvent.new_value?.revoked_sessions !== closures.length ||
+        identityAuditEvent.new_value?.revoked_assignments !== assignmentRevocations.length) {
+      throw new Error("invalid identity disablement bundle");
+    }
+    const decisionTime = new Date(observedAt);
+    if (!Number.isFinite(decisionTime.valueOf())) throw new Error("invalid identity disablement time");
+    const orderedClosures = [...closures].sort((left, right) => left.record.sessionId.localeCompare(right.record.sessionId));
+    const orderedAssignments = [...assignmentRevocations]
+      .sort((left, right) => left.assignment.assignmentId.localeCompare(right.assignment.assignmentId));
+    return this.#transaction((state) => {
+      const previousIdentity = state.identities.get(identity.identityId);
+      if (!previousIdentity || previousIdentity.status !== expectedStatus) throw new Error("stale identity status");
+      if (identity.email !== previousIdentity.email || identity.displayName !== previousIdentity.displayName) {
+        throw new Error("identity context is immutable during disablement");
+      }
+      const activeSessionIds = [...state.applicationSessions.values()]
+        .filter((record) => record.identityId === identity.identityId && !record.revokedAt &&
+          new Date(record.idleExpiresAt) > decisionTime && new Date(record.absoluteExpiresAt) > decisionTime)
+        .map((record) => record.sessionId).sort();
+      if (JSON.stringify(activeSessionIds) !== JSON.stringify(orderedClosures.map(({ record }) => record.sessionId))) {
+        throw new Error("identity active session set changed");
+      }
+      const activeAssignmentIds = [...state.assignments.values()]
+        .filter((assignment) => assignment.subjectId === identity.identityId && assignment.status === "active")
+        .map((assignment) => assignment.assignmentId).sort();
+      if (JSON.stringify(activeAssignmentIds) !== JSON.stringify(
+        orderedAssignments.map(({ assignment }) => assignment.assignmentId),
+      )) throw new Error("identity active assignment set changed");
+
+      for (const { record, expectedVersion, auditEvent } of orderedClosures) {
+        const previous = state.applicationSessions.get(record.sessionId);
+        if (!previous || previous.identityId !== identity.identityId || previous.version !== expectedVersion ||
+            record.version !== expectedVersion + 1 || auditEvent?.action !== "application_session.revoked") {
+          throw new Error("stale application session version");
+        }
+        assertApplicationSessionImmutableContext(previous, record);
+        if (previous.lastSeenAt !== record.lastSeenAt || previous.idleExpiresAt !== record.idleExpiresAt ||
+            previous.revokedAt || !record.revokedAt || !record.revocationReason) {
+          throw new Error("invalid application session revocation");
+        }
+        assertApplicationSessionAudit(record, auditEvent, "application_session.revoked");
+        if (auditEvent.actor_id !== identityAuditEvent.actor_id ||
+            auditEvent.correlation_id !== identityAuditEvent.correlation_id ||
+            auditEvent.justification !== identityAuditEvent.justification ||
+            record.revocationReason !== identityAuditEvent.justification) {
+          throw new Error("identity disablement audit correlation mismatch");
+        }
+      }
+      for (const { assignment, expectedVersion, auditEvent } of orderedAssignments) {
+        const previous = state.assignments.get(assignment.assignmentId);
+        if (!previous || previous.subjectId !== identity.identityId || previous.status !== "active" ||
+            previous.version !== expectedVersion || assignment.version !== expectedVersion + 1 ||
+            assignment.status !== "revoked" || auditEvent?.action !== "assignment.revoked") {
+          throw new Error("stale access assignment version");
+        }
+        if (assignment.subjectId !== previous.subjectId || assignment.applicationId !== previous.applicationId ||
+            assignment.roleId !== previous.roleId || assignment.scopeType !== previous.scopeType ||
+            assignment.scopeId !== previous.scopeId || assignment.inheritedFromGroup !== previous.inheritedFromGroup ||
+            JSON.stringify(assignment.permissions) !== JSON.stringify(previous.permissions) ||
+            JSON.stringify(assignment.conditions) !== JSON.stringify(previous.conditions)) {
+          throw new Error("assignment context is immutable during disablement");
+        }
+        if (auditEvent.subject_id !== identity.identityId || auditEvent.application_id !== assignment.applicationId ||
+            auditEvent.actor_id !== identityAuditEvent.actor_id ||
+            auditEvent.correlation_id !== identityAuditEvent.correlation_id ||
+            auditEvent.justification !== identityAuditEvent.justification ||
+            auditEvent.role_id !== assignment.roleId || assignment.reason !== identityAuditEvent.justification ||
+            assignment.decidedBy !== identityAuditEvent.actor_id ||
+            auditEvent.previous_value?.status !== "active" ||
+            auditEvent.previous_value?.version !== expectedVersion ||
+            auditEvent.new_value?.status !== "revoked" ||
+            auditEvent.new_value?.version !== assignment.version) {
+          throw new Error("identity disablement audit correlation mismatch");
+        }
+      }
+
+      state.identities.set(identity.identityId, structuredClone(identity));
+      this.#appendAudit(state, identityAuditEvent);
+      for (const { record, auditEvent } of orderedClosures) {
+        state.applicationSessions.set(record.sessionId, structuredClone(record));
+        this.#appendAudit(state, auditEvent);
+      }
+      for (const { assignment, auditEvent } of orderedAssignments) {
+        state.assignments.set(assignment.assignmentId, structuredClone(assignment));
+        this.#appendAudit(state, auditEvent);
+      }
+      return {
+        identity: structuredClone(identity),
+        revokedSessions: orderedClosures.length,
+        revokedAssignments: orderedAssignments.length,
+      };
+    });
+  }
+
   listAllApplicationSessions() {
     return [...this.#applicationSessions.values()]
       .sort((left, right) =>

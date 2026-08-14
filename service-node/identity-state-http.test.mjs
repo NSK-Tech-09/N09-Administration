@@ -5,6 +5,7 @@ import { createAuditEvent } from "./audit.mjs";
 import { createHttpHandler } from "./http.mjs";
 import { ADMIN_APPLICATION_ID } from "./identity-link-admin.mjs";
 import {
+  IDENTITY_DISABLEMENT_PERMISSION,
   IDENTITY_REACTIVATION_PERMISSION,
   IDENTITY_SUSPENSION_PERMISSION,
 } from "./identity-state-management.mjs";
@@ -62,8 +63,8 @@ function sessionCookie() {
 }
 
 const identities = [
-  { identityId: operatorId, displayName: "Opérateur", email: "operator@example.test", status: "active", activeSessionCount: 1, current: true, canSuspend: false, canReactivate: false },
-  { identityId: targetId, displayName: "Personne cible", email: "target@example.test", status: "active", activeSessionCount: 2, current: false, canSuspend: true, canReactivate: false },
+  { identityId: operatorId, displayName: "Opérateur", email: "operator@example.test", status: "active", activeSessionCount: 1, current: true, canSuspend: false, canReactivate: false, canDisable: false },
+  { identityId: targetId, displayName: "Personne cible", email: "target@example.test", status: "active", activeSessionCount: 2, current: false, canSuspend: true, canReactivate: false, canDisable: false },
 ];
 
 async function withServer({ repository = repositoryWithPermission(), identityStateManagement }, operation) {
@@ -187,5 +188,46 @@ test("présente et transmet une réactivation scellée sans restaurer de session
   assert.deepEqual(reactivated, {
     operatorIdentityId: operatorId, targetIdentityId: targetId, expectedStatus: "suspended",
     justification: "Retour validé après une nouvelle décision humaine explicite",
+  });
+});
+
+test("présente et transmet la désactivation scellée sans exposer les accès", async () => {
+  const repository = repositoryWithPermission(IDENTITY_DISABLEMENT_PERMISSION);
+  const disablement = [
+    { ...identities[0], canSuspend: false },
+    { ...identities[1], canSuspend: false, canDisable: true },
+  ];
+  let disabled;
+  await withServer({
+    repository,
+    identityStateManagement: {
+      listLifecycle: async () => disablement,
+      disable: async (input) => {
+        disabled = input;
+        return { revokedSessions: 2, revokedAssignments: 3 };
+      },
+    },
+  }, async (origin) => {
+    const page = await fetch(`${origin}/admin/identities`, { headers: { cookie: sessionCookie() } });
+    const html = await page.text();
+    assert.equal(page.status, 200);
+    assert.match(html, /Désactiver et révoquer tous les accès/);
+    assert.match(html, /n’est pas réversible depuis cette console/);
+    assert.doesNotMatch(html, /assignment_id|session_id/);
+    const target = html.match(/action="\/admin\/identities\/disable"[\s\S]*?name="target" value="([^"]+)"/)?.[1];
+    assert.ok(target);
+    const response = await fetch(`${origin}/admin/identities/disable`, {
+      method: "POST", redirect: "manual",
+      headers: { cookie: sessionCookie(), "content-type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        csrf, target, justification: "Sortie définitive confirmée après contrôle humain complet des accès",
+      }),
+    });
+    assert.equal(response.status, 303);
+    assert.equal(response.headers.get("location"), "/admin/identities");
+  });
+  assert.deepEqual(disabled, {
+    operatorIdentityId: operatorId, targetIdentityId: targetId, expectedStatus: "active",
+    justification: "Sortie définitive confirmée après contrôle humain complet des accès",
   });
 });

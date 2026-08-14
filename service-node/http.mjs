@@ -267,18 +267,19 @@ function renderOperatorSessions(sessions, csrf, actionToken) {
 function renderIdentityStateAdministration(identities, csrf, actionToken) {
   const cards = identities.map((identity) => {
     const sessions = `${identity.activeSessionCount} session${identity.activeSessionCount > 1 ? "s" : ""} active${identity.activeSessionCount > 1 ? "s" : ""}`;
-    let action = identity.current
-      ? '<p class="muted">Ta propre identité ne peut pas être suspendue depuis cette console.</p>'
-      : identity.canSuspend
-        ? `<form class="grant" method="post" action="/admin/identities/suspend"><input type="hidden" name="csrf" value="${escapeHtml(csrf)}"><input type="hidden" name="target" value="${escapeHtml(actionToken(identity))}"><label>Justification de la suspension<input name="justification" minlength="20" maxlength="500" required placeholder="Pourquoi cette identité doit-elle être suspendue ?"></label><button class="secondary" type="submit">Suspendre l’identité et fermer ses sessions</button></form>`
-        : identity.canReactivate
-          ? `<form class="grant" method="post" action="/admin/identities/reactivate"><input type="hidden" name="csrf" value="${escapeHtml(csrf)}"><input type="hidden" name="target" value="${escapeHtml(actionToken(identity))}"><label>Justification de la réactivation<input name="justification" minlength="20" maxlength="500" required placeholder="Pourquoi cette identité peut-elle être réactivée ?"></label><button type="submit">Réactiver sans restaurer les anciennes sessions</button></form>`
-          : '<p class="muted">Aucune action autorisée pour cette identité.</p>';
-    const active = identity.status === "active";
-    const state = active ? "Identité active" : "Identité suspendue";
-    return `<article class="entry"><p><span class="pill${active ? "" : " inactive"}">${state}</span> · ${escapeHtml(sessions)}</p><h3>${escapeHtml(identity.displayName)}</h3><p>${escapeHtml(identity.email)}</p>${action}</article>`;
+    const actions = [];
+    if (identity.current) {
+      actions.push('<p class="muted">Ta propre identité ne peut pas être suspendue ni désactivée depuis cette console.</p>');
+    } else {
+      if (identity.canSuspend) actions.push(`<form class="grant" method="post" action="/admin/identities/suspend"><input type="hidden" name="csrf" value="${escapeHtml(csrf)}"><input type="hidden" name="target" value="${escapeHtml(actionToken(identity))}"><label>Justification de la suspension<input name="justification" minlength="20" maxlength="500" required placeholder="Pourquoi cette identité doit-elle être suspendue ?"></label><button class="secondary" type="submit">Suspendre l’identité et fermer ses sessions</button></form>`);
+      if (identity.canReactivate) actions.push(`<form class="grant" method="post" action="/admin/identities/reactivate"><input type="hidden" name="csrf" value="${escapeHtml(csrf)}"><input type="hidden" name="target" value="${escapeHtml(actionToken(identity))}"><label>Justification de la réactivation<input name="justification" minlength="20" maxlength="500" required placeholder="Pourquoi cette identité peut-elle être réactivée ?"></label><button type="submit">Réactiver sans restaurer les anciennes sessions</button></form>`);
+      if (identity.canDisable) actions.push(`<form class="grant" method="post" action="/admin/identities/disable"><input type="hidden" name="csrf" value="${escapeHtml(csrf)}"><input type="hidden" name="target" value="${escapeHtml(actionToken(identity))}"><label>Justification de la désactivation<input name="justification" minlength="20" maxlength="500" required placeholder="Pourquoi cette identité doit-elle quitter l’écosystème ?"></label><button class="secondary" type="submit">Désactiver et révoquer tous les accès</button></form>`);
+    }
+    if (!actions.length) actions.push('<p class="muted">Aucune action autorisée pour cette identité.</p>');
+    const labels = { active: "Identité active", suspended: "Identité suspendue", disabled: "Identité désactivée" };
+    return `<article class="entry"><p><span class="pill${identity.status === "active" ? "" : " inactive"}">${labels[identity.status] || "Identité indisponible"}</span> · ${escapeHtml(sessions)}</p><h3>${escapeHtml(identity.displayName)}</h3><p>${escapeHtml(identity.email)}</p>${actions.join("")}</article>`;
   }).join("");
-  return `<h1>Cycle de vie des identités</h1><p>Cette console suspend une identité active avec ses sessions ou réactive une identité suspendue sans restaurer aucune ancienne connexion. Elle ne supprime ni la personne, ni ses affectations, ni son histoire.</p><div class="facts"><p><strong>Refus par défaut :</strong> les permissions distinctes <code>administration:identities:suspend</code> et <code>administration:identities:reactivate</code> ouvrent uniquement leur action respective.</p><p><strong>Atomicité :</strong> si l’état ou une session change pendant la décision, aucune transition partielle n’est conservée.</p><p><strong>Non-résurrection :</strong> une réactivation rend seulement l’identité à nouveau admissible à une connexion future ; toutes les anciennes sessions restent expirées ou révoquées.</p></div><div class="directory">${cards || '<div class="facts"><p>Aucune identité active ou suspendue enregistrée.</p></div>'}</div><nav><a class="button secondary" href="/">Retour à l’accueil</a><a class="button secondary" href="/admin/sessions">Sessions actives</a></nav>`;
+  return `<h1>Cycle de vie des identités</h1><p>Cette console suspend temporairement, réactive sans restaurer de connexion ou désactive une identité en révoquant définitivement ses sessions et affectations actives. Elle ne supprime ni la personne ni son histoire.</p><div class="facts"><p><strong>Refus par défaut :</strong> les permissions distinctes <code>administration:identities:suspend</code>, <code>administration:identities:reactivate</code> et <code>administration:identities:disable</code> ouvrent uniquement leur action respective.</p><p><strong>Atomicité :</strong> si l’état, une session ou une affectation change pendant la décision, aucune transition partielle n’est conservée.</p><p><strong>Non-résurrection :</strong> une réactivation ne restaure aucune session ; une désactivation révoque aussi les affectations et n’est pas réversible depuis cette console.</p></div><div class="directory">${cards || '<div class="facts"><p>Aucune identité active, suspendue ou désactivée enregistrée.</p></div>'}</div><nav><a class="button secondary" href="/">Retour à l’accueil</a><a class="button secondary" href="/admin/sessions">Sessions actives</a></nav>`;
 }
 
 function renderNotificationOperations(snapshot) {
@@ -455,7 +456,8 @@ export function createHttpHandler({
     const identityStateRoot = url.pathname === "/admin/identities";
     const identitySuspendRoute = url.pathname === "/admin/identities/suspend";
     const identityReactivateRoute = url.pathname === "/admin/identities/reactivate";
-    if (identityStateRoot || identitySuspendRoute || identityReactivateRoute) {
+    const identityDisableRoute = url.pathname === "/admin/identities/disable";
+    if (identityStateRoot || identitySuspendRoute || identityReactivateRoute || identityDisableRoute) {
       let session;
       try {
         if (!oidcConfig) throw new Error("oidc_not_configured");
@@ -499,7 +501,7 @@ export function createHttpHandler({
         }
         return;
       }
-      if ((identitySuspendRoute || identityReactivateRoute) && request.method === "POST") {
+      if ((identitySuspendRoute || identityReactivateRoute || identityDisableRoute) && request.method === "POST") {
         try {
           const form = await readForm(request, maxBodyBytes);
           if (!safeEqual(form.get("csrf"), session.csrf)) throw new HttpInputError(403, "invalid_csrf");
@@ -514,7 +516,8 @@ export function createHttpHandler({
             throw new HttpInputError(400, "invalid_justification");
           }
           const operation = identitySuspendRoute
-            ? identityStateManagement.suspend : identityStateManagement.reactivate;
+            ? identityStateManagement.suspend
+            : identityReactivateRoute ? identityStateManagement.reactivate : identityStateManagement.disable;
           await operation({
             operatorIdentityId: session.identityId,
             targetIdentityId: target.targetIdentityId,

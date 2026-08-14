@@ -15,6 +15,7 @@
     "bootstrap:identity-link-admin": "node identity-link-admin-bootstrap-cli.mjs",
     "bootstrap:identity-state-admin": "node identity-state-admin-bootstrap-cli.mjs",
     "bootstrap:identity-reactivation-admin": "node identity-reactivation-admin-bootstrap-cli.mjs",
+    "bootstrap:identity-disablement-admin": "node identity-disablement-admin-bootstrap-cli.mjs",
     "create:human-identity-preprod": "node human-identity-preprod-cli.mjs",
     "bootstrap:notification-operations": "node notification-operations-admin-bootstrap-cli.mjs",
     "bootstrap:tasks-pilot": "node tasks-pilot-bootstrap-cli.mjs",
