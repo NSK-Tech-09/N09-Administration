@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
-  administrationSessionConfigFromEnvironment, httpConfigFromEnvironment, mariaDbConfigFromEnvironment,
+  administrationSessionConfigFromEnvironment, energyApplicationSessionConfigFromEnvironment,
+  httpConfigFromEnvironment, mariaDbConfigFromEnvironment,
   tasksApplicationSessionConfigFromEnvironment,
 } from "./runtime-config.mjs";
 
@@ -44,6 +45,24 @@ test("prépare l'émission puis l'opposabilité des sessions Tâches uniquement 
   }), /require preprod or production/);
   assert.throws(() => tasksApplicationSessionConfigFromEnvironment({
     N09_TASKS_SESSION_MODE: "observe",
+  }), /disabled, issue or enforce/);
+});
+
+test("borne les sessions Énergie à la production et à leur application", () => {
+  assert.deepEqual(energyApplicationSessionConfigFromEnvironment({}), {
+    mode: "disabled", applicationId: "n09-energie",
+    idleTtlMs: 3_600_000, absoluteTtlMs: 14_400_000, touchIntervalMs: 300_000,
+    contextLabel: "Connexion web N09 – Énergie",
+    issueJustification: "Ouverture de la session applicative N09 – Énergie",
+  });
+  assert.equal(energyApplicationSessionConfigFromEnvironment({
+    N09_ENVIRONMENT: "production", N09_ENERGY_SESSION_MODE: "enforce",
+  }).mode, "enforce");
+  assert.throws(() => energyApplicationSessionConfigFromEnvironment({
+    N09_ENVIRONMENT: "preprod", N09_ENERGY_SESSION_MODE: "issue",
+  }), /require production/);
+  assert.throws(() => energyApplicationSessionConfigFromEnvironment({
+    N09_ENVIRONMENT: "production", N09_ENERGY_SESSION_MODE: "observe",
   }), /disabled, issue or enforce/);
 });
 

@@ -101,3 +101,40 @@ export function tasksApplicationSessionConfigFromEnvironment(environment) {
     touchIntervalMs,
   });
 }
+
+export function energyApplicationSessionConfigFromEnvironment(environment) {
+  const mode = environment.N09_ENERGY_SESSION_MODE?.trim() || "disabled";
+  if (!["disabled", "issue", "enforce"].includes(mode)) {
+    throw new Error("N09_ENERGY_SESSION_MODE must be disabled, issue or enforce");
+  }
+  if (mode !== "disabled" && environment.N09_ENVIRONMENT !== "production") {
+    throw new Error("energy application sessions require production");
+  }
+  const idleTtlMs = positiveInteger(
+    environment.N09_ENERGY_SESSION_IDLE_TTL_MS,
+    60 * 60_000,
+    "N09_ENERGY_SESSION_IDLE_TTL_MS",
+  );
+  const absoluteTtlMs = positiveInteger(
+    environment.N09_ENERGY_SESSION_ABSOLUTE_TTL_MS,
+    4 * 60 * 60_000,
+    "N09_ENERGY_SESSION_ABSOLUTE_TTL_MS",
+  );
+  const touchIntervalMs = positiveInteger(
+    environment.N09_ENERGY_SESSION_TOUCH_INTERVAL_MS,
+    5 * 60_000,
+    "N09_ENERGY_SESSION_TOUCH_INTERVAL_MS",
+  );
+  if (idleTtlMs > absoluteTtlMs || touchIntervalMs >= idleTtlMs) {
+    throw new Error("invalid energy session lifetime settings");
+  }
+  return Object.freeze({
+    mode,
+    applicationId: "n09-energie",
+    idleTtlMs,
+    absoluteTtlMs,
+    touchIntervalMs,
+    contextLabel: "Connexion web N09 – Énergie",
+    issueJustification: "Ouverture de la session applicative N09 – Énergie",
+  });
+}
