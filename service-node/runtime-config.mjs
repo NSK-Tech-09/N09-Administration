@@ -72,8 +72,8 @@ export function tasksApplicationSessionConfigFromEnvironment(environment) {
   if (!["disabled", "issue", "enforce"].includes(mode)) {
     throw new Error("N09_TASKS_SESSION_MODE must be disabled, issue or enforce");
   }
-  if (mode !== "disabled" && environment.N09_ENVIRONMENT !== "preprod") {
-    throw new Error("tasks application sessions are restricted to preprod");
+  if (mode !== "disabled" && !["preprod", "production"].includes(environment.N09_ENVIRONMENT)) {
+    throw new Error("tasks application sessions require preprod or production");
   }
   const idleTtlMs = positiveInteger(
     environment.N09_TASKS_SESSION_IDLE_TTL_MS,
