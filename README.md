@@ -172,6 +172,13 @@ cibles isolées et la fenêtre de changement. Il refuse tout secret, toute marqu
 de préproduction, tout canal externe ouvert et toute modification de N09 –
 Énergie ; voir `docs/LOT-57-CONTRAT-PROMOTION-PRODUCTION.md`.
 
+Le lot 60 étend l’autorité de session centrale à N09 – Énergie et en consigne
+la recette de production réelle : connexion, autorisations, révocation,
+reconnexion, contrôles de sécurité, versions déployées et retours arrière. Il
+confirme également que l’ancien hébergement ne peut pas encore être résilié
+tant que le portail, les anciens noms publics et les archives historiques n’en
+sont pas sortis ; voir `docs/LOT-60-ENERGIE-PRODUCTION.md`.
+
 ## Prérequis et démarrage local
 
 - Python 3.11 ou supérieur ;
@@ -232,6 +239,7 @@ ne contient aucun secret réel. La production reste inchangée.
 - [`docs/LOT-55-REACTIVATION-GOUVERNEE-IDENTITES.md`](docs/LOT-55-REACTIVATION-GOUVERNEE-IDENTITES.md)
 - [`docs/LOT-56-DESACTIVATION-GOUVERNEE-IDENTITES.md`](docs/LOT-56-DESACTIVATION-GOUVERNEE-IDENTITES.md)
 - [`docs/LOT-57-CONTRAT-PROMOTION-PRODUCTION.md`](docs/LOT-57-CONTRAT-PROMOTION-PRODUCTION.md)
+- [`docs/LOT-60-ENERGIE-PRODUCTION.md`](docs/LOT-60-ENERGIE-PRODUCTION.md)
 - [`docs/ETAT-PREPROD-INFOMANIAK.md`](docs/ETAT-PREPROD-INFOMANIAK.md)
 - [`docs/CONFORMITE-NSES.md`](docs/CONFORMITE-NSES.md)
 - [`docs/CONTRAT-API-INTERNE.md`](docs/CONTRAT-API-INTERNE.md)
