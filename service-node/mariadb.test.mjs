@@ -562,3 +562,80 @@ test("annule la réactivation MariaDB si une session active subsiste", async () 
   assert.equal(calls.some((call) => typeof call === "object" && call.sql.includes("UPDATE identities")), false);
   assert.equal(calls.at(-1), "release");
 });
+
+test("désactive l’identité et révoque sessions et affectations MariaDB dans une transaction unique", async () => {
+  const active = persistedSession();
+  const observedAt = new Date("2026-08-13T05:10:00Z");
+  const reason = "Sortie définitive confirmée après contrôle humain complet";
+  const revokedSession = revokeApplicationSession(active, {
+    revokedByIdentityId: identity.identityId, reason, now: observedAt,
+  });
+  const assignment = {
+    assignmentId: "10000000-0000-4000-8000-000000000056",
+    subjectId: identity.identityId, applicationId: "n09-suivi-taches", roleId: "tasks-reader",
+    permissions: ["tasks:read"], scopeType: null, scopeId: null, conditions: [], status: "active",
+    validFrom: null, validUntil: null, reason: "Accès initial", decidedBy: null,
+    inheritedFromGroup: null, version: 1,
+  };
+  const revokedAssignment = { ...assignment, status: "revoked", reason, decidedBy: identity.identityId, version: 2 };
+  const correlationId = "identity-disablement-atomic";
+  const identityAuditEvent = createAuditEvent({
+    action: "identity.disabled", result: "success", source: "tests", correlationId,
+    actorId: identity.identityId, subjectId: identity.identityId,
+    previousValue: { status: "active" },
+    newValue: { status: "disabled", revoked_sessions: 1, revoked_assignments: 1 },
+    justification: reason,
+  });
+  const sessionAuditEvent = createApplicationSessionAuditEvent({
+    record: revokedSession, action: "application_session.revoked", actorId: identity.identityId,
+    correlationId, justification: reason,
+  });
+  const assignmentAuditEvent = createAuditEvent({
+    action: "assignment.revoked", result: "success", source: "tests", correlationId,
+    actorId: identity.identityId, subjectId: identity.identityId,
+    applicationId: assignment.applicationId, roleId: assignment.roleId,
+    previousValue: { status: "active", version: 1 },
+    newValue: { status: "revoked", version: 2 }, justification: reason,
+  });
+  const assignmentRow = {
+    assignment_id: assignment.assignmentId, subject_id: assignment.subjectId,
+    application_id: assignment.applicationId, role_id: assignment.roleId,
+    permissions_json: JSON.stringify(assignment.permissions), scope_type: null, scope_id: null,
+    conditions_json: "[]", status: "active", valid_from: null, valid_until: null,
+    reason: assignment.reason, decided_by: null, inherited_from_group: null, version: 1,
+  };
+  const calls = [];
+  const connection = {
+    beginTransaction: async () => calls.push("begin"), commit: async () => calls.push("commit"),
+    rollback: async () => calls.push("rollback"), release: () => calls.push("release"),
+    execute: async (sql, values = []) => {
+      calls.push({ sql, values });
+      if (sql.startsWith("SELECT email, display_name, status FROM identities")) {
+        return [[{ email: identity.email, display_name: identity.displayName, status: "active" }]];
+      }
+      if (sql.includes("FROM application_sessions") && sql.includes("FOR UPDATE")) {
+        return [[sessionRow(active)]];
+      }
+      if (sql.includes("FROM access_assignments") && sql.includes("FOR UPDATE")) return [[assignmentRow]];
+      if (sql.startsWith("SELECT current_hash")) return [[{ current_hash: "" }]];
+      return [{ affectedRows: 1 }];
+    },
+  };
+  await new MariaDbRepository({ getConnection: async () => connection }).disableIdentityAndRevokeAccess({
+    identity: { ...identity, status: "disabled" }, expectedStatus: "active", observedAt,
+    identityAuditEvent,
+    closures: [{ record: revokedSession, expectedVersion: active.version, auditEvent: sessionAuditEvent }],
+    assignmentRevocations: [{
+      assignment: revokedAssignment, expectedVersion: assignment.version, auditEvent: assignmentAuditEvent,
+    }],
+  });
+  assert.equal(calls.filter((call) => typeof call === "object" &&
+    call.sql.includes("UPDATE identities SET status = 'disabled'")).length, 1);
+  assert.equal(calls.filter((call) => typeof call === "object" && call.sql.includes("SET revoked_at")).length, 1);
+  assert.equal(calls.filter((call) => typeof call === "object" &&
+    call.sql.includes("UPDATE access_assignments")).length, 1);
+  assert.equal(calls.filter((call) => typeof call === "object" &&
+    call.sql.includes("INSERT INTO audit_events")).length, 3);
+  assert.equal(calls.filter((call) => call === "commit").length, 1);
+  assert.equal(calls.at(-1), "release");
+});

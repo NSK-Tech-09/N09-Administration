@@ -10,6 +10,16 @@
 | `status` | `invited`, `active`, `suspended`, `disabled`, `archived`, `deleted` |
 | `identity_type` | `human` ou `service`, avec propriétaire pour un service |
 
+Les états de cycle de vie n’ont pas la même portée :
+
+- `suspended` constitue une interruption temporaire et réversible par une
+  décision gouvernée distincte ;
+- `disabled` constitue une sortie durable. Elle révoque atomiquement les
+  sessions et affectations actives, conserve l’identité et son historique, et
+  n’est pas réactivable par le parcours courant ;
+- toute identité dont l’état n’est pas `active` est refusée par défaut lors
+  d’une décision d’accès, indépendamment des affectations historiques.
+
 ## Application
 
 Chaque application possède un identifiant immuable, des responsables métier et

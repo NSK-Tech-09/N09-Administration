@@ -718,6 +718,143 @@ export class MariaDbRepository {
     });
   }
 
+  async disableIdentityAndRevokeAccess({
+    identity, expectedStatus, observedAt, identityAuditEvent, closures, assignmentRevocations,
+  }) {
+    if (identity.status !== "disabled" || !["active", "suspended"].includes(expectedStatus) ||
+        identityAuditEvent?.action !== "identity.disabled" ||
+        identityAuditEvent.subject_id !== identity.identityId ||
+        identityAuditEvent.previous_value?.status !== expectedStatus ||
+        identityAuditEvent.new_value?.status !== "disabled" ||
+        !Array.isArray(closures) || !Array.isArray(assignmentRevocations) ||
+        identityAuditEvent.new_value?.revoked_sessions !== closures.length ||
+        identityAuditEvent.new_value?.revoked_assignments !== assignmentRevocations.length) {
+      throw new Error("invalid identity disablement bundle");
+    }
+    const decisionTime = new Date(observedAt);
+    if (!Number.isFinite(decisionTime.valueOf())) throw new Error("invalid identity disablement time");
+    const orderedClosures = [...closures].sort((left, right) => left.record.sessionId.localeCompare(right.record.sessionId));
+    const orderedAssignments = [...assignmentRevocations]
+      .sort((left, right) => left.assignment.assignmentId.localeCompare(right.assignment.assignmentId));
+    for (const { record, auditEvent } of orderedClosures) {
+      if (record.identityId !== identity.identityId || auditEvent?.action !== "application_session.revoked") {
+        throw new Error("identity disablement session scope mismatch");
+      }
+      assertApplicationSessionAudit(record, auditEvent, "application_session.revoked");
+      if (auditEvent.actor_id !== identityAuditEvent.actor_id ||
+          auditEvent.correlation_id !== identityAuditEvent.correlation_id ||
+          auditEvent.justification !== identityAuditEvent.justification ||
+          record.revocationReason !== identityAuditEvent.justification) {
+        throw new Error("identity disablement audit correlation mismatch");
+      }
+    }
+    for (const { assignment, expectedVersion, auditEvent } of orderedAssignments) {
+      if (assignment.subjectId !== identity.identityId || assignment.status !== "revoked" ||
+          auditEvent?.action !== "assignment.revoked" || auditEvent.subject_id !== identity.identityId ||
+          auditEvent.application_id !== assignment.applicationId ||
+          auditEvent.actor_id !== identityAuditEvent.actor_id ||
+          auditEvent.correlation_id !== identityAuditEvent.correlation_id ||
+          auditEvent.justification !== identityAuditEvent.justification ||
+          auditEvent.role_id !== assignment.roleId || assignment.reason !== identityAuditEvent.justification ||
+          assignment.decidedBy !== identityAuditEvent.actor_id ||
+          auditEvent.previous_value?.status !== "active" ||
+          auditEvent.previous_value?.version !== expectedVersion ||
+          auditEvent.new_value?.status !== "revoked" ||
+          auditEvent.new_value?.version !== assignment.version) {
+        throw new Error("identity disablement assignment scope mismatch");
+      }
+    }
+    return this.#transaction(async (connection) => {
+      const [identities] = await connection.execute(
+        "SELECT email, display_name, status FROM identities WHERE identity_id = ? FOR UPDATE", [identity.identityId],
+      );
+      const previousIdentity = identities[0];
+      if (!previousIdentity || previousIdentity.status !== expectedStatus) throw new Error("stale identity status");
+      if (previousIdentity.email !== identity.email || previousIdentity.display_name !== identity.displayName) {
+        throw new Error("identity context is immutable during disablement");
+      }
+      const [activeSessionRows] = await connection.execute(
+        `SELECT * FROM application_sessions
+         WHERE identity_id = ? AND revoked_at IS NULL AND idle_expires_at > ? AND absolute_expires_at > ?
+         ORDER BY session_id FOR UPDATE`,
+        [identity.identityId, asMariaDate(decisionTime), asMariaDate(decisionTime)],
+      );
+      const activeSessions = new Map(activeSessionRows.map((row) => {
+        const record = mapApplicationSession(row);
+        return [record.sessionId, record];
+      }));
+      if (activeSessions.size !== orderedClosures.length ||
+          orderedClosures.some(({ record }) => !activeSessions.has(record.sessionId))) {
+        throw new Error("identity active session set changed");
+      }
+      const [activeAssignmentRows] = await connection.execute(
+        `SELECT * FROM access_assignments
+         WHERE subject_id = ? AND status = 'active' ORDER BY assignment_id FOR UPDATE`,
+        [identity.identityId],
+      );
+      const activeAssignments = new Map(activeAssignmentRows.map((row) => [row.assignment_id, row]));
+      if (activeAssignments.size !== orderedAssignments.length ||
+          orderedAssignments.some(({ assignment }) => !activeAssignments.has(assignment.assignmentId))) {
+        throw new Error("identity active assignment set changed");
+      }
+      for (const { record, expectedVersion } of orderedClosures) {
+        const previous = activeSessions.get(record.sessionId);
+        if (!previous || previous.version !== expectedVersion || record.version !== expectedVersion + 1) {
+          throw new Error("stale application session version");
+        }
+        assertApplicationSessionImmutableContext(previous, record);
+        if (previous.lastSeenAt !== record.lastSeenAt || previous.idleExpiresAt !== record.idleExpiresAt ||
+            previous.revokedAt || !record.revokedAt || !record.revocationReason) {
+          throw new Error("invalid application session revocation");
+        }
+      }
+      for (const { assignment, expectedVersion } of orderedAssignments) {
+        const previous = activeAssignments.get(assignment.assignmentId);
+        if (!previous || Number(previous.version) !== expectedVersion || assignment.version !== expectedVersion + 1 ||
+            previous.subject_id !== assignment.subjectId || previous.application_id !== assignment.applicationId ||
+            previous.role_id !== assignment.roleId || previous.scope_type !== assignment.scopeType ||
+            previous.scope_id !== assignment.scopeId ||
+            JSON.stringify(parseJson(previous.permissions_json)) !== JSON.stringify(assignment.permissions) ||
+            JSON.stringify(parseJson(previous.conditions_json)) !== JSON.stringify(assignment.conditions)) {
+          throw new Error("stale access assignment version");
+        }
+      }
+      const [identityResult] = await connection.execute(
+        "UPDATE identities SET status = 'disabled' WHERE identity_id = ? AND status = ?",
+        [identity.identityId, expectedStatus],
+      );
+      if (identityResult.affectedRows !== 1) throw new Error("stale identity status");
+      await this.#appendAudit(connection, identityAuditEvent);
+      for (const { record, expectedVersion, auditEvent } of orderedClosures) {
+        const [result] = await connection.execute(
+          `UPDATE application_sessions
+           SET revoked_at = ?, revoked_by_identity_id = ?, revocation_reason = ?, version = ?
+           WHERE session_id = ? AND identity_id = ? AND version = ? AND revoked_at IS NULL`,
+          [asMariaDate(record.revokedAt), record.revokedByIdentityId, record.revocationReason,
+           record.version, record.sessionId, identity.identityId, expectedVersion],
+        );
+        if (result.affectedRows !== 1) throw new Error("stale application session version");
+        await this.#appendAudit(connection, auditEvent);
+      }
+      for (const { assignment, expectedVersion, auditEvent } of orderedAssignments) {
+        const [result] = await connection.execute(
+          `UPDATE access_assignments
+           SET status = 'revoked', reason = ?, decided_by = ?, version = ?
+           WHERE assignment_id = ? AND subject_id = ? AND version = ? AND status = 'active'`,
+          [assignment.reason, assignment.decidedBy, assignment.version, assignment.assignmentId,
+           identity.identityId, expectedVersion],
+        );
+        if (result.affectedRows !== 1) throw new Error("stale access assignment version");
+        await this.#appendAudit(connection, auditEvent);
+      }
+      return {
+        identity: structuredClone(identity),
+        revokedSessions: orderedClosures.length,
+        revokedAssignments: orderedAssignments.length,
+      };
+    });
+  }
+
   async listAllApplicationSessions() {
     const [rows] = await this.pool.execute(
       `SELECT * FROM application_sessions

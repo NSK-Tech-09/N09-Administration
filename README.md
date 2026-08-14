@@ -148,12 +148,20 @@ cible scellée, l’interdiction de l’auto-suspension et le rollback concurren
 séparés des autres responsabilités ; voir
 `docs/LOT-54-SUSPENSION-ATOMIQUE-IDENTITES.md`.
 
-Le lot 55 complète localement ce cycle sans ressusciter le passé : une identité
+Le lot 55 complète en préproduction ce cycle sans ressusciter le passé : une identité
 suspendue peut être réactivée par le pouvoir distinct
 `administration:identities:reactivate`, mais aucune session révoquée ou expirée
 n’est restaurée. La transition est atomique, auditée, refusée si une session
 active subsiste et impose une nouvelle authentification ; voir
 `docs/LOT-55-REACTIVATION-GOUVERNEE-IDENTITES.md`.
+
+Le lot 56 prépare localement la sortie définitive sans effacement de mémoire :
+une identité active ou suspendue peut être désactivée par le pouvoir distinct
+`administration:identities:disable`. La même transaction passe l’identité à
+`disabled`, révoque toutes ses sessions et toutes ses affectations actives, puis
+audite chaque transition avec une corrélation commune. L’auto-désactivation et
+la désactivation directe d’une autre autorité de désactivation sont refusées ;
+voir `docs/LOT-56-DESACTIVATION-GOUVERNEE-IDENTITES.md`.
 
 ## Prérequis et démarrage local
 
@@ -213,6 +221,7 @@ ne contient aucun secret réel. La production reste inchangée.
 - [`docs/LOT-53-REVOCATION-OPERATEUR-SESSIONS.md`](docs/LOT-53-REVOCATION-OPERATEUR-SESSIONS.md)
 - [`docs/LOT-54-SUSPENSION-ATOMIQUE-IDENTITES.md`](docs/LOT-54-SUSPENSION-ATOMIQUE-IDENTITES.md)
 - [`docs/LOT-55-REACTIVATION-GOUVERNEE-IDENTITES.md`](docs/LOT-55-REACTIVATION-GOUVERNEE-IDENTITES.md)
+- [`docs/LOT-56-DESACTIVATION-GOUVERNEE-IDENTITES.md`](docs/LOT-56-DESACTIVATION-GOUVERNEE-IDENTITES.md)
 - [`docs/ETAT-PREPROD-INFOMANIAK.md`](docs/ETAT-PREPROD-INFOMANIAK.md)
 - [`docs/CONFORMITE-NSES.md`](docs/CONFORMITE-NSES.md)
 - [`docs/CONTRAT-API-INTERNE.md`](docs/CONTRAT-API-INTERNE.md)

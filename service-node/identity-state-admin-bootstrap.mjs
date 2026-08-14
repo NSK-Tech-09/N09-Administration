@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { createAuditEvent } from "./audit.mjs";
 import { ADMIN_APPLICATION_ID } from "./identity-link-admin.mjs";
 import {
+  IDENTITY_DISABLEMENT_PERMISSION,
   IDENTITY_REACTIVATION_PERMISSION,
   IDENTITY_SUSPENSION_PERMISSION,
 } from "./identity-state-management.mjs";
@@ -24,6 +25,20 @@ export function assertIdentityReactivationBootstrapTarget({ database, allowBoots
   if (allowBootstrap !== "true") throw new Error("identity reactivation bootstrap is not explicitly enabled");
   if (typeof database !== "string" || !database.endsWith("_preprod")) {
     throw new Error("identity reactivation bootstrap can only target preproduction");
+  }
+  if (typeof identityId !== "string" || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(identityId)) {
+    throw new Error("a valid target identity id is required");
+  }
+  const length = typeof justification === "string" ? justification.trim().length : 0;
+  if (length < 20 || length > 500) {
+    throw new Error("an explicit bootstrap justification between 20 and 500 characters is required");
+  }
+}
+
+export function assertIdentityDisablementBootstrapTarget({ database, allowBootstrap, identityId, justification }) {
+  if (allowBootstrap !== "true") throw new Error("identity disablement bootstrap is not explicitly enabled");
+  if (typeof database !== "string" || !database.endsWith("_preprod")) {
+    throw new Error("identity disablement bootstrap can only target preproduction");
   }
   if (typeof identityId !== "string" || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(identityId)) {
     throw new Error("a valid target identity id is required");
@@ -96,5 +111,19 @@ export async function bootstrapIdentityReactivationAdministrator(repository, {
     permission: IDENTITY_REACTIVATION_PERMISSION,
     minimumCatalogVersion: 6,
     source: "identity-reactivation-bootstrap",
+  });
+}
+
+export async function bootstrapIdentityDisablementAdministrator(repository, {
+  database, allowBootstrap, identityId, justification,
+  correlationId = randomUUID(), assignmentId = randomUUID(),
+} = {}) {
+  return bootstrapIdentityStateAdministrator(repository, {
+    database, allowBootstrap, identityId, justification, correlationId, assignmentId,
+    assertTarget: assertIdentityDisablementBootstrapTarget,
+    roleId: "identity-disablement-administrator",
+    permission: IDENTITY_DISABLEMENT_PERMISSION,
+    minimumCatalogVersion: 7,
+    source: "identity-disablement-bootstrap",
   });
 }

@@ -6,6 +6,7 @@ import { ADMIN_APPLICATION_ID, LINK_DECISION_PERMISSION } from "./identity-link-
 import { NOTIFICATION_OPERATIONS_READ_PERMISSION } from "./notification-operations-admin.mjs";
 import { SESSION_REVOCATION_PERMISSION } from "./operator-session-management.mjs";
 import {
+  IDENTITY_DISABLEMENT_PERMISSION,
   IDENTITY_REACTIVATION_PERMISSION,
   IDENTITY_SUSPENSION_PERMISSION,
 } from "./identity-state-management.mjs";
@@ -122,7 +123,7 @@ export const ADMINISTRATION_ACCESS_CATALOG_V5 = Object.freeze({
   ],
 });
 
-export const ADMINISTRATION_ACCESS_CATALOG = Object.freeze({
+export const ADMINISTRATION_ACCESS_CATALOG_V6 = Object.freeze({
   ...ADMINISTRATION_ACCESS_CATALOG_V5,
   catalog_version: 6,
   permissions: [
@@ -142,6 +143,31 @@ export const ADMINISTRATION_ACCESS_CATALOG = Object.freeze({
       description: "Réactive une identité suspendue sans restaurer ses sessions ni contourner les autres pouvoirs centraux.",
       status: "active",
       permissions: [IDENTITY_REACTIVATION_PERMISSION],
+      scope_types: ["global"],
+    },
+  ],
+});
+
+export const ADMINISTRATION_ACCESS_CATALOG = Object.freeze({
+  ...ADMINISTRATION_ACCESS_CATALOG_V6,
+  catalog_version: 7,
+  permissions: [
+    ...ADMINISTRATION_ACCESS_CATALOG_V6.permissions,
+    {
+      permission_id: IDENTITY_DISABLEMENT_PERMISSION,
+      display_name: "Désactiver définitivement une identité",
+      description: "Désactiver une identité NSK, révoquer atomiquement ses sessions et toutes ses affectations actives, sans supprimer son histoire.",
+      status: "active",
+    },
+  ],
+  roles: [
+    ...ADMINISTRATION_ACCESS_CATALOG_V6.roles,
+    {
+      role_id: "identity-disablement-administrator",
+      display_name: "Responsable des sorties d’écosystème",
+      description: "Désactive une identité et révoque ses accès sans pouvoir la supprimer ni restaurer ultérieurement ses anciens droits.",
+      status: "active",
+      permissions: [IDENTITY_DISABLEMENT_PERMISSION],
       scope_types: ["global"],
     },
   ],
@@ -214,6 +240,18 @@ export async function publishAdministrationAccessCatalog(repository, {
     });
     if (![200, 201].includes(transition.status)) {
       throw new Error(transition.body.error || "administration catalog v5 publication failed");
+    }
+    latest = await repository.getLatestApplicationAccessCatalog(ADMIN_APPLICATION_ID);
+  }
+  if (latest.catalogVersion === 5) {
+    const transition = await publishApplicationAccessCatalog({
+      repository,
+      principal: { applicationId: ADMIN_APPLICATION_ID, audience: ADMIN_APPLICATION_ID, correlationId },
+      payload: ADMINISTRATION_ACCESS_CATALOG_V6,
+      source: "administration-catalog-bootstrap",
+    });
+    if (![200, 201].includes(transition.status)) {
+      throw new Error(transition.body.error || "administration catalog v6 publication failed");
     }
     latest = await repository.getLatestApplicationAccessCatalog(ADMIN_APPLICATION_ID);
   }
