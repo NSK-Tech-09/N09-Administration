@@ -28,6 +28,14 @@ import {
 const DEFAULT_MAX_BODY_BYTES = 64 * 1024;
 const CURRENT_SESSION_VERSION = 2;
 
+function setSecurityHeaders(response) {
+  response.setHeader("strict-transport-security", "max-age=31536000; includeSubDomains");
+  response.setHeader("x-content-type-options", "nosniff");
+  response.setHeader("x-frame-options", "DENY");
+  response.setHeader("referrer-policy", "no-referrer");
+  response.setHeader("permissions-policy", "camera=(), microphone=(), geolocation=(), payment=()");
+}
+
 class HttpInputError extends Error {
   constructor(status, code) {
     super(code);
@@ -355,6 +363,7 @@ export function createHttpHandler({
   }
 
   return async function handle(request, response) {
+    setSecurityHeaders(response);
     const url = new URL(request.url, "https://n09.invalid");
     if (url.pathname === "/health" && request.method === "GET") {
       writeJson(response, 200, { status: "ok" });

@@ -19,6 +19,7 @@
     "create:human-identity-preprod": "node human-identity-preprod-cli.mjs",
     "bootstrap:notification-operations": "node notification-operations-admin-bootstrap-cli.mjs",
     "bootstrap:tasks-pilot": "node tasks-pilot-bootstrap-cli.mjs",
+    "bootstrap:energy-production": "node energy-production-bootstrap-cli.mjs",
     "retire:synthetic-preprod": "node retire-synthetic-preprod-cli.mjs",
     "process:notifications": "node notification-consumer-cli.mjs",
     "seed:synthetic-preprod": "node seed-synthetic-preprod-cli.mjs",

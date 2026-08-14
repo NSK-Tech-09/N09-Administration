@@ -53,3 +53,32 @@ test("verrouille une configuration partielle ou un secret trop court", () => {
     N09_TASKS_INTERNAL_CLIENT_ID: clientId, N09_TASKS_INTERNAL_CLIENT_SECRET: "short",
   }), /invalid/);
 });
+
+test("charge plusieurs applications techniques sans partager leur audience", () => {
+  const clients = internalClientsFromEnvironment({
+    N09_INTERNAL_CLIENTS_JSON: JSON.stringify([
+      { client_id: "tasks-production", application_id: "n09-suivi-taches", secret },
+      { client_id: "energy-production", application_id: "n09-energie", secret: `${secret}-energy` },
+    ]),
+  });
+  assert.equal(clients.size, 2);
+  assert.deepEqual(clients.get("tasks-production"), { applicationId: "n09-suivi-taches", secret });
+  assert.deepEqual(clients.get("energy-production"), { applicationId: "n09-energie", secret: `${secret}-energy` });
+});
+
+test("refuse les doublons et les configurations JSON ambiguÃ«s", () => {
+  assert.throws(() => internalClientsFromEnvironment({ N09_INTERNAL_CLIENTS_JSON: "{}" }), /invalid/);
+  assert.throws(() => internalClientsFromEnvironment({
+    N09_INTERNAL_CLIENTS_JSON: JSON.stringify([
+      { client_id: "duplicate", application_id: "n09-suivi-taches", secret },
+      { client_id: "duplicate", application_id: "n09-energie", secret: `${secret}-energy` },
+    ]),
+  }), /invalid/);
+  assert.throws(() => internalClientsFromEnvironment({
+    N09_INTERNAL_CLIENTS_JSON: JSON.stringify([
+      { client_id: clientId, application_id: "n09-suivi-taches", secret },
+    ]),
+    N09_TASKS_INTERNAL_CLIENT_ID: clientId,
+    N09_TASKS_INTERNAL_CLIENT_SECRET: secret,
+  }), /duplicate/);
+});
