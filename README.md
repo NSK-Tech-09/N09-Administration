@@ -155,13 +155,15 @@ n’est restaurée. La transition est atomique, auditée, refusée si une sessio
 active subsiste et impose une nouvelle authentification ; voir
 `docs/LOT-55-REACTIVATION-GOUVERNEE-IDENTITES.md`.
 
-Le lot 56 prépare localement la sortie définitive sans effacement de mémoire :
+Le lot 56 déploie en préproduction la sortie définitive sans effacement de mémoire :
 une identité active ou suspendue peut être désactivée par le pouvoir distinct
 `administration:identities:disable`. La même transaction passe l’identité à
 `disabled`, révoque toutes ses sessions et toutes ses affectations actives, puis
 audite chaque transition avec une corrélation commune. L’auto-désactivation et
-la désactivation directe d’une autre autorité de désactivation sont refusées ;
-voir `docs/LOT-56-DESACTIVATION-GOUVERNEE-IDENTITES.md`.
+la désactivation directe d’une autre autorité de désactivation sont refusées.
+La recette réelle sur une identité jetable confirme l’état `disabled`, la
+révocation de son affectation temporaire et la validité de l’audit ; voir
+`docs/LOT-56-DESACTIVATION-GOUVERNEE-IDENTITES.md`.
 
 ## Prérequis et démarrage local
 
