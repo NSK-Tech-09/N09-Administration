@@ -63,5 +63,28 @@ et leur recette de sécurité ne sont pas terminées.
 - journaux sans jeton, secret ni donnée sensible ;
 - accessibilité clavier, mobile et thèmes du référentiel NSES.
 
-La production reste inchangée tant que le lot n'est pas publié puis déployé par
-une opération explicitement autorisée.
+## Publication et recette de production
+
+Le lot a été publié le 15 août 2026 par la PR `#76`, fusionnée dans `main` au
+commit `8d1982b07d46dac6231601b276174a48ba5ffcb0`. Cette release a été installée
+dans un répertoire immuable, puis activée par bascule atomique du lien
+`current`. La release précédente `4b36433572c220bc99d2c3ad5d48f288d3f9e104`
+reste disponible pour un retour arrière conservateur.
+
+La recette réelle a établi les preuves suivantes :
+
+- tests distants ciblés réussis avant activation ;
+- redémarrage du processus Node.js et journal `service_started` avec les
+  contrôles de sessions Portail, Tâches et Énergie en mode `enforce` ;
+- `https://prod-admin.nsktech.fr/health` répond `{"status":"ok"}` ;
+- une requête anonyme vers `/portal/login` reçoit la page NSK Tech 09 sans
+  redirection immédiate vers un fournisseur ;
+- Infomaniak est présenté comme disponible, tandis que le courriel, Google,
+  Microsoft et GitHub sont explicitement annoncés comme prévus ;
+- la destination `return_to` et le thème sombre sont conservés ;
+- depuis le portail, la connexion centrale ouvre N09 – Suivi des tâches et
+  retrouve l'identité Frédéric TRAVERS avec ses droits applicatifs.
+
+La production porte donc le parcours NSK multifournisseurs du lot 65. Aucun
+fournisseur supplémentaire n'est activé implicitement et aucun droit n'est
+déduit d'une adresse électronique.
