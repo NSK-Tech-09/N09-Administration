@@ -196,6 +196,14 @@ l'identité NSK elle-même ; Google, Microsoft, GitHub, le courriel sans mot de
 passe puis les clés d'accès suivent une trajectoire explicite et sans droit
 implicite ; voir `docs/LOT-65-CONNEXION-NSK-MULTIFOURNISSEURS.md`.
 
+Le lot 66 matérialise la première alternative universelle : un lien de
+connexion par courriel, éphémère et à usage unique, utilisable uniquement par
+une identité NSK déjà active. Le secret brut n'entre ni dans MariaDB ni dans
+l'audit ; un échec de remise invalide le lien. Tous les accès — portail,
+applications et espace personnel — passent désormais par le même sélecteur ;
+voir `docs/ADR-022-CONNEXION-COURRIEL-SANS-MOT-DE-PASSE.md` et
+`docs/LOT-66-CONNEXION-COURRIEL.md`.
+
 ## Prérequis et démarrage local
 
 - Python 3.11 ou supérieur ;
@@ -244,6 +252,8 @@ ne contient aucun secret réel. La production reste inchangée.
 - [`docs/ADR-018-OBSERVABILITE-NOTIFICATIONS.md`](docs/ADR-018-OBSERVABILITE-NOTIFICATIONS.md)
 - [`docs/ADR-019-TRAITEMENT-AUTONOME-NOTIFICATIONS.md`](docs/ADR-019-TRAITEMENT-AUTONOME-NOTIFICATIONS.md)
 - [`docs/ADR-020-SESSIONS-APPLICATIVES-REVOCABLES.md`](docs/ADR-020-SESSIONS-APPLICATIVES-REVOCABLES.md)
+- [`docs/ADR-021-SESSIONS-MULTI-APPLICATIONS.md`](docs/ADR-021-SESSIONS-MULTI-APPLICATIONS.md)
+- [`docs/ADR-022-CONNEXION-COURRIEL-SANS-MOT-DE-PASSE.md`](docs/ADR-022-CONNEXION-COURRIEL-SANS-MOT-DE-PASSE.md)
 - [`docs/LOT-45-OBSERVATION-INOPPOSABLE-SESSIONS.md`](docs/LOT-45-OBSERVATION-INOPPOSABLE-SESSIONS.md)
 - [`docs/LOT-46-ACTIVATION-OBSERVATION-SESSIONS-PREPROD.md`](docs/LOT-46-ACTIVATION-OBSERVATION-SESSIONS-PREPROD.md)
 - [`docs/LOT-47-OPPOSABILITE-SESSIONS-SUIVI-TACHES.md`](docs/LOT-47-OPPOSABILITE-SESSIONS-SUIVI-TACHES.md)
@@ -261,6 +271,7 @@ ne contient aucun secret réel. La production reste inchangée.
 - [`docs/LOT-62-DEMANDES-ACCES.md`](docs/LOT-62-DEMANDES-ACCES.md)
 - [`docs/LOT-63-CONFORMITE-ET-RETOUR-COMPTE.md`](docs/LOT-63-CONFORMITE-ET-RETOUR-COMPTE.md)
 - [`docs/LOT-65-CONNEXION-NSK-MULTIFOURNISSEURS.md`](docs/LOT-65-CONNEXION-NSK-MULTIFOURNISSEURS.md)
+- [`docs/LOT-66-CONNEXION-COURRIEL.md`](docs/LOT-66-CONNEXION-COURRIEL.md)
 - [`docs/ETAT-PREPROD-INFOMANIAK.md`](docs/ETAT-PREPROD-INFOMANIAK.md)
 - [`docs/CONFORMITE-NSES.md`](docs/CONFORMITE-NSES.md)
 - [`docs/CONTRAT-API-INTERNE.md`](docs/CONTRAT-API-INTERNE.md)

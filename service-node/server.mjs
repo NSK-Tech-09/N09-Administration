@@ -16,6 +16,7 @@ import { createPersonalSessionManagement } from "./personal-session-management.m
 import { createOperatorSessionManagement } from "./operator-session-management.mjs";
 import { createIdentityStateManagement } from "./identity-state-management.mjs";
 import { portalOriginsFromEnvironment } from "./portal-session-broker.mjs";
+import { createEmailLoginDelivery, emailLoginConfigFromEnvironment } from "./email-login.mjs";
 
 async function main() {
   const databaseConfig = mariaDbConfigFromEnvironment(process.env);
@@ -26,6 +27,8 @@ async function main() {
   const energySessionConfig = energyApplicationSessionConfigFromEnvironment(process.env);
   const portalSessionConfig = portalApplicationSessionConfigFromEnvironment(process.env);
   const portalOrigins = portalOriginsFromEnvironment(process.env);
+  const emailLoginConfig = emailLoginConfigFromEnvironment(process.env);
+  const emailLoginDelivery = createEmailLoginDelivery(emailLoginConfig);
   const authenticate = createInternalClientAuthenticator({ clients: internalClientsFromEnvironment(process.env) });
   const pool = await createMariaDbPool(databaseConfig);
   await pool.query("SELECT 1");
@@ -53,6 +56,9 @@ async function main() {
     operatorSessionManagement,
     identityStateManagement,
     portalOrigins,
+    emailLogin: emailLoginConfig.enabled
+      ? { ...emailLoginConfig, delivery: emailLoginDelivery }
+      : { enabled: false },
   }));
   server.on("clientError", (_error, socket) => socket.end("HTTP/1.1 400 Bad Request\r\n\r\n"));
 
@@ -73,6 +79,7 @@ async function main() {
     tasks_session_mode: tasksSessionConfig.mode,
     energy_session_mode: energySessionConfig.mode,
     portal_session_mode: portalSessionConfig.mode,
+    email_login_enabled: emailLoginConfig.enabled,
   }));
 }
 

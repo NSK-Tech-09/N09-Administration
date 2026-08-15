@@ -332,12 +332,16 @@ test("présente la file et les suppressions sans coordonnée personnelle ni acti
   });
 });
 
-test("présente le portail et démarre le parcours Infomaniak sécurisé", async () => {
+test("présente le sélecteur central et conserve le parcours Infomaniak sécurisé", async () => {
   await withServer({ oidcConfig }, async (baseUrl) => {
     const home = await fetch(`${baseUrl}/`);
     assert.equal(home.status, 200);
-    assert.match(await home.text(), /Continuer avec Infomaniak/);
+    assert.match(await home.text(), /Choisir une méthode de connexion/);
     assert.match(home.headers.get("content-security-policy"), /default-src 'none'/);
+
+    const selector = await fetch(`${baseUrl}/auth/login?return_to=%2F`);
+    assert.equal(selector.status, 200);
+    assert.match(await selector.text(), /Continuer avec Infomaniak/);
 
     const start = await fetch(`${baseUrl}/auth/infomaniak/start`, { redirect: "manual" });
     assert.equal(start.status, 302);

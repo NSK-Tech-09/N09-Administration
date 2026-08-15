@@ -6,6 +6,7 @@ const schema = await readFile(new URL("./mariadb/schema.sql", import.meta.url), 
 const sessionMigration = await readFile(new URL("./mariadb/migrations/20260813-application-sessions.sql", import.meta.url), "utf8");
 const sessionChecks = await readFile(new URL("./mariadb/migrations/20260813-application-sessions-checks.sql", import.meta.url), "utf8");
 const accessRequestMigration = await readFile(new URL("./mariadb/migrations/20260815-access-requests.sql", import.meta.url), "utf8");
+const emailLoginMigration = await readFile(new URL("./mariadb/migrations/20260815-email-login.sql", import.meta.url), "utf8");
 
 function normalizedSql(value) {
   return value.replaceAll(/--[^\n]*/g, "").replaceAll(/\s+/g, " ").trim();
@@ -54,6 +55,16 @@ test("le catalogue applicatif conserve chaque version sans secret", () => {
   assert.match(schema, /provisioning_json JSON NOT NULL/);
   const catalogTable = schema.match(/CREATE TABLE IF NOT EXISTS application_access_catalog_versions[\s\S]*?ENGINE=InnoDB;/)?.[0] ?? "";
   assert.doesNotMatch(catalogTable, /secret|certificate|token/i);
+});
+
+test("la connexion courriel ne conserve que l’empreinte et sa migration canonique", () => {
+  const canonicalTable = schema.match(/CREATE TABLE IF NOT EXISTS email_login_tokens[\s\S]*?ENGINE=InnoDB;/)?.[0] ?? "";
+  const migrationTable = emailLoginMigration.match(/CREATE TABLE IF NOT EXISTS email_login_tokens[\s\S]*?ENGINE=InnoDB;/)?.[0] ?? "";
+  assert.equal(normalizedSql(migrationTable), normalizedSql(canonicalTable));
+  assert.match(canonicalTable, /token_hash CHAR\(64\) NOT NULL UNIQUE/);
+  assert.match(canonicalTable, /status IN \('issued', 'consumed', 'delivery_failed'\)/);
+  assert.match(canonicalTable, /expires_at > requested_at/);
+  assert.doesNotMatch(canonicalTable, /raw_token|token_value|email VARCHAR|password|credential/i);
 });
 
 test("les demandes d’accès séparent les coordonnées, les lignes et les affectations gouvernées", () => {
