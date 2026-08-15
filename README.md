@@ -190,6 +190,12 @@ portail, décision humaine par application, affectation atomique fondée sur le
 catalogue publié et audit sans privilège implicite ; voir
 `docs/LOT-62-DEMANDES-ACCES.md`.
 
+Le lot 65 rétablit une porte d'entrée entièrement NSK avant toute délégation
+d'authentification. Infomaniak reste disponible sans être présenté comme
+l'identité NSK elle-même ; Google, Microsoft, GitHub, le courriel sans mot de
+passe puis les clés d'accès suivent une trajectoire explicite et sans droit
+implicite ; voir `docs/LOT-65-CONNEXION-NSK-MULTIFOURNISSEURS.md`.
+
 ## Prérequis et démarrage local
 
 - Python 3.11 ou supérieur ;
@@ -254,6 +260,7 @@ ne contient aucun secret réel. La production reste inchangée.
 - [`docs/LOT-61-PORTAIL-CLOUD.md`](docs/LOT-61-PORTAIL-CLOUD.md)
 - [`docs/LOT-62-DEMANDES-ACCES.md`](docs/LOT-62-DEMANDES-ACCES.md)
 - [`docs/LOT-63-CONFORMITE-ET-RETOUR-COMPTE.md`](docs/LOT-63-CONFORMITE-ET-RETOUR-COMPTE.md)
+- [`docs/LOT-65-CONNEXION-NSK-MULTIFOURNISSEURS.md`](docs/LOT-65-CONNEXION-NSK-MULTIFOURNISSEURS.md)
 - [`docs/ETAT-PREPROD-INFOMANIAK.md`](docs/ETAT-PREPROD-INFOMANIAK.md)
 - [`docs/CONFORMITE-NSES.md`](docs/CONFORMITE-NSES.md)
 - [`docs/CONTRAT-API-INTERNE.md`](docs/CONTRAT-API-INTERNE.md)

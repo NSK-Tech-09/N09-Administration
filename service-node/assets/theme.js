@@ -1,9 +1,11 @@
 const choices = new Set(["system", "light", "gray", "dark"]);
 const selector = document.querySelector("#nsk-theme");
 const stored = localStorage.getItem("nsk-theme");
-const initial = choices.has(stored) ? stored : "system";
+const requested = new URLSearchParams(window.location.search).get("theme");
+const initial = choices.has(requested) ? requested : choices.has(stored) ? stored : "system";
 
 document.documentElement.dataset.theme = initial;
+if (choices.has(requested)) localStorage.setItem("nsk-theme", requested);
 if (selector) {
   selector.value = initial;
   selector.addEventListener("change", () => {
