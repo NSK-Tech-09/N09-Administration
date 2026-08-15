@@ -116,3 +116,15 @@ test("révoque réellement la session portail et refuse les origines étrangère
     assert.equal(rejected.status, 401);
   });
 });
+
+test("ouvre le compte central en conservant l’application d’origine", async () => {
+  await withServer(async (origin) => {
+    const returnTo = "https://energie.nsktech.fr/?theme=dark#historique";
+    const account = await fetch(`${origin}/portal/account?return_to=${encodeURIComponent(returnTo)}&theme=dark`, {
+      headers: { cookie: identityCookie() }, redirect: "manual",
+    });
+    assert.equal(account.status, 303);
+    assert.equal(account.headers.get("location"),
+      `/account/sessions?return_to=${encodeURIComponent(returnTo)}&theme=dark`);
+  });
+});

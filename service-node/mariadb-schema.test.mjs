@@ -5,6 +5,7 @@ import test from "node:test";
 const schema = await readFile(new URL("./mariadb/schema.sql", import.meta.url), "utf8");
 const sessionMigration = await readFile(new URL("./mariadb/migrations/20260813-application-sessions.sql", import.meta.url), "utf8");
 const sessionChecks = await readFile(new URL("./mariadb/migrations/20260813-application-sessions-checks.sql", import.meta.url), "utf8");
+const accessRequestMigration = await readFile(new URL("./mariadb/migrations/20260815-access-requests.sql", import.meta.url), "utf8");
 
 function normalizedSql(value) {
   return value.replaceAll(/--[^\n]*/g, "").replaceAll(/\s+/g, " ").trim();
@@ -53,6 +54,21 @@ test("le catalogue applicatif conserve chaque version sans secret", () => {
   assert.match(schema, /provisioning_json JSON NOT NULL/);
   const catalogTable = schema.match(/CREATE TABLE IF NOT EXISTS application_access_catalog_versions[\s\S]*?ENGINE=InnoDB;/)?.[0] ?? "";
   assert.doesNotMatch(catalogTable, /secret|certificate|token/i);
+});
+
+test("les demandes d’accès séparent les coordonnées, les lignes et les affectations gouvernées", () => {
+  for (const tableName of ["access_requests", "access_request_lines"]) {
+    const expression = new RegExp(`CREATE TABLE IF NOT EXISTS ${tableName}[\\s\\S]*?ENGINE=InnoDB;`);
+    assert.equal(
+      normalizedSql(accessRequestMigration.match(expression)?.[0] ?? ""),
+      normalizedSql(schema.match(expression)?.[0] ?? ""),
+    );
+  }
+  assert.match(schema, /access_request_lines_assignment_fk FOREIGN KEY \(assignment_id\) REFERENCES access_assignments/);
+  assert.match(schema, /access_request_lines_decision CHECK/);
+  assert.match(schema, /UNIQUE KEY access_request_lines_application \(request_id, application_id\)/);
+  const requestTable = schema.match(/CREATE TABLE IF NOT EXISTS access_requests[\s\S]*?ENGINE=InnoDB;/)?.[0] ?? "";
+  assert.doesNotMatch(requestTable, /password|secret|token|credential/i);
 });
 
 test("la boite de notification conserve la charge et borne les transitions", () => {

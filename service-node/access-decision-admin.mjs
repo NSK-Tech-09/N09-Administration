@@ -122,7 +122,7 @@ export async function revokeAccessAssignment(repository, {
   return { correlationId, assignment: revoked };
 }
 
-export async function grantAccessAssignment(repository, {
+export async function prepareAccessAssignment(repository, {
   identityId,
   applicationId,
   roleId,
@@ -183,7 +183,7 @@ export async function grantAccessAssignment(repository, {
     if (!sameStrings(previous.permissions, role.permissions) || !sameStrings(previous.conditions, conditions)) {
       throw new Error("active assignment does not match the published catalog");
     }
-    return { correlationId, assignment: previous, created: false };
+    return { correlationId, assignment: previous, auditEvent: null, created: false };
   }
 
   const reason = justification.trim();
@@ -206,7 +206,7 @@ export async function grantAccessAssignment(repository, {
     inheritedFromGroup: null,
     version: previous ? previous.version + 1 : 1,
   };
-  await repository.saveAssignment(granted, createAuditEvent({
+  const auditEvent = createAuditEvent({
     action: "assignment.granted",
     result: "success",
     source: "access-administration",
@@ -227,6 +227,16 @@ export async function grantAccessAssignment(repository, {
       application_confirmation_required: conditions.length > 0,
     },
     justification: reason,
-  }));
-  return { correlationId, assignment: granted, created: true };
+  });
+  return { correlationId, assignment: granted, auditEvent, created: true };
+}
+
+export async function grantAccessAssignment(repository, input = {}) {
+  const prepared = await prepareAccessAssignment(repository, input);
+  if (prepared.created) await repository.saveAssignment(prepared.assignment, prepared.auditEvent);
+  return {
+    correlationId: prepared.correlationId,
+    assignment: prepared.assignment,
+    created: prepared.created,
+  };
 }
