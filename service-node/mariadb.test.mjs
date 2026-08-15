@@ -61,6 +61,52 @@ test("refuse un contexte d’audit incohérent avant d’ouvrir une transaction"
   assert.equal(pool.calls.length, 0);
 });
 
+test("persiste puis consomme atomiquement un lien courriel sans secret brut", async () => {
+  const calls = [];
+  const storedRow = {
+    email_login_id: "53b52d51-73af-4c56-b3f8-19272aebbe87",
+    token_hash: "c".repeat(64), identity_id: identity.identityId,
+    return_to: "/", status: "issued",
+    requested_at: new Date("2026-08-15T08:00:00.000Z"),
+    expires_at: new Date("2026-08-15T08:10:00.000Z"),
+    consumed_at: null, invalidated_at: null,
+  };
+  const connection = {
+    beginTransaction: async () => calls.push("begin"), commit: async () => calls.push("commit"),
+    rollback: async () => calls.push("rollback"), release: () => calls.push("release"),
+    execute: async (sql, values = []) => {
+      calls.push({ sql, values });
+      if (sql.startsWith("SELECT status FROM identities")) return [[{ status: "active" }]];
+      if (sql.startsWith("SELECT * FROM email_login_tokens")) return [[storedRow]];
+      if (sql.startsWith("SELECT current_hash")) return [[{ current_hash: "" }]];
+      return [{ affectedRows: 1 }];
+    },
+  };
+  const repository = new MariaDbRepository({ getConnection: async () => connection });
+  const record = {
+    tokenId: storedRow.email_login_id, tokenHash: storedRow.token_hash,
+    identityId: identity.identityId, returnTo: "/", status: "issued",
+    requestedAt: storedRow.requested_at.toISOString(), expiresAt: storedRow.expires_at.toISOString(),
+    consumedAt: null, invalidatedAt: null,
+  };
+  await repository.saveEmailLoginToken(record, createAuditEvent({
+    action: "email_login.requested", result: "pending", source: "tests",
+    correlationId: "email-login-request", subjectId: identity.identityId,
+  }));
+  const consumed = await repository.consumeEmailLoginToken({
+    tokenHash: record.tokenHash, now: new Date("2026-08-15T08:05:00.000Z"),
+    auditEvent: createAuditEvent({
+      action: "email_login.consumed", result: "success", source: "tests",
+      correlationId: "email-login-consume", subjectId: identity.identityId,
+    }),
+  });
+  assert.equal(consumed.status, "consumed");
+  assert.ok(calls.some((call) => typeof call === "object" && call.sql.includes("INSERT INTO email_login_tokens")));
+  assert.ok(calls.some((call) => typeof call === "object" && call.sql.includes("SET status = 'consumed'")));
+  assert.equal(calls.filter((call) => typeof call === "object" && call.sql.includes("INSERT INTO audit_events")).length, 2);
+  assert.doesNotMatch(JSON.stringify(calls), new RegExp("Z".repeat(43)));
+});
+
 test("persiste la demande de rattachement et son audit dans la même transaction", async () => {
   const pool = fakePool();
   const requestedAt = new Date("2026-08-10T09:00:00Z");

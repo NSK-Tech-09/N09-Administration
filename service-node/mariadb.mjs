@@ -134,6 +134,16 @@ function mapApplicationSession(row) {
   };
 }
 
+function mapEmailLoginToken(row) {
+  if (!row) return null;
+  return {
+    tokenId: row.email_login_id, tokenHash: row.token_hash,
+    identityId: row.identity_id, returnTo: row.return_to, status: row.status,
+    requestedAt: asIso(row.requested_at), expiresAt: asIso(row.expires_at),
+    consumedAt: asIso(row.consumed_at), invalidatedAt: asIso(row.invalidated_at),
+  };
+}
+
 function mapAccessRequestLine(row) {
   if (!row) return null;
   return {
@@ -627,6 +637,87 @@ export class MariaDbRepository {
     );
     const row = rows[0];
     return row ? { identityId: row.identity_id, email: row.email, displayName: row.display_name, status: row.status } : null;
+  }
+
+  async findIdentityByEmail(email) {
+    const [rows] = await this.pool.execute(
+      "SELECT identity_id, email, display_name, status FROM identities WHERE email_normalized = ?",
+      [String(email ?? "").trim().toLowerCase()],
+    );
+    const row = rows[0];
+    return row ? { identityId: row.identity_id, email: row.email, displayName: row.display_name, status: row.status } : null;
+  }
+
+  async saveEmailLoginToken(record, auditEvent) {
+    if (record.status !== "issued" || record.consumedAt !== null || record.invalidatedAt !== null ||
+        !/^[a-f0-9]{64}$/.test(record.tokenHash)) {
+      throw new Error("invalid email login record");
+    }
+    if (auditEvent.action !== "email_login.requested" || auditEvent.subject_id !== record.identityId) {
+      throw new Error("invalid audit event for email login request");
+    }
+    return this.#transaction(async (connection) => {
+      const [identities] = await connection.execute(
+        "SELECT status FROM identities WHERE identity_id = ? FOR UPDATE", [record.identityId],
+      );
+      if (identities[0]?.status !== "active") throw new Error("email login identity is not active");
+      await connection.execute(
+        `INSERT INTO email_login_tokens(
+           email_login_id, token_hash, identity_id, return_to, status,
+           requested_at, expires_at, consumed_at, invalidated_at
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [record.tokenId, record.tokenHash, record.identityId, record.returnTo, record.status,
+         asMariaDate(record.requestedAt), asMariaDate(record.expiresAt), null, null],
+      );
+      await this.#appendAudit(connection, auditEvent);
+    });
+  }
+
+  async getEmailLoginToken(tokenHash) {
+    const [rows] = await this.pool.execute(
+      "SELECT * FROM email_login_tokens WHERE token_hash = ?", [tokenHash],
+    );
+    return mapEmailLoginToken(rows[0]);
+  }
+
+  async consumeEmailLoginToken({ tokenHash, now, auditEvent }) {
+    return this.#transaction(async (connection) => {
+      const [rows] = await connection.execute(
+        "SELECT * FROM email_login_tokens WHERE token_hash = ? FOR UPDATE", [tokenHash],
+      );
+      const record = mapEmailLoginToken(rows[0]);
+      if (!record || record.status !== "issued" || new Date(record.expiresAt) <= now) {
+        throw new Error("invalid_or_consumed_email_login");
+      }
+      if (auditEvent.action !== "email_login.consumed" || auditEvent.subject_id !== record.identityId) {
+        throw new Error("invalid audit event for email login consumption");
+      }
+      await connection.execute(
+        "UPDATE email_login_tokens SET status = 'consumed', consumed_at = ? WHERE token_hash = ? AND status = 'issued'",
+        [asMariaDate(now), tokenHash],
+      );
+      await this.#appendAudit(connection, auditEvent);
+      return { ...record, status: "consumed", consumedAt: new Date(now).toISOString() };
+    });
+  }
+
+  async failEmailLoginToken({ tokenHash, now, auditEvent }) {
+    return this.#transaction(async (connection) => {
+      const [rows] = await connection.execute(
+        "SELECT * FROM email_login_tokens WHERE token_hash = ? FOR UPDATE", [tokenHash],
+      );
+      const record = mapEmailLoginToken(rows[0]);
+      if (!record || record.status !== "issued") throw new Error("invalid_email_login_delivery_failure");
+      if (auditEvent.action !== "email_login.delivery_failed" || auditEvent.subject_id !== record.identityId) {
+        throw new Error("invalid audit event for email login delivery failure");
+      }
+      await connection.execute(
+        "UPDATE email_login_tokens SET status = 'delivery_failed', invalidated_at = ? WHERE token_hash = ? AND status = 'issued'",
+        [asMariaDate(now), tokenHash],
+      );
+      await this.#appendAudit(connection, auditEvent);
+      return { ...record, status: "delivery_failed", invalidatedAt: new Date(now).toISOString() };
+    });
   }
 
   async listIdentities(status = null) {

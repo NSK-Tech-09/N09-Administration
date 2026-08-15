@@ -5,6 +5,10 @@ import { createAuditEvent } from "./audit.mjs";
 import { publishApplicationAccessCatalog } from "./application-access-catalog.mjs";
 import { receiveNotificationEvents } from "./notification-ingress.mjs";
 import { createLinkRequest } from "./federated-identity.mjs";
+import {
+  consumeEmailLogin, EmailLoginError, EMAIL_LOGIN_ISSUER, EMAIL_LOGIN_PROVIDER,
+  inspectEmailLogin, requestEmailLogin,
+} from "./email-login.mjs";
 import { authorizeAccessAdministration } from "./access-admin.mjs";
 import {
   ACCESS_DECISION_PERMISSION, authorizeAccessDecisionAdministration, grantAccessAssignment, revokeAccessAssignment,
@@ -35,6 +39,7 @@ import {
 
 const DEFAULT_MAX_BODY_BYTES = 64 * 1024;
 const CURRENT_SESSION_VERSION = 2;
+const EMAIL_LOGIN_CONFIRMATION_COOKIE = "n09_email_login_confirmation";
 const ADMIN_VERSION = "0.2.1";
 const STATIC_ASSETS = new Map([
   ["/assets/nsktech09-logo-master.png", { type: "image/png", body: readFileSync(new URL("./assets/nsktech09-logo-master.png", import.meta.url)) }],
@@ -148,10 +153,18 @@ function redirect(response, location) {
 
 function safeLoginReturnPath(value) {
   if (typeof value !== "string" || value.includes("\r") || value.includes("\n") ||
-      (!value.startsWith("/application-login/authorize?") && !value.startsWith("/portal/login?") &&
-       !value.startsWith("/account/sessions?"))) return null;
+      (value !== "/" && !value.startsWith("/application-login/authorize?") &&
+       !value.startsWith("/portal/login?") && !value.startsWith("/account/sessions?"))) return null;
   const parsed = new URL(value, "https://n09.invalid");
   return parsed.origin === "https://n09.invalid" ? `${parsed.pathname}${parsed.search}` : null;
+}
+
+function openEmailLoginConfirmation(value, sessionSecret) {
+  try {
+    return open(value, sessionSecret, "email-login-confirmation");
+  } catch {
+    throw new EmailLoginError("invalid_or_consumed_email_login");
+  }
 }
 
 const ACCOUNT_APPLICATION_ORIGINS = Object.freeze([
@@ -175,16 +188,18 @@ function safeAccountReturn(value, portalOrigins, fallback) {
   }
 }
 
-function renderPortalLogin({ returnTo, theme }) {
-  const localReturn = `/portal/login?return_to=${encodeURIComponent(returnTo)}&theme=${encodeURIComponent(theme)}`;
+function renderPortalLogin({ returnTo, theme, localReturn = null, emailLoginEnabled = false }) {
+  localReturn ||= `/portal/login?return_to=${encodeURIComponent(returnTo)}&theme=${encodeURIComponent(theme)}`;
   const infomaniakStart = `/auth/infomaniak/start?return_to=${encodeURIComponent(localReturn)}`;
+  const emailProvider = emailLoginEnabled
+    ? `<section class="entry assignment"><h3>Courriel <span class="pill">Disponible</span></h3><p>Reçois un lien unique, valable dix minutes, sans mot de passe NSK.</p><form class="grant" method="post" action="/auth/email/request"><input type="hidden" name="return_to" value="${escapeHtml(localReturn)}"><label for="email-login">Adresse associée à ton identité NSK</label><input id="email-login" name="email" type="email" maxlength="320" autocomplete="email" required><button type="submit">Recevoir mon lien</button></form></section>`
+    : `<section class="entry"><h3>Courriel <span class="pill inactive">Prévu</span></h3><p>Lien de connexion unique, sans mot de passe local.</p><p class="note">Disponible après configuration et validation du canal d’envoi.</p></section>`;
   const plannedProviders = [
-    ["Courriel", "Lien de connexion unique, sans mot de passe local"],
     ["Google", "Compte Google personnel ou professionnel"],
     ["Microsoft", "Compte Microsoft personnel ou professionnel"],
     ["GitHub", "Compte GitHub existant"],
   ].map(([name, description]) => `<section class="entry"><h3>${name} <span class="pill inactive">Prévu</span></h3><p>${description}</p><p class="note">Disponible après configuration et validation de sécurité.</p></section>`).join("");
-  return `<h1>Se connecter à NSK Tech 09</h1><p>Choisis la méthode qui te convient. Le fournisseur vérifie ton identité ; les droits restent exclusivement gérés par N09 – Administration.</p><div class="directory"><section class="entry assignment"><h3>Infomaniak <span class="pill">Disponible</span></h3><p>Utilise ton compte Infomaniak actuel.</p><a class="button" href="${escapeHtml(infomaniakStart)}">Continuer avec Infomaniak</a></section>${plannedProviders}</div><div class="facts"><p><strong>Une seule identité NSK :</strong> plusieurs méthodes de connexion pourront être rattachées au même compte après vérification.</p><p><strong>Aucun droit implicite :</strong> ajouter une méthode de connexion ne donne accès à aucune application supplémentaire.</p><p><strong>Aucun mot de passe NSK :</strong> les mots de passe restent chez le fournisseur choisi.</p></div><nav><a class="button secondary" href="${escapeHtml(returnTo)}">Retour au portail</a></nav>`;
+  return `<h1>Se connecter à NSK Tech 09</h1><p>Choisis la méthode qui te convient. La méthode vérifie ton identité ; les droits restent exclusivement gérés par N09 – Administration.</p><div class="directory"><section class="entry assignment"><h3>Infomaniak <span class="pill">Disponible</span></h3><p>Utilise ton compte Infomaniak actuel.</p><a class="button" href="${escapeHtml(infomaniakStart)}">Continuer avec Infomaniak</a></section>${emailProvider}${plannedProviders}</div><div class="facts"><p><strong>Une seule identité NSK :</strong> toutes les méthodes reconnues conduisent au même compte central.</p><p><strong>Aucun droit implicite :</strong> une méthode de connexion ne donne accès à aucune application supplémentaire.</p><p><strong>Aucun mot de passe NSK :</strong> le courriel utilise un lien éphémère ; les autres mots de passe restent chez leur fournisseur.</p></div><nav><a class="button secondary" href="${escapeHtml(returnTo)}">Retour</a></nav>`;
 }
 
 function formatDate(value) {
@@ -408,10 +423,29 @@ export function createHttpHandler({
   operatorSessionManagement = null,
   identityStateManagement = null,
   portalOrigins = [],
+  emailLogin = null,
 }) {
   if (!repository) throw new Error("repository is required");
   if (typeof authenticate !== "function") throw new Error("authenticate must be a function");
   const publicRequestAttempts = new Map();
+  const emailLoginAttempts = new Map();
+
+  function allowEmailLoginRequest(request, email, now = Date.now()) {
+    const forwarded = String(request.headers["x-forwarded-for"] ?? "").split(",")[0].trim();
+    const remote = forwarded || request.socket?.remoteAddress || "unknown";
+    const key = createHash("sha256").update(`${remote}\n${String(email).trim().toLowerCase()}`, "utf8").digest("hex");
+    const windowStart = now - 60 * 60 * 1000;
+    const attempts = (emailLoginAttempts.get(key) ?? []).filter((timestamp) => timestamp > windowStart);
+    if (attempts.length >= 3) return false;
+    attempts.push(now);
+    emailLoginAttempts.set(key, attempts);
+    if (emailLoginAttempts.size > 5000) {
+      for (const [candidate, values] of emailLoginAttempts) {
+        if (!values.some((timestamp) => timestamp > windowStart)) emailLoginAttempts.delete(candidate);
+      }
+    }
+    return true;
+  }
 
   function allowPublicAccessRequest(request, email, now = Date.now()) {
     const forwarded = String(request.headers["x-forwarded-for"] ?? "").split(",")[0].trim();
@@ -482,6 +516,122 @@ export function createHttpHandler({
       writeJson(response, 200, { status: "ok" });
       return;
     }
+    if (url.pathname === "/auth/login" && request.method === "GET") {
+      const localReturn = safeLoginReturnPath(url.searchParams.get("return_to")) ?? "/";
+      const theme = safeAccountTheme(url.searchParams.get("theme"));
+      let session = null;
+      try { session = await openCurrentSession(request); } catch { /* show selector */ }
+      if (session?.status === "authenticated") {
+        redirect(response, localReturn);
+        return;
+      }
+      writeHtml(response, 200, "Connexion", renderPortalLogin({
+        returnTo: portalOrigins[0] ?? "https://nsktech.fr/", theme, localReturn,
+        emailLoginEnabled: emailLogin?.enabled === true,
+      }));
+      return;
+    }
+    if (url.pathname === "/auth/email/request" && request.method === "POST") {
+      const startedAt = Date.now();
+      const waitForNeutralTiming = async () => {
+        const remaining = 350 - (Date.now() - startedAt);
+        if (remaining > 0) await new Promise((resolve) => setTimeout(resolve, remaining));
+      };
+      const acceptedPage = '<h1>Consulte ta messagerie</h1><p>Si cette adresse correspond à une identité NSK active, un lien de connexion vient d’être envoyé. Il expire dans dix minutes et ne fonctionne qu’une fois.</p><div class="facts"><p><strong>Confidentialité :</strong> cette réponse ne révèle jamais si une adresse est enregistrée.</p></div><a class="button secondary" href="/auth/login?return_to=%2F">Retour aux méthodes de connexion</a>';
+      try {
+        if (!emailLogin?.enabled || !oidcConfig) throw new EmailLoginError("email_login_unavailable", 503);
+        const form = await readForm(request, maxBodyBytes);
+        const email = String(form.get("email") ?? "");
+        const returnTo = safeLoginReturnPath(String(form.get("return_to") ?? ""));
+        if (!returnTo) throw new EmailLoginError("invalid_return_to");
+        if (!allowEmailLoginRequest(request, email)) {
+          writeHtml(response, 429, "Demande temporairement limitée", '<h1>Patiente quelques instants</h1><p>Le nombre de demandes est temporairement limité pour protéger ton compte.</p><a class="button" href="/auth/login?return_to=%2F">Retour</a>');
+          return;
+        }
+        await requestEmailLogin({
+          repository, email, returnTo, delivery: emailLogin.delivery,
+          publicOrigin: emailLogin.publicOrigin,
+        });
+        await waitForNeutralTiming();
+        writeHtml(response, 202, "Lien demandé", acceptedPage);
+      } catch (error) {
+        if (error instanceof EmailLoginError && error.code === "invalid_email") {
+          writeHtml(response, 400, "Adresse invalide", '<h1>Adresse à vérifier</h1><p>Saisis une adresse de courriel valide.</p><a class="button" href="/auth/login?return_to=%2F">Retour</a>');
+        } else {
+          await waitForNeutralTiming();
+          if (!(error instanceof EmailLoginError)) console.error(JSON.stringify({ event: "email_login_request_failed", reason: "delivery_or_repository_unavailable" }));
+          writeHtml(response, error instanceof EmailLoginError ? error.status : 503, "Connexion momentanément indisponible", '<h1>Connexion momentanément indisponible</h1><p>Le lien ne peut pas être envoyé pour le moment. Aucun compte ni droit n’a été modifié.</p><a class="button" href="/auth/login?return_to=%2F">Réessayer</a>');
+        }
+      }
+      return;
+    }
+    if (url.pathname === "/auth/email/confirm" && request.method === "GET") {
+      const clearConfirmation = cookie(EMAIL_LOGIN_CONFIRMATION_COOKIE, "", { maxAge: 0, path: "/auth/email" });
+      try {
+        if (!emailLogin?.enabled || !oidcConfig) throw new EmailLoginError("email_login_unavailable", 503);
+        const token = url.searchParams.get("token");
+        if (token) {
+          const inspected = await inspectEmailLogin({ repository, token });
+          const expiresAt = new Date(inspected.expiresAt).valueOf();
+          const confirmation = seal({ token, expiresAt }, oidcConfig.sessionSecret, "email-login-confirmation");
+          response.statusCode = 303;
+          response.setHeader("cache-control", "no-store");
+          response.setHeader("location", "/auth/email/confirm");
+          response.setHeader("set-cookie", cookie(EMAIL_LOGIN_CONFIRMATION_COOKIE, confirmation, {
+            maxAge: Math.max(1, Math.ceil((expiresAt - Date.now()) / 1000)), path: "/auth/email",
+          }));
+          response.end();
+          return;
+        }
+        const confirmation = openEmailLoginConfirmation(
+          parseCookies(request.headers.cookie).get(EMAIL_LOGIN_CONFIRMATION_COOKIE),
+          oidcConfig.sessionSecret,
+        );
+        const inspected = await inspectEmailLogin({ repository, token: confirmation.token });
+        const expiresAt = new Date(inspected.expiresAt).valueOf();
+        writeHtml(response, 200, "Confirmer la connexion", '<h1>Confirmer la connexion</h1><p>Le lien est valide. Confirme pour ouvrir ta session NSK Tech 09.</p><form method="post" action="/auth/email/consume"><button type="submit">Me connecter</button></form><p class="note">Cette confirmation empêche les outils de sécurité de ta messagerie d’utiliser le lien à ta place.</p>', [
+          cookie(EMAIL_LOGIN_CONFIRMATION_COOKIE, parseCookies(request.headers.cookie).get(EMAIL_LOGIN_CONFIRMATION_COOKIE), {
+            maxAge: Math.max(1, Math.ceil((expiresAt - Date.now()) / 1000)), path: "/auth/email",
+          }),
+        ]);
+      } catch (error) {
+        const unavailable = !(error instanceof EmailLoginError) || error.status === 503;
+        if (!(error instanceof EmailLoginError)) console.error(JSON.stringify({ event: "email_login_confirmation_failed", reason: "repository_unavailable" }));
+        writeHtml(response, unavailable ? 503 : 400, "Lien non validé", `<h1>${unavailable ? "Connexion momentanément indisponible" : "Lien invalide ou expiré"}</h1><p>${unavailable ? "Le registre central n’est pas disponible." : "Demande un nouveau lien de connexion. Aucun compte ni droit n’a été modifié."}</p><a class="button" href="/auth/login?return_to=%2F">Recommencer</a>`, [clearConfirmation]);
+      }
+      return;
+    }
+    if (url.pathname === "/auth/email/consume" && request.method === "POST") {
+      const clearConfirmation = cookie(EMAIL_LOGIN_CONFIRMATION_COOKIE, "", { maxAge: 0, path: "/auth/email" });
+      try {
+        if (!emailLogin?.enabled || !oidcConfig) throw new EmailLoginError("email_login_unavailable", 503);
+        const confirmation = openEmailLoginConfirmation(
+          parseCookies(request.headers.cookie).get(EMAIL_LOGIN_CONFIRMATION_COOKIE),
+          oidcConfig.sessionSecret,
+        );
+        const consumed = await consumeEmailLogin({ repository, token: confirmation.token });
+        let session = {
+          sessionVersion: CURRENT_SESSION_VERSION, providerKey: EMAIL_LOGIN_PROVIDER,
+          issuer: EMAIL_LOGIN_ISSUER, subject: consumed.identity.identityId,
+          identityId: consumed.identity.identityId, displayName: consumed.identity.displayName,
+          status: "authenticated", csrf: randomUUID(), expiresAt: Date.now() + 8 * 60 * 60 * 1000,
+        };
+        session = await attachCentralSession(session);
+        response.statusCode = 303;
+        response.setHeader("cache-control", "no-store");
+        response.setHeader("location", consumed.returnTo);
+        response.setHeader("set-cookie", [
+          clearConfirmation,
+          cookie(OIDC_SESSION_COOKIE, seal(session, oidcConfig.sessionSecret, "oidc-session"), { maxAge: 8 * 60 * 60 }),
+        ]);
+        response.end();
+      } catch (error) {
+        const unavailable = !(error instanceof EmailLoginError) || error.status === 503;
+        if (!(error instanceof EmailLoginError)) console.error(JSON.stringify({ event: "email_login_consumption_failed", reason: "repository_or_session_registry_unavailable" }));
+        writeHtml(response, unavailable ? 503 : 400, "Lien non validé", `<h1>${unavailable ? "Connexion momentanément indisponible" : "Lien invalide ou expiré"}</h1><p>${unavailable ? "Le registre central n’est pas disponible." : "Demande un nouveau lien de connexion. Aucun compte ni droit n’a été modifié."}</p><a class="button" href="/auth/login?return_to=%2F">Recommencer</a>`, [clearConfirmation]);
+      }
+      return;
+    }
     if (url.pathname === "/application-login/authorize" && request.method === "GET") {
       try {
         if (!oidcConfig) throw new Error("oidc_not_configured");
@@ -489,7 +639,7 @@ export function createHttpHandler({
         let session;
         try { session = await openCurrentSession(request); } catch { /* login below */ }
         if (!session) {
-          redirect(response, `/auth/infomaniak/start?return_to=${encodeURIComponent(`${url.pathname}${url.search}`)}`);
+          redirect(response, `/auth/login?return_to=${encodeURIComponent(`${url.pathname}${url.search}`)}`);
           return;
         }
         const { code } = await issueApplicationLoginCode({ repository, session, request: loginRequest });
@@ -539,7 +689,9 @@ export function createHttpHandler({
       let identitySession;
       try { identitySession = await openCurrentSession(request); } catch { /* authenticate below */ }
       if (!identitySession) {
-        writeHtml(response, 200, "Connexion", renderPortalLogin({ returnTo, theme }));
+        writeHtml(response, 200, "Connexion", renderPortalLogin({
+          returnTo, theme, emailLoginEnabled: emailLogin?.enabled === true,
+        }));
         return;
       }
       try {
@@ -667,7 +819,7 @@ export function createHttpHandler({
         if (session.status !== "authenticated") throw new Error("fresh_authentication_required");
         redirect(response, accountPath);
       } catch {
-        redirect(response, `/auth/infomaniak/start?return_to=${encodeURIComponent(accountPath)}`);
+        redirect(response, `/auth/login?return_to=${encodeURIComponent(accountPath)}&theme=${encodeURIComponent(theme)}`);
       }
       return;
     }
@@ -719,8 +871,8 @@ export function createHttpHandler({
         }
       }
       const content = session
-        ? `<h1>Identité Infomaniak vérifiée</h1><p>Bienvenue <strong>${escapeHtml(session.displayName)}</strong>. La preuve cryptographique est valide.</p><div class="facts"><p>État NSK : <strong>${session.status === "authenticated" ? "rattachée" : "rattachement requis"}</strong></p>${requestReference}<p>${session.status === "authenticated" ? "Le compte NSK est reconnu ; les droits restent contrôlés séparément." : "Aucun compte, rôle ou droit n’a été créé automatiquement. Une décision humaine reste obligatoire."}</p></div><nav>${administrationLinks.join("")}<form method="post" action="/auth/logout"><button class="secondary" type="submit">Fermer la session</button></form></nav>`
-        : `<h1>Le cœur d’identité est prêt</h1><p>Connecte-toi avec Infomaniak pour présenter une preuve d’identité au registre central NSK.</p><div class="facts"><p><strong>Connexion réelle :</strong> Authorization Code + PKCE S256.</p><p><strong>Zéro privilège implicite :</strong> une identité inconnue reste sans droit.</p></div>${oidcConfig ? '<a class="button" href="/auth/infomaniak/start">Continuer avec Infomaniak</a>' : '<p>Le fournisseur OIDC n’est pas encore configuré.</p>'}`;
+        ? `<h1>Identité vérifiée</h1><p>Bienvenue <strong>${escapeHtml(session.displayName)}</strong>. La preuve d’identité est valide.</p><div class="facts"><p>État NSK : <strong>${session.status === "authenticated" ? "rattachée" : "rattachement requis"}</strong></p>${requestReference}<p>${session.status === "authenticated" ? "Le compte NSK est reconnu ; les droits restent contrôlés séparément." : "Aucun compte, rôle ou droit n’a été créé automatiquement. Une décision humaine reste obligatoire."}</p></div><nav>${administrationLinks.join("")}<form method="post" action="/auth/logout"><button class="secondary" type="submit">Fermer la session</button></form></nav>`
+        : `<h1>Le cœur d’identité est prêt</h1><p>Choisis ta méthode pour présenter une preuve d’identité au registre central NSK.</p><div class="facts"><p><strong>Une identité centrale :</strong> la méthode de connexion ne change ni ton compte ni tes droits.</p><p><strong>Zéro privilège implicite :</strong> une identité inconnue reste sans droit.</p></div>${oidcConfig ? '<a class="button" href="/auth/login?return_to=%2F">Choisir une méthode de connexion</a>' : '<p>Le service d’identité n’est pas encore configuré.</p>'}`;
       writeHtml(response, 200, "Accueil", content);
       return;
     }
@@ -930,6 +1082,7 @@ export function createHttpHandler({
           if (!identity || identity.status !== "active") throw new Error("nsk_identity_not_active");
           session = {
             sessionVersion: CURRENT_SESSION_VERSION,
+            providerKey: "infomaniak",
             issuer: INFOMANIAK_ISSUER, subject: claims.sub, identityId: identity.identityId,
             displayName: identity.displayName, status: "authenticated", csrf: randomUUID(),
             expiresAt: Date.now() + 8 * 60 * 60 * 1000,
@@ -950,6 +1103,7 @@ export function createHttpHandler({
           }
           session = {
             sessionVersion: CURRENT_SESSION_VERSION,
+            providerKey: "infomaniak",
             issuer: INFOMANIAK_ISSUER, subject: claims.sub, displayName,
             status: "link_required", requestId: linkRequest.requestId,
             requestExpiresAt: linkRequest.expiresAt,
@@ -978,7 +1132,7 @@ export function createHttpHandler({
         if (!oidcConfig) throw new Error("oidc_not_configured");
         const session = await openCurrentSession(request);
         writeJson(response, 200, {
-          authenticated: true, provider: "infomaniak", status: session.status,
+          authenticated: true, provider: session.providerKey ?? "infomaniak", status: session.status,
           display_name: session.displayName, request_id: session.requestId ?? null,
         });
       } catch { writeJson(response, 401, { authenticated: false }); }

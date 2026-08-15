@@ -41,6 +41,7 @@ export class TransactionalMemoryRepository {
   #accessRequests = new Map();
   #accessRequestLines = new Map();
   #notificationEvents = new Map();
+  #emailLoginTokens = new Map();
   #auditEntries = [];
 
   #transaction(operation) {
@@ -58,6 +59,7 @@ export class TransactionalMemoryRepository {
       accessRequests: cloneMap(this.#accessRequests),
       accessRequestLines: cloneMap(this.#accessRequestLines),
       notificationEvents: cloneMap(this.#notificationEvents),
+      emailLoginTokens: cloneMap(this.#emailLoginTokens),
       auditEntries: structuredClone(this.#auditEntries),
     };
     const result = operation(state);
@@ -74,6 +76,7 @@ export class TransactionalMemoryRepository {
     this.#accessRequests = state.accessRequests;
     this.#accessRequestLines = state.accessRequestLines;
     this.#notificationEvents = state.notificationEvents;
+    this.#emailLoginTokens = state.emailLoginTokens;
     this.#auditEntries = state.auditEntries;
     return result;
   }
@@ -685,6 +688,63 @@ export class TransactionalMemoryRepository {
 
   getIdentity(identityId) {
     return structuredClone(this.#identities.get(identityId) ?? null);
+  }
+
+  findIdentityByEmail(email) {
+    const normalized = String(email ?? "").trim().toLowerCase();
+    const identity = [...this.#identities.values()].find((item) => item.email === normalized);
+    return structuredClone(identity ?? null);
+  }
+
+  saveEmailLoginToken(record, auditEvent) {
+    if (record.status !== "issued" || record.consumedAt !== null || record.invalidatedAt !== null ||
+        !/^[a-f0-9]{64}$/.test(record.tokenHash)) {
+      throw new Error("invalid email login record");
+    }
+    if (auditEvent.action !== "email_login.requested" || auditEvent.subject_id !== record.identityId) {
+      throw new Error("invalid audit event for email login request");
+    }
+    return this.#transaction((state) => {
+      const identity = state.identities.get(record.identityId);
+      if (!identity || identity.status !== "active") throw new Error("email login identity is not active");
+      if (state.emailLoginTokens.has(record.tokenHash)) throw new Error("email login hash must be unique");
+      state.emailLoginTokens.set(record.tokenHash, structuredClone(record));
+      this.#appendAudit(state, auditEvent);
+    });
+  }
+
+  getEmailLoginToken(tokenHash) {
+    return structuredClone(this.#emailLoginTokens.get(tokenHash) ?? null);
+  }
+
+  consumeEmailLoginToken({ tokenHash, now, auditEvent }) {
+    return this.#transaction((state) => {
+      const record = state.emailLoginTokens.get(tokenHash);
+      if (!record || record.status !== "issued" || new Date(record.expiresAt) <= now) {
+        throw new Error("invalid_or_consumed_email_login");
+      }
+      if (auditEvent.action !== "email_login.consumed" || auditEvent.subject_id !== record.identityId) {
+        throw new Error("invalid audit event for email login consumption");
+      }
+      const consumed = { ...record, status: "consumed", consumedAt: new Date(now).toISOString() };
+      state.emailLoginTokens.set(tokenHash, consumed);
+      this.#appendAudit(state, auditEvent);
+      return structuredClone(consumed);
+    });
+  }
+
+  failEmailLoginToken({ tokenHash, now, auditEvent }) {
+    return this.#transaction((state) => {
+      const record = state.emailLoginTokens.get(tokenHash);
+      if (!record || record.status !== "issued") throw new Error("invalid_email_login_delivery_failure");
+      if (auditEvent.action !== "email_login.delivery_failed" || auditEvent.subject_id !== record.identityId) {
+        throw new Error("invalid audit event for email login delivery failure");
+      }
+      const failed = { ...record, status: "delivery_failed", invalidatedAt: new Date(now).toISOString() };
+      state.emailLoginTokens.set(tokenHash, failed);
+      this.#appendAudit(state, auditEvent);
+      return structuredClone(failed);
+    });
   }
 
   listIdentities(status = null) {
