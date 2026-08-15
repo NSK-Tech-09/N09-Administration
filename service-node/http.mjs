@@ -35,7 +35,7 @@ import {
 
 const DEFAULT_MAX_BODY_BYTES = 64 * 1024;
 const CURRENT_SESSION_VERSION = 2;
-const ADMIN_VERSION = "0.2.0";
+const ADMIN_VERSION = "0.2.1";
 const STATIC_ASSETS = new Map([
   ["/assets/nsktech09-logo-master.png", { type: "image/png", body: readFileSync(new URL("./assets/nsktech09-logo-master.png", import.meta.url)) }],
   ["/assets/Manrope-VariableFont_wght.ttf", { type: "font/ttf", body: readFileSync(new URL("./assets/Manrope-VariableFont_wght.ttf", import.meta.url)) }],
@@ -173,6 +173,18 @@ function safeAccountReturn(value, portalOrigins, fallback) {
   } catch {
     return fallback;
   }
+}
+
+function renderPortalLogin({ returnTo, theme }) {
+  const localReturn = `/portal/login?return_to=${encodeURIComponent(returnTo)}&theme=${encodeURIComponent(theme)}`;
+  const infomaniakStart = `/auth/infomaniak/start?return_to=${encodeURIComponent(localReturn)}`;
+  const plannedProviders = [
+    ["Courriel", "Lien de connexion unique, sans mot de passe local"],
+    ["Google", "Compte Google personnel ou professionnel"],
+    ["Microsoft", "Compte Microsoft personnel ou professionnel"],
+    ["GitHub", "Compte GitHub existant"],
+  ].map(([name, description]) => `<section class="entry"><h3>${name} <span class="pill inactive">Prévu</span></h3><p>${description}</p><p class="note">Disponible après configuration et validation de sécurité.</p></section>`).join("");
+  return `<h1>Se connecter à NSK Tech 09</h1><p>Choisis la méthode qui te convient. Le fournisseur vérifie ton identité ; les droits restent exclusivement gérés par N09 – Administration.</p><div class="directory"><section class="entry assignment"><h3>Infomaniak <span class="pill">Disponible</span></h3><p>Utilise ton compte Infomaniak actuel.</p><a class="button" href="${escapeHtml(infomaniakStart)}">Continuer avec Infomaniak</a></section>${plannedProviders}</div><div class="facts"><p><strong>Une seule identité NSK :</strong> plusieurs méthodes de connexion pourront être rattachées au même compte après vérification.</p><p><strong>Aucun droit implicite :</strong> ajouter une méthode de connexion ne donne accès à aucune application supplémentaire.</p><p><strong>Aucun mot de passe NSK :</strong> les mots de passe restent chez le fournisseur choisi.</p></div><nav><a class="button secondary" href="${escapeHtml(returnTo)}">Retour au portail</a></nav>`;
 }
 
 function formatDate(value) {
@@ -519,6 +531,7 @@ export function createHttpHandler({
     if (url.pathname === "/portal/login" && request.method === "GET") {
       const fallback = portalOrigins[0] ? `${portalOrigins[0]}/#applications` : null;
       const returnTo = safePortalReturn(url.searchParams.get("return_to"), portalOrigins, fallback);
+      const theme = safeAccountTheme(url.searchParams.get("theme"));
       if (!oidcConfig || !returnTo || !sessionAuthority) {
         writeHtml(response, 503, "Portail indisponible", '<h1>Portail momentanément indisponible</h1><p>La chaîne de connexion centrale n’est pas entièrement configurée.</p><a class="button" href="/">Retour</a>');
         return;
@@ -526,8 +539,7 @@ export function createHttpHandler({
       let identitySession;
       try { identitySession = await openCurrentSession(request); } catch { /* authenticate below */ }
       if (!identitySession) {
-        const localReturn = `/portal/login?return_to=${encodeURIComponent(returnTo)}`;
-        redirect(response, `/auth/infomaniak/start?return_to=${encodeURIComponent(localReturn)}`);
+        writeHtml(response, 200, "Connexion", renderPortalLogin({ returnTo, theme }));
         return;
       }
       try {

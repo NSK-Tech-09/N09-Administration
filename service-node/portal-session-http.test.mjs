@@ -73,6 +73,42 @@ async function withServer(operation) {
   }
 }
 
+test("présente une connexion NSK avant le choix du fournisseur", async () => {
+  await withServer(async (origin) => {
+    const returnTo = `${portalOrigin}/#applications`;
+    const login = await fetch(`${origin}/portal/login?return_to=${encodeURIComponent(returnTo)}&theme=dark`, {
+      redirect: "manual",
+    });
+    assert.equal(login.status, 200);
+    assert.equal(login.headers.get("location"), null);
+    const html = await login.text();
+    assert.match(html, /Se connecter à NSK Tech 09/);
+    assert.match(html, /Infomaniak <span class="pill">Disponible<\/span>/);
+    assert.match(html, /Google <span class="pill inactive">Prévu<\/span>/);
+    assert.match(html, /Microsoft <span class="pill inactive">Prévu<\/span>/);
+    assert.match(html, /GitHub <span class="pill inactive">Prévu<\/span>/);
+    assert.match(html, /Courriel <span class="pill inactive">Prévu<\/span>/);
+    assert.match(html, new RegExp(`return_to=${encodeURIComponent(`/portal/login?return_to=${encodeURIComponent(returnTo)}&theme=dark`)}`));
+    assert.ok(html.includes(`href="${returnTo}"`));
+
+    const themeAsset = await fetch(`${origin}/assets/theme.js`);
+    assert.equal(themeAsset.status, 200);
+    assert.match(await themeAsset.text(), /new URLSearchParams\(window\.location\.search\)\.get\("theme"\)/);
+  });
+});
+
+test("neutralise les retours et thèmes non autorisés sur la connexion portail", async () => {
+  await withServer(async (origin) => {
+    const login = await fetch(`${origin}/portal/login?return_to=${encodeURIComponent("https://evil.example.test/")}&theme=violet`);
+    assert.equal(login.status, 200);
+    const html = await login.text();
+    assert.doesNotMatch(html, /evil\.example\.test/);
+    const safeReturn = `${portalOrigin}/#applications`;
+    const localReturn = `/portal/login?return_to=${encodeURIComponent(safeReturn)}&theme=system`;
+    assert.ok(html.includes(`return_to=${encodeURIComponent(localReturn)}`));
+  });
+});
+
 test("ouvre une session portail dédiée puis restitue le catalogue personnel", async () => {
   await withServer(async (origin) => {
     const login = await fetch(`${origin}/portal/login?return_to=${encodeURIComponent(`${portalOrigin}/#applications`)}`, {
