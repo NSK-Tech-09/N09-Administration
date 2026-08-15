@@ -1,7 +1,7 @@
 # Lot 66 — Connexion par courriel
 
 Date de préparation : 15 août 2026
-Statut : **implémenté et validé localement ; non publié et non déployé**
+Statut : **publié dans `main` ; non déployé et canal fermé**
 
 ## Objectif
 
@@ -42,23 +42,32 @@ L'activation exige :
 Aucune valeur réelle ne doit entrer dans GitHub, une release, un journal ou
 une sauvegarde documentaire.
 
-## Publication et activation restantes
+## Publication GitHub
 
-1. publier le code par PR non brouillon et attendre tous les contrôles verts ;
-2. sauvegarder la base de production et vérifier la restauration disponible ;
-3. appliquer `20260815-email-login.sql` avant le nouveau processus ;
-4. créer ou sélectionner l'expéditeur Brevo autorisé et déposer la clé dans
+La PR non brouillon `#78` a été fusionnée le 15 août 2026 après réussite du
+workflow « Vérification du noyau » numéro `173`. Le commit publié dans `main`
+est `6bb40236dfdfa80a14729c4e708581b3f390694f`.
+
+La publication comprend 16 fichiers, 300 tests Node réussis et 63 tests Python
+réussis. Elle n'a appliqué aucune migration, déposé aucun secret et activé
+aucun canal en production.
+
+## Activation restante
+
+1. sauvegarder la base de production et vérifier la restauration disponible ;
+2. appliquer `20260815-email-login.sql` avant le nouveau processus ;
+3. créer ou sélectionner l'expéditeur Brevo autorisé et déposer la clé dans
    l'environnement protégé ;
-5. installer une release immuable puis redémarrer Administration ;
-6. vérifier la santé avec le canal encore fermé ;
-7. vérifier que le frontal ne journalise pas la chaîne de requête de
+4. installer une release immuable puis redémarrer Administration ;
+5. vérifier la santé avec le canal encore fermé ;
+6. vérifier que le frontal ne journalise pas la chaîne de requête de
    `/auth/email/confirm` ;
-8. activer le canal et réaliser une recette réelle avec
+7. activer le canal et réaliser une recette réelle avec
    `f.travers@nsktech.fr` ;
-9. contrôler réception, confirmation, consommation unique, retour
+8. contrôler réception, confirmation, consommation unique, retour
    Portail/Tâches/Énergie,
    révocation de session et absence de secret dans les journaux ;
-10. documenter les preuves et conserver la release précédente pour repli.
+9. documenter les preuves et conserver la release précédente pour repli.
 
 Le retour arrière applicatif remet le canal à `false` et réactive la release
 précédente. La table ajoutée peut rester en place : elle est inerte, ne donne
