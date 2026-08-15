@@ -15,6 +15,18 @@ function cloneMap(map) {
   return new Map([...map].map(([key, value]) => [key, structuredClone(value)]));
 }
 
+function accessRequestStatus(lines) {
+  const statuses = new Set(lines.map((line) => line.status));
+  if (statuses.has("pending")) return "pending";
+  if (statuses.size === 1 && statuses.has("approved")) return "approved";
+  if (statuses.size === 1 && statuses.has("refused")) return "refused";
+  return "partially_approved";
+}
+
+function stateApplicationName(applications, applicationId) {
+  return applications.get(applicationId)?.displayName ?? applicationId;
+}
+
 export class TransactionalMemoryRepository {
   #identities = new Map();
   #externalIdentities = new Map();
@@ -26,6 +38,8 @@ export class TransactionalMemoryRepository {
   #applicationAuthorizationCodes = new Map();
   #applicationSessions = new Map();
   #assignments = new Map();
+  #accessRequests = new Map();
+  #accessRequestLines = new Map();
   #notificationEvents = new Map();
   #auditEntries = [];
 
@@ -41,6 +55,8 @@ export class TransactionalMemoryRepository {
       applicationAuthorizationCodes: cloneMap(this.#applicationAuthorizationCodes),
       applicationSessions: cloneMap(this.#applicationSessions),
       assignments: cloneMap(this.#assignments),
+      accessRequests: cloneMap(this.#accessRequests),
+      accessRequestLines: cloneMap(this.#accessRequestLines),
       notificationEvents: cloneMap(this.#notificationEvents),
       auditEntries: structuredClone(this.#auditEntries),
     };
@@ -55,6 +71,8 @@ export class TransactionalMemoryRepository {
     this.#applicationAuthorizationCodes = state.applicationAuthorizationCodes;
     this.#applicationSessions = state.applicationSessions;
     this.#assignments = state.assignments;
+    this.#accessRequests = state.accessRequests;
+    this.#accessRequestLines = state.accessRequestLines;
     this.#notificationEvents = state.notificationEvents;
     this.#auditEntries = state.auditEntries;
     return result;
@@ -567,6 +585,102 @@ export class TransactionalMemoryRepository {
       state.assignments.set(assignment.assignmentId, structuredClone(assignment));
       this.#appendAudit(state, auditEvent);
     });
+  }
+
+  saveAccessRequest(request, lines, auditEvent) {
+    if (request.status !== "pending" || request.version !== 1 || !lines.length ||
+        auditEvent.action !== "access_request.submitted") throw new Error("invalid access request bundle");
+    return this.#transaction((state) => {
+      const applicationIds = [...lines.map((line) => line.applicationId)].sort();
+      if (lines.some((line) => line.requestId !== request.requestId || line.status !== "pending" ||
+          line.version !== 1 || !state.applications.has(line.applicationId)) ||
+          new Set(applicationIds).size !== applicationIds.length) throw new Error("invalid access request lines");
+      const duplicate = [...state.accessRequests.values()].find((item) => {
+        if (item.status !== "pending" || item.applicantEmail !== request.applicantEmail) return false;
+        const existingIds = [...state.accessRequestLines.values()].filter((line) => line.requestId === item.requestId)
+          .map((line) => line.applicationId).sort();
+        return JSON.stringify(existingIds) === JSON.stringify(applicationIds);
+      });
+      if (duplicate) return structuredClone(duplicate);
+      state.accessRequests.set(request.requestId, structuredClone(request));
+      lines.forEach((line) => state.accessRequestLines.set(line.lineId, structuredClone(line)));
+      this.#appendAudit(state, auditEvent);
+      return structuredClone(request);
+    });
+  }
+
+  getAccessRequestLine(lineId) {
+    return structuredClone(this.#accessRequestLines.get(lineId) ?? null);
+  }
+
+  listAccessRequests(status = null) {
+    return [...this.#accessRequests.values()]
+      .filter((request) => !status || request.status === status)
+      .sort((left, right) => right.requestedAt.localeCompare(left.requestedAt))
+      .map((request) => ({
+        ...structuredClone(request),
+        lines: [...this.#accessRequestLines.values()]
+          .filter((line) => line.requestId === request.requestId)
+          .sort((left, right) => left.applicationId.localeCompare(right.applicationId))
+          .map((line) => ({ ...structuredClone(line), applicationName: stateApplicationName(this.#applications, line.applicationId) })),
+      }));
+  }
+
+  approveAccessRequestLine({
+    lineId, expectedVersion, targetIdentityId, assignment, assignmentAuditEvent,
+    existingAssignmentId, decidedAt, decidedBy, justification, decisionAuditEvent,
+  }) {
+    return this.#transaction((state) => {
+      const line = state.accessRequestLines.get(lineId);
+      if (!line || line.status !== "pending" || line.version !== expectedVersion) throw new Error("stale access request line");
+      const identity = state.identities.get(targetIdentityId);
+      if (!identity || identity.status !== "active") throw new Error("target identity is unavailable");
+      const assignmentId = assignment?.assignmentId ?? existingAssignmentId;
+      if (assignment) {
+        if (!assignmentAuditEvent || assignment.subjectId !== targetIdentityId ||
+            assignment.applicationId !== line.applicationId) throw new Error("invalid assignment request bundle");
+        const previous = state.assignments.get(assignment.assignmentId);
+        if (previous && assignment.version !== previous.version + 1) throw new Error("stale assignment version");
+        if (!previous && assignment.version !== 1) throw new Error("new assignment version must be 1");
+        state.assignments.set(assignment.assignmentId, structuredClone(assignment));
+        this.#appendAudit(state, assignmentAuditEvent);
+      } else {
+        const existing = state.assignments.get(assignmentId);
+        if (!existing || existing.status !== "active" || existing.subjectId !== targetIdentityId ||
+            existing.applicationId !== line.applicationId) throw new Error("active assignment is unavailable");
+      }
+      const updated = {
+        ...line, status: "approved", targetIdentityId, assignmentId,
+        decidedAt, decidedBy, decisionJustification: justification, version: line.version + 1,
+      };
+      state.accessRequestLines.set(lineId, updated);
+      this.#refreshAccessRequestState(state, line.requestId);
+      this.#appendAudit(state, decisionAuditEvent);
+      return { line: structuredClone(updated), request: structuredClone(state.accessRequests.get(line.requestId)) };
+    });
+  }
+
+  refuseAccessRequestLine({ lineId, expectedVersion, decidedAt, decidedBy, justification, auditEvent }) {
+    return this.#transaction((state) => {
+      const line = state.accessRequestLines.get(lineId);
+      if (!line || line.status !== "pending" || line.version !== expectedVersion) throw new Error("stale access request line");
+      const updated = {
+        ...line, status: "refused", decidedAt, decidedBy,
+        decisionJustification: justification, version: line.version + 1,
+      };
+      state.accessRequestLines.set(lineId, updated);
+      this.#refreshAccessRequestState(state, line.requestId);
+      this.#appendAudit(state, auditEvent);
+      return { line: structuredClone(updated), request: structuredClone(state.accessRequests.get(line.requestId)) };
+    });
+  }
+
+  #refreshAccessRequestState(state, requestId) {
+    const request = state.accessRequests.get(requestId);
+    if (!request) throw new Error("access request not found");
+    const lines = [...state.accessRequestLines.values()].filter((line) => line.requestId === requestId);
+    const status = accessRequestStatus(lines);
+    state.accessRequests.set(requestId, { ...request, status, version: request.version + 1 });
   }
 
   getIdentity(identityId) {

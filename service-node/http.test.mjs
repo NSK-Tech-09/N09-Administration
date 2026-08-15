@@ -167,6 +167,79 @@ const tasksWriterCatalog = {
   },
 };
 
+async function seedRequestableTasks(repository) {
+  repository.saveApplication({
+    applicationId: "n09-suivi-taches", displayName: "N09 – Suivi des tâches",
+    status: "active", registrationPolicy: "approval",
+  }, adminAudit("application.registered", { applicationId: "n09-suivi-taches" }));
+  const result = await publishApplicationAccessCatalog({
+    repository,
+    principal: {
+      applicationId: "n09-suivi-taches", audience: "n09-suivi-taches",
+      correlationId: randomUUID(),
+    },
+    payload: tasksWriterCatalog,
+    source: "http-tests",
+  });
+  assert.equal(result.status, 201);
+}
+
+test("reçoit une demande publique uniquement depuis le portail autorisé", async () => {
+  const { adminRepository } = seededAdminRepository({ withAccessDecision: true });
+  await seedRequestableTasks(adminRepository);
+  await withServer({
+    repository: adminRepository, portalOrigins: ["https://nsktech.fr"],
+  }, async (baseUrl) => {
+    const foreign = await fetch(`${baseUrl}/portal/access-requests`, {
+      method: "POST", headers: { origin: "https://example.test", "content-type": "application/json" },
+      body: "{}",
+    });
+    assert.equal(foreign.status, 403);
+
+    const response = await fetch(`${baseUrl}/portal/access-requests`, {
+      method: "POST", headers: { origin: "https://nsktech.fr", "content-type": "application/json" },
+      body: JSON.stringify({
+        displayName: "Personne candidate", email: "candidate@example.test",
+        applicationIds: ["n09-suivi-taches"],
+        reason: "Accéder au suivi partagé pour les besoins de l’équipe.",
+      }),
+    });
+    const body = await response.json();
+    assert.equal(response.status, 202);
+    assert.equal(response.headers.get("access-control-allow-origin"), "https://nsktech.fr");
+    assert.equal(body.accepted, true);
+    assert.match(body.request_id, /^[0-9a-f-]{36}$/);
+    assert.equal(adminRepository.listAccessRequests("pending").length, 1);
+  });
+});
+
+test("présente la demande seulement au responsable des décisions d’accès", async () => {
+  const { adminRepository } = seededAdminRepository({ withAccessDecision: true });
+  await seedRequestableTasks(adminRepository);
+  await withServer({
+    repository: adminRepository, oidcConfig, portalOrigins: ["https://nsktech.fr"],
+  }, async (baseUrl) => {
+    await fetch(`${baseUrl}/portal/access-requests`, {
+      method: "POST", headers: { origin: "https://nsktech.fr", "content-type": "application/json" },
+      body: JSON.stringify({
+        displayName: "Personne candidate", email: "candidate@example.test",
+        applicationIds: ["n09-suivi-taches"],
+        reason: "Accéder au suivi partagé pour les besoins de l’équipe.",
+      }),
+    });
+    const response = await fetch(`${baseUrl}/admin/access-requests`, {
+      headers: { cookie: adminCookie() },
+    });
+    const body = await response.text();
+    assert.equal(response.status, 200);
+    assert.match(body, /Demandes d’accès/);
+    assert.match(body, /Personne candidate/);
+    assert.match(body, /candidate@example\.test/);
+    assert.match(body, /Approuver comme Contributeur/);
+    assert.match(body, /Refuser cette application/);
+  });
+});
+
 test("expose une santé minimale sans information interne", async () => {
   await withServer({}, async (baseUrl) => {
     const response = await fetch(`${baseUrl}/health`);
@@ -178,6 +251,29 @@ test("expose une santé minimale sans information interne", async () => {
     assert.equal(response.headers.get("x-frame-options"), "DENY");
     assert.equal(response.headers.get("referrer-policy"), "no-referrer");
     assert.equal(response.headers.get("permissions-policy"), "camera=(), microphone=(), geolocation=(), payment=()");
+  });
+});
+
+test("applique le socle visuel et de navigation obligatoire de NSK Tech 09", async () => {
+  await withServer({}, async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/`);
+    const html = await response.text();
+    assert.equal(response.status, 200);
+    assert.match(html, /Manrope-VariableFont_wght\.ttf/);
+    assert.match(html, /nsktech09-logo-master\.png/);
+    assert.match(html, /Ouvrir le portail NSK Tech 09 dans un nouvel onglet/);
+    assert.match(html, /aria-label="Accès rapide"/);
+    assert.match(html, /Choisir le thème/);
+    assert.match(html, /N09 – Administration · version 0\.2\.0 · application web installable/);
+    assert.match(html, /Mentions légales/);
+    assert.match(html, /Confidentialité/);
+    assert.match(html, /Comprendre\. Concevoir\. Transmettre\./);
+    assert.match(response.headers.get("content-security-policy"), /script-src 'self'/);
+
+    const logo = await fetch(`${baseUrl}/assets/nsktech09-logo-master.png`);
+    assert.equal(logo.status, 200);
+    assert.equal(logo.headers.get("content-type"), "image/png");
+    assert.ok((await logo.arrayBuffer()).byteLength > 100_000);
   });
 });
 

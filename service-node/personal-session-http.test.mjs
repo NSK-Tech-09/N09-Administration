@@ -87,10 +87,27 @@ test("révoque la cible issue du jeton chiffré avec CSRF", async () => {
       body: new URLSearchParams({ csrf, target }),
     });
     assert.equal(response.status, 303);
-    assert.equal(response.headers.get("location"), "/account/sessions");
+    assert.equal(response.headers.get("location"),
+      "/account/sessions?return_to=https%3A%2F%2Fnsktech.fr%2F%23applications&theme=system");
   });
   assert.deepEqual(revoked, {
     identityId, currentSessionId, targetSessionId, expectedVersion: 4,
+  });
+});
+
+test("conserve le retour vers Énergie dans le compte et ses actions", async () => {
+  await withServer({
+    listOwn: async () => sessions,
+  }, async (origin) => {
+    const returnTo = "https://energie.nsktech.fr/?theme=gray#historique";
+    const page = await fetch(`${origin}/account/sessions?return_to=${encodeURIComponent(returnTo)}&theme=gray`, {
+      headers: { cookie: sessionCookie() },
+    });
+    const html = await page.text();
+    assert.equal(page.status, 200);
+    assert.match(html, /Retour à l’application/);
+    assert.match(html, /href="https:\/\/energie\.nsktech\.fr\/\?theme=gray#historique"/);
+    assert.match(html, new RegExp(`/account/sessions/revoke\\?return_to=${encodeURIComponent(returnTo)}`));
   });
 });
 

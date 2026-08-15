@@ -1,4 +1,5 @@
-import { randomUUID, timingSafeEqual } from "node:crypto";
+import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { evaluateAccessRequestAsync } from "./api.mjs";
 import { createAuditEvent } from "./audit.mjs";
 import { publishApplicationAccessCatalog } from "./application-access-catalog.mjs";
@@ -8,6 +9,9 @@ import { authorizeAccessAdministration } from "./access-admin.mjs";
 import {
   ACCESS_DECISION_PERMISSION, authorizeAccessDecisionAdministration, grantAccessAssignment, revokeAccessAssignment,
 } from "./access-decision-admin.mjs";
+import {
+  AccessRequestError, approveAccessRequestLine, refuseAccessRequestLine, submitPublicAccessRequest,
+} from "./access-request.mjs";
 import { ADMIN_APPLICATION_ID, authorizeIdentityLinkAdministration } from "./identity-link-admin.mjs";
 import { authorizeNotificationOperationsAdministration } from "./notification-operations-admin.mjs";
 import { PersonalSessionError } from "./personal-session-management.mjs";
@@ -31,6 +35,13 @@ import {
 
 const DEFAULT_MAX_BODY_BYTES = 64 * 1024;
 const CURRENT_SESSION_VERSION = 2;
+const ADMIN_VERSION = "0.2.0";
+const STATIC_ASSETS = new Map([
+  ["/assets/nsktech09-logo-master.png", { type: "image/png", body: readFileSync(new URL("./assets/nsktech09-logo-master.png", import.meta.url)) }],
+  ["/assets/Manrope-VariableFont_wght.ttf", { type: "font/ttf", body: readFileSync(new URL("./assets/Manrope-VariableFont_wght.ttf", import.meta.url)) }],
+  ["/assets/favicon.ico", { type: "image/x-icon", body: readFileSync(new URL("./assets/favicon.ico", import.meta.url)) }],
+  ["/assets/theme.js", { type: "text/javascript; charset=utf-8", body: readFileSync(new URL("./assets/theme.js", import.meta.url)) }],
+]);
 
 function setSecurityHeaders(response) {
   response.setHeader("strict-transport-security", "max-age=31536000; includeSubDomains");
@@ -67,11 +78,11 @@ function writeHtml(response, status, title, content, setCookies = []) {
   response.statusCode = status;
   response.setHeader("cache-control", "no-store");
   response.setHeader("content-type", "text/html; charset=utf-8");
-  response.setHeader("content-security-policy", "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'");
+  response.setHeader("content-security-policy", "default-src 'none'; img-src 'self'; font-src 'self'; script-src 'self'; style-src 'unsafe-inline'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'");
   response.setHeader("referrer-policy", "no-referrer");
   response.setHeader("x-content-type-options", "nosniff");
   if (setCookies.length) response.setHeader("set-cookie", setCookies);
-  response.end(`<!doctype html><html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>${escapeHtml(title)} · N09 Administration</title><style>*{box-sizing:border-box}body{margin:0;background:#f3f6f4;color:#18221e;font:16px system-ui,sans-serif;display:grid;place-items:center;min-height:100vh;padding:28px 0}.card{width:min(1100px,calc(100% - 36px));background:#fff;border:1px solid #dfe6e2;border-radius:18px;padding:34px;box-shadow:0 12px 40px #19392d14}.brand{color:#21825e;font-size:12px;font-weight:800;letter-spacing:1px}h1{font:600 31px Georgia,serif;margin:22px 0 12px}h2{font:600 21px Georgia,serif;margin:30px 0 12px}h3{margin:0 0 8px;font-size:17px}p{color:#5d6c65;line-height:1.6}.facts,.request{padding:16px;border-radius:10px;background:#f3f7f5;margin:20px 0}.facts strong,.request strong{color:#173e32}.button,button{display:inline-block;border:0;padding:12px 17px;border-radius:9px;background:#173e32;color:#fff;text-decoration:none;font-weight:bold;cursor:pointer}.button.secondary,button.secondary{background:#68756f}.actions{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:15px}.actions form,.grant{display:grid;gap:9px}.actions label,.grant label{font-size:13px;font-weight:700}.actions select,.actions input,.grant select,.grant input{width:100%;padding:10px;border:1px solid #bdcac4;border-radius:8px;background:#fff}.note,.muted{font-size:13px;color:#6c7a74}.expired{color:#9b391f;font-weight:700}nav{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:22px}.summary{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin:24px 0}.metric{padding:18px;border:1px solid #dce6e1;border-radius:12px;background:#f8faf9}.metric strong{display:block;font-size:28px;color:#173e32}.directory{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}.entry{padding:17px;border:1px solid #dce6e1;border-radius:12px}.entry p{margin:7px 0}.pill{display:inline-block;padding:4px 8px;border-radius:999px;background:#e4f3ec;color:#176044;font-size:12px;font-weight:800}.pill.inactive{background:#f2e8e4;color:#8a3b28}.permissions{margin:8px 0 0;padding-left:19px;color:#45564f}.permissions code,code{font-size:12px;word-break:break-word}.assignment{border-left:4px solid #21825e} @media(max-width:700px){.actions,.directory,.summary{grid-template-columns:1fr}.card{padding:24px}}</style></head><body><main class="card"><div class="brand">N09 · ADMINISTRATION · NSK TECH 09</div>${content}</main></body></html>`);
+  response.end(`<!doctype html><html lang="fr" data-theme="system"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>${escapeHtml(title)} · N09 Administration</title><link rel="icon" href="/assets/favicon.ico"><style>@font-face{font-family:Manrope;src:url('/assets/Manrope-VariableFont_wght.ttf') format('truetype');font-weight:200 800;font-display:swap}:root{--bg:#f4f7f6;--panel:#fff;--muted-bg:#e8efec;--line:#cad6d2;--text:#1a3746;--muted:#52666f;--brand:#0d9376;--brand-strong:#08745e;--link:#08745e;--shadow:#1a37461f;color-scheme:light}html[data-theme=gray]{--bg:#363a3c;--panel:#484d4f;--muted-bg:#3f4446;--line:#707678;--text:#f4f6f5;--muted:#d4d9d7;--brand:#62d9bf;--brand-strong:#0d9376;--link:#75d5e8;--shadow:#0005;color-scheme:dark}html[data-theme=dark]{--bg:#101719;--panel:#172123;--muted-bg:#223034;--line:#385156;--text:#f4f8f8;--muted:#aebfc2;--brand:#62d9bf;--brand-strong:#0d9376;--link:#65d0df;--shadow:#0006;color-scheme:dark}@media(prefers-color-scheme:dark){html[data-theme=system]{--bg:#101719;--panel:#172123;--muted-bg:#223034;--line:#385156;--text:#f4f8f8;--muted:#aebfc2;--brand:#62d9bf;--brand-strong:#0d9376;--link:#65d0df;--shadow:#0006;color-scheme:dark}}*{box-sizing:border-box}html{background:var(--bg)}body{margin:0;background:var(--bg);color:var(--text);font:16px Manrope,system-ui,sans-serif;min-height:100vh}.skip{position:fixed;left:12px;top:-80px;z-index:10;background:var(--brand-strong);color:#fff;padding:10px 14px;border-radius:8px}.skip:focus{top:12px}.app-header{display:flex;align-items:center;gap:18px;padding:16px max(18px,calc((100% - 1100px)/2));border-bottom:1px solid var(--line);background:var(--panel)}.logo-link{display:flex;align-items:center;min-width:74px;min-height:62px}.logo{width:78px;height:58px;object-fit:contain}.identity{min-width:0}.brand{color:var(--brand);font-size:12px;font-weight:800;letter-spacing:1.5px}.identity strong{display:block;font-size:20px}.header-actions{margin-left:auto;display:flex;align-items:center;gap:8px;flex-wrap:wrap}.quick{display:flex;align-items:end;gap:14px;padding:10px max(18px,calc((100% - 1100px)/2));border-bottom:1px solid var(--line);background:var(--panel)}.quick label{display:grid;gap:4px;color:var(--muted);font-size:12px}.quick select{min-height:42px;padding:8px 36px 8px 11px;border:1px solid var(--line);border-radius:9px;background:var(--panel);color:var(--text);font:inherit}.card{width:min(1100px,calc(100% - 36px));margin:28px auto;background:var(--panel);border:1px solid var(--line);border-radius:18px;padding:34px;box-shadow:0 12px 40px var(--shadow)}h1{font-size:31px;line-height:1.2;margin:22px 0 12px}h2{font-size:21px;margin:30px 0 12px}h3{margin:0 0 8px;font-size:17px}p{color:var(--muted);line-height:1.6}.facts,.request{padding:16px;border-radius:10px;background:var(--muted-bg);margin:20px 0}.facts strong,.request strong{color:var(--text)}a{color:var(--link)}.button,button{display:inline-block;border:1px solid transparent;padding:12px 17px;border-radius:9px;background:var(--brand-strong);color:#fff;text-decoration:none;font:inherit;font-weight:750;cursor:pointer}.button.secondary,button.secondary{background:var(--muted-bg);border-color:var(--line);color:var(--text)}button:hover,.button:hover{filter:brightness(1.07)}a:focus-visible,button:focus-visible,select:focus-visible,input:focus-visible{outline:3px solid var(--link);outline-offset:3px}.actions{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:15px}.actions form,.grant{display:grid;gap:9px}.actions label,.grant label{font-size:13px;font-weight:700}.actions select,.actions input,.grant select,.grant input{width:100%;padding:10px;border:1px solid var(--line);border-radius:8px;background:var(--panel);color:var(--text)}.note,.muted{font-size:13px;color:var(--muted)}.expired{color:#b24a31;font-weight:700}nav{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:22px}.summary{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin:24px 0}.metric{padding:18px;border:1px solid var(--line);border-radius:12px;background:var(--muted-bg)}.metric strong{display:block;font-size:28px;color:var(--text)}.directory{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}.entry{padding:17px;border:1px solid var(--line);border-radius:12px}.entry p{margin:7px 0}.pill{display:inline-block;padding:4px 8px;border-radius:999px;background:#dff4ec;color:#176044;font-size:12px;font-weight:800}.pill.inactive{background:#f2e8e4;color:#8a3b28}.permissions{margin:8px 0 0;padding-left:19px;color:var(--muted)}.permissions code,code{font-size:12px;word-break:break-word}.assignment{border-left:4px solid var(--brand)}footer{display:flex;justify-content:space-between;gap:16px;flex-wrap:wrap;width:min(1100px,calc(100% - 36px));margin:0 auto;padding:8px 0 28px;color:var(--muted);font-size:13px}footer nav{margin:0}footer a{text-decoration:underline}@media(max-width:700px){.actions,.directory,.summary{grid-template-columns:1fr}.card{padding:24px}.app-header,.quick{align-items:flex-start;flex-wrap:wrap}.header-actions{width:100%;margin-left:0}.quick label{width:100%}.quick select{width:100%}footer{display:grid}}</style><script src="/assets/theme.js" defer></script></head><body><a class="skip" href="#contenu">Aller au contenu</a><header class="app-header"><a class="logo-link" href="https://nsktech.fr/" target="_blank" rel="noopener noreferrer" aria-label="Ouvrir le portail NSK Tech 09 dans un nouvel onglet"><img class="logo" src="/assets/nsktech09-logo-master.png" alt="NSK Tech 09"></a><div class="identity"><span class="brand">NSK TECH 09</span><strong>N09 – Administration</strong><span>Identités et accès</span></div><div class="header-actions"><a class="button secondary" href="/account/sessions">Mon compte</a><form method="post" action="/auth/logout"><button class="secondary" type="submit">Se déconnecter</button></form></div></header><div class="quick"><label>Accès rapide<select id="nsk-quick-access" aria-label="Accès rapide"><option value="">Choisir une destination</option><option value="/">Accueil</option><option value="/account/sessions">Mon compte</option><option value="/notifications">Notifications</option></select></label><label>Thème<select id="nsk-theme" aria-label="Choisir le thème"><option value="system">Système</option><option value="light">Clair</option><option value="gray">Gris</option><option value="dark">Sombre</option></select></label></div><main id="contenu" class="card"><div class="brand">N09 · ADMINISTRATION · NSK TECH 09</div>${content}</main><footer><span>N09 – Administration · version ${ADMIN_VERSION} · application web installable</span><nav aria-label="Informations légales"><a href="https://nsktech.fr/#mentions-legales" target="_blank" rel="noopener noreferrer">Mentions légales</a><a href="https://nsktech.fr/#confidentialite" target="_blank" rel="noopener noreferrer">Confidentialité</a></nav><span>Comprendre. Concevoir. Transmettre.</span></footer></body></html>`);
 }
 
 async function readBody(request, maxBodyBytes) {
@@ -137,9 +148,31 @@ function redirect(response, location) {
 
 function safeLoginReturnPath(value) {
   if (typeof value !== "string" || value.includes("\r") || value.includes("\n") ||
-      (!value.startsWith("/application-login/authorize?") && !value.startsWith("/portal/login?"))) return null;
+      (!value.startsWith("/application-login/authorize?") && !value.startsWith("/portal/login?") &&
+       !value.startsWith("/account/sessions?"))) return null;
   const parsed = new URL(value, "https://n09.invalid");
   return parsed.origin === "https://n09.invalid" ? `${parsed.pathname}${parsed.search}` : null;
+}
+
+const ACCOUNT_APPLICATION_ORIGINS = Object.freeze([
+  "https://energie.nsktech.fr",
+  "https://prod-taches.nsktech.fr",
+  "https://prod-admin.nsktech.fr",
+]);
+
+function safeAccountTheme(value) {
+  return ["system", "light", "gray", "dark"].includes(value) ? value : "system";
+}
+
+function safeAccountReturn(value, portalOrigins, fallback) {
+  if (typeof value !== "string" || value.includes("\r") || value.includes("\n")) return fallback;
+  try {
+    const target = new URL(value);
+    const allowedOrigins = new Set([...portalOrigins, ...ACCOUNT_APPLICATION_ORIGINS]);
+    return target.protocol === "https:" && allowedOrigins.has(target.origin) ? target.href : fallback;
+  } catch {
+    return fallback;
+  }
 }
 
 function formatDate(value) {
@@ -236,6 +269,39 @@ function renderAccessDecisionAdministration(identities, applications, assignment
   return `<h1>Décider les accès</h1><p>Un octroi ne peut utiliser qu’un rôle actif publié par l’application. Son périmètre, sa justification et ses conditions sont inscrits dans le journal d’audit. Une application qui exige un profil métier doit ensuite confirmer ses propres prérequis à chaque requête.</p><div class="facts"><p><strong>Séparation stricte :</strong> Administration accorde le droit central ; l’application conserve et vérifie le rôle métier et le périmètre local. Le pouvoir de décision central reste soumis à sa gouvernance dédiée.</p></div><h2>Accorder un accès gouverné</h2><div class="directory">${grantCards || '<div class="facts"><p>Aucun rôle applicatif actif n’est actuellement ouvert à l’octroi.</p></div>'}</div><h2>Révoquer un accès actif</h2><div class="directory">${cards || '<div class="facts"><p>Aucune affectation active.</p></div>'}</div><nav><a class="button secondary" href="/admin/access">Retour au registre</a><a class="button secondary" href="/">Retour à l’accueil</a><form method="post" action="/auth/logout"><button class="secondary" type="submit">Fermer la session</button></form></nav>`;
 }
 
+function renderAccessRequestAdministration(requests, identities, catalogs, csrf) {
+  const activeIdentityOptions = identities.filter((identity) => identity.status === "active").map((identity) =>
+    `<option value="${escapeHtml(identity.identityId)}">${escapeHtml(identity.displayName)} — ${escapeHtml(identity.email)}</option>`
+  ).join("");
+  const catalogByApplication = new Map(catalogs.map((catalog) => [catalog.applicationId, catalog]));
+  const requestCards = requests.map((accessRequest) => {
+    const lines = accessRequest.lines.map((line) => {
+      const catalog = catalogByApplication.get(line.applicationId);
+      if (line.status !== "pending") {
+        return `<article class="entry"><h3>${escapeHtml(line.applicationName)}</h3><p><span class="pill${line.status === "approved" ? "" : " inactive"}">${escapeHtml(line.status)}</span></p><p class="muted">Décision : ${escapeHtml(line.decisionJustification || "consignée")}</p></article>`;
+      }
+      const roleForms = catalog?.roles.filter((role) => role.status === "active").flatMap((role) => {
+        const scopeDefinitions = catalog.scopeTypes.filter((scope) =>
+          scope.status === "active" && role.scopeTypes.includes(scope.scope_type_id)
+        );
+        return scopeDefinitions.map((scope) => {
+          const scopeField = scope.scope_type_id === "global"
+            ? '<input type="hidden" name="scope_id" value="">'
+            : `<label>Identifiant du périmètre<input name="scope_id" maxlength="191" required placeholder="${escapeHtml(scope.displayName)}"></label>`;
+          return `<form class="grant" method="post" action="/admin/access-requests/${escapeHtml(line.lineId)}/approve"><input type="hidden" name="csrf" value="${escapeHtml(csrf)}"><input type="hidden" name="catalog_version" value="${escapeHtml(catalog.catalogVersion)}"><input type="hidden" name="role_id" value="${escapeHtml(role.role_id)}"><input type="hidden" name="scope_type" value="${escapeHtml(scope.scope_type_id)}"><label>Identité NSK cible<select name="identity_id" required><option value="">Sélectionner…</option>${activeIdentityOptions}</select></label>${scopeField}<label>Justification de l’octroi<input name="justification" minlength="20" maxlength="500" required placeholder="Pourquoi cet accès est-il légitime ?"></label><button type="submit">Approuver comme ${escapeHtml(role.displayName)}</button></form>`;
+        });
+      }) ?? [];
+      const approval = roleForms.length
+        ? roleForms.join("")
+        : '<div class="facts"><p><strong>Catalogue indisponible :</strong> cette ligne ne peut pas être approuvée tant que l’application n’a pas publié ses rôles.</p></div>';
+      const refusal = `<form class="grant" method="post" action="/admin/access-requests/${escapeHtml(line.lineId)}/refuse"><input type="hidden" name="csrf" value="${escapeHtml(csrf)}"><label>Motif du refus<input name="justification" minlength="20" maxlength="500" required placeholder="Pourquoi cette demande est-elle refusée ?"></label><button class="secondary" type="submit">Refuser cette application</button></form>`;
+      return `<article class="entry"><h3>${escapeHtml(line.applicationName)}</h3><p><span class="pill">En attente</span></p><div class="actions">${approval}${refusal}</div></article>`;
+    }).join("");
+    return `<section class="request"><h2>${escapeHtml(accessRequest.applicantName)}</h2><p><strong>Adresse :</strong> ${escapeHtml(accessRequest.applicantEmail)}<br><strong>Demandée le :</strong> ${escapeHtml(formatDate(accessRequest.requestedAt))}<br><strong>Motif :</strong> ${escapeHtml(accessRequest.reason)}<br><span class="note">Référence : ${escapeHtml(accessRequest.requestId)}</span></p><div class="directory">${lines}</div></section>`;
+  }).join("");
+  return `<h1>Demandes d’accès</h1><p>Chaque application est décidée séparément. Une approbation crée ou réactive exactement le rôle publié choisi ; aucun compte ni privilège n’est déduit de l’adresse électronique.</p>${requestCards || '<div class="facts"><p>Aucune demande en attente.</p></div>'}<nav><a class="button secondary" href="/admin/access-decisions">Accès applicatifs</a><a class="button secondary" href="/">Retour à l’accueil</a><form method="post" action="/auth/logout"><button class="secondary" type="submit">Fermer la session</button></form></nav>`;
+}
+
 function renderNotifications(notifications, unreadCount, csrf) {
   const cards = notifications.map((notification) => {
     const unread = !notification.readAt;
@@ -249,21 +315,23 @@ function renderNotifications(notifications, unreadCount, csrf) {
   return `<h1>Centre de notifications</h1><p>Ce centre interne est le canal de référence. Lire une notification ne la supprime pas et aucun canal externe n’est activé par cette page.</p><div class="summary"><div class="metric"><strong>${escapeHtml(unreadCount)}</strong>non lue${unreadCount > 1 ? "s" : ""}</div><div class="metric"><strong>${escapeHtml(notifications.length)}</strong>affichée${notifications.length > 1 ? "s" : ""}</div></div><nav>${allRead}<a class="button secondary" href="/">Retour à l’accueil</a></nav><div class="directory">${cards || '<div class="facts"><p>Aucune notification pour le moment.</p></div>'}</div>`;
 }
 
-function renderPersonalSessions(sessions, csrf, actionToken) {
+function renderPersonalSessions(sessions, csrf, actionToken, { returnTo, theme }) {
+  const accountQuery = `?return_to=${encodeURIComponent(returnTo)}&theme=${encodeURIComponent(theme)}`;
+  const returnLabel = new URL(returnTo).origin === "https://nsktech.fr" ? "Retour aux applications" : "Retour à l’application";
   const activeOthers = sessions.filter((session) => session.state === "active" && !session.current).length;
   const stateLabel = (session) => session.current ? "Session actuelle"
     : session.state === "active" ? "Active"
       : session.state === "expired" ? "Expirée" : "Fermée";
   const cards = sessions.map((session) => {
     const action = session.state === "active" && !session.current
-      ? `<form method="post" action="/account/sessions/revoke"><input type="hidden" name="csrf" value="${escapeHtml(csrf)}"><input type="hidden" name="target" value="${escapeHtml(actionToken(session))}"><button class="secondary" type="submit">Fermer cette session</button></form>`
+      ? `<form method="post" action="/account/sessions/revoke${accountQuery}"><input type="hidden" name="csrf" value="${escapeHtml(csrf)}"><input type="hidden" name="target" value="${escapeHtml(actionToken(session))}"><button class="secondary" type="submit">Fermer cette session</button></form>`
       : session.current
         ? '<p class="muted">Utilise « Fermer la session » pour quitter cet appareil.</p>' : "";
     return `<article class="entry"><p><span class="pill${session.state === "active" ? "" : " inactive"}">${escapeHtml(stateLabel(session))}</span></p><h3>${escapeHtml(session.applicationName)}</h3><p>${escapeHtml(session.contextLabel || "Connexion à l’application")}</p><p class="muted">Ouverte le ${escapeHtml(formatDate(session.issuedAt))}<br>Dernière activité ${escapeHtml(formatDate(session.lastSeenAt))}<br>Échéance au plus tard ${escapeHtml(formatDate(session.absoluteExpiresAt))}</p>${action}</article>`;
   }).join("");
   const closeOthers = activeOthers
-    ? `<form method="post" action="/account/sessions/revoke-others"><input type="hidden" name="csrf" value="${escapeHtml(csrf)}"><button class="secondary" type="submit">Fermer toutes les autres sessions (${escapeHtml(activeOthers)})</button></form>` : "";
-  return `<h1>Mes sessions</h1><p>Retrouve ici les connexions ouvertes dans l’écosystème NSK Tech 09. Une fermeture distante prend effet au prochain contrôle serveur de l’application.</p><div class="facts"><p><strong>Protection :</strong> cette page n’affiche aucun cookie, secret, adresse réseau ni identifiant technique de session.</p></div><nav>${closeOthers}<a class="button secondary" href="/">Retour à l’accueil</a><form method="post" action="/auth/logout"><button class="secondary" type="submit">Fermer la session actuelle</button></form></nav><div class="directory">${cards || '<div class="facts"><p>Aucune session enregistrée.</p></div>'}</div>`;
+    ? `<form method="post" action="/account/sessions/revoke-others${accountQuery}"><input type="hidden" name="csrf" value="${escapeHtml(csrf)}"><button class="secondary" type="submit">Fermer toutes les autres sessions (${escapeHtml(activeOthers)})</button></form>` : "";
+  return `<h1>Mes sessions</h1><p>Retrouve ici les connexions ouvertes dans l’écosystème NSK Tech 09. Une fermeture distante prend effet au prochain contrôle serveur de l’application.</p><div class="facts"><p><strong>Protection :</strong> cette page n’affiche aucun cookie, secret, adresse réseau ni identifiant technique de session.</p></div><nav><a class="button" href="${escapeHtml(returnTo)}">${returnLabel}</a>${closeOthers}<a class="button secondary" href="/">Administration</a><form method="post" action="/auth/logout"><button class="secondary" type="submit">Fermer la session actuelle</button></form></nav><div class="directory">${cards || '<div class="facts"><p>Aucune session enregistrée.</p></div>'}</div>`;
 }
 
 function renderOperatorSessions(sessions, csrf, actionToken) {
@@ -331,6 +399,24 @@ export function createHttpHandler({
 }) {
   if (!repository) throw new Error("repository is required");
   if (typeof authenticate !== "function") throw new Error("authenticate must be a function");
+  const publicRequestAttempts = new Map();
+
+  function allowPublicAccessRequest(request, email, now = Date.now()) {
+    const forwarded = String(request.headers["x-forwarded-for"] ?? "").split(",")[0].trim();
+    const remote = forwarded || request.socket?.remoteAddress || "unknown";
+    const key = createHash("sha256").update(`${remote}\n${String(email).trim().toLowerCase()}`, "utf8").digest("hex");
+    const windowStart = now - 60 * 60 * 1000;
+    const attempts = (publicRequestAttempts.get(key) ?? []).filter((timestamp) => timestamp > windowStart);
+    if (attempts.length >= 5) return false;
+    attempts.push(now);
+    publicRequestAttempts.set(key, attempts);
+    if (publicRequestAttempts.size > 5000) {
+      for (const [candidate, values] of publicRequestAttempts) {
+        if (!values.some((timestamp) => timestamp > windowStart)) publicRequestAttempts.delete(candidate);
+      }
+    }
+    return true;
+  }
 
   function observeSessionInBackground(session) {
     if (administrationSessionAuthority?.mode !== "observe" ||
@@ -371,6 +457,15 @@ export function createHttpHandler({
   return async function handle(request, response) {
     setSecurityHeaders(response);
     const url = new URL(request.url, "https://n09.invalid");
+    if (request.method === "GET" && STATIC_ASSETS.has(url.pathname)) {
+      const asset = STATIC_ASSETS.get(url.pathname);
+      response.statusCode = 200;
+      response.setHeader("cache-control", "public, max-age=86400");
+      response.setHeader("content-type", asset.type);
+      response.setHeader("x-content-type-options", "nosniff");
+      response.end(asset.body);
+      return;
+    }
     if (url.pathname === "/health" && request.method === "GET") {
       writeJson(response, 200, { status: "ok" });
       return;
@@ -487,6 +582,45 @@ export function createHttpHandler({
       }
       return;
     }
+    if (url.pathname === "/portal/access-requests") {
+      const requestOrigin = request.headers.origin;
+      if (typeof requestOrigin !== "string" || !portalOrigins.includes(requestOrigin)) {
+        writeJson(response, 403, { error: "origin_not_allowed" });
+        return;
+      }
+      response.setHeader("access-control-allow-origin", requestOrigin);
+      response.setHeader("vary", "Origin");
+      if (request.method === "OPTIONS") {
+        response.statusCode = 204;
+        response.setHeader("access-control-allow-methods", "POST, OPTIONS");
+        response.setHeader("access-control-allow-headers", "content-type");
+        response.end();
+        return;
+      }
+      if (request.method !== "POST") {
+        response.setHeader("allow", "POST, OPTIONS");
+        writeJson(response, 405, { error: "method_not_allowed" });
+        return;
+      }
+      let correlationId = randomUUID();
+      try {
+        const { payload } = await readJson(request, maxBodyBytes);
+        if (!allowPublicAccessRequest(request, payload?.email)) {
+          throw new AccessRequestError("rate_limited", 429);
+        }
+        const result = await submitPublicAccessRequest(repository, { ...payload, correlationId });
+        writeJson(response, 202, {
+          accepted: true, request_id: result.requestId, status: result.status,
+        }, correlationId);
+      } catch (error) {
+        if (error instanceof HttpInputError || error instanceof AccessRequestError) {
+          writeJson(response, error.status, { error: error.code }, correlationId);
+        } else {
+          writeJson(response, 503, { error: "access_request_service_unavailable" }, correlationId);
+        }
+      }
+      return;
+    }
     if (url.pathname === "/portal/logout" && request.method === "POST") {
       const requestOrigin = request.headers.origin;
       const fallback = portalOrigins[0] ? `${portalOrigins[0]}/` : null;
@@ -512,7 +646,17 @@ export function createHttpHandler({
       return;
     }
     if (url.pathname === "/portal/account" && request.method === "GET") {
-      redirect(response, "/account/sessions");
+      const fallback = portalOrigins[0] ? `${portalOrigins[0]}/#applications` : "https://nsktech.fr/#applications";
+      const returnTo = safeAccountReturn(url.searchParams.get("return_to"), portalOrigins, fallback);
+      const theme = safeAccountTheme(url.searchParams.get("theme"));
+      const accountPath = `/account/sessions?return_to=${encodeURIComponent(returnTo)}&theme=${encodeURIComponent(theme)}`;
+      try {
+        const session = await openCurrentSession(request);
+        if (session.status !== "authenticated") throw new Error("fresh_authentication_required");
+        redirect(response, accountPath);
+      } catch {
+        redirect(response, `/auth/infomaniak/start?return_to=${encodeURIComponent(accountPath)}`);
+      }
       return;
     }
     if (url.pathname === "/" && request.method === "GET") {
@@ -535,7 +679,13 @@ export function createHttpHandler({
         } catch { /* no administrative affordance on repository failure */ }
         try {
           const decision = await authorizeAccessDecisionAdministration(repository, session.identityId);
-          if (decision.allowed) administrationLinks.push('<a class="button" href="/admin/access-decisions">Décider les révocations</a>');
+          if (decision.allowed) {
+            administrationLinks.push('<a class="button" href="/admin/access-decisions">Décider les accès</a>');
+            if (typeof repository.listAccessRequests === "function") {
+              const pendingRequests = await repository.listAccessRequests("pending");
+              administrationLinks.push(`<a class="button" href="/admin/access-requests">Demandes d’accès${pendingRequests.length ? ` (${escapeHtml(pendingRequests.length)})` : ""}</a>`);
+            }
+          }
         } catch { /* no administrative affordance on repository failure */ }
         try {
           const decision = await authorizeNotificationOperationsAdministration(repository, session.identityId);
@@ -856,6 +1006,10 @@ export function createHttpHandler({
     const personalSessionRevoke = url.pathname === "/account/sessions/revoke";
     const personalSessionsRevokeOthers = url.pathname === "/account/sessions/revoke-others";
     if (personalSessionsRoot || personalSessionRevoke || personalSessionsRevokeOthers) {
+      const accountFallback = portalOrigins[0] ? `${portalOrigins[0]}/#applications` : "https://nsktech.fr/#applications";
+      const accountReturnTo = safeAccountReturn(url.searchParams.get("return_to"), portalOrigins, accountFallback);
+      const accountTheme = safeAccountTheme(url.searchParams.get("theme"));
+      const accountQuery = `?return_to=${encodeURIComponent(accountReturnTo)}&theme=${encodeURIComponent(accountTheme)}`;
       let session;
       try {
         if (!oidcConfig) throw new Error("oidc_not_configured");
@@ -885,7 +1039,9 @@ export function createHttpHandler({
             expectedVersion: target.version,
             expiresAt: Date.now() + 10 * 60_000,
           }, oidcConfig.sessionSecret, "personal-session-action");
-          writeHtml(response, 200, "Mes sessions", renderPersonalSessions(sessions, session.csrf, actionToken));
+          writeHtml(response, 200, "Mes sessions", renderPersonalSessions(
+            sessions, session.csrf, actionToken, { returnTo: accountReturnTo, theme: accountTheme },
+          ));
         } catch {
           writeHtml(response, 503, "Sessions indisponibles", '<h1>Sessions momentanément indisponibles</h1><p>Le registre n’a pas pu être consulté. Aucune connexion n’a été modifiée.</p><a class="button" href="/">Retour</a>');
         }
@@ -915,11 +1071,11 @@ export function createHttpHandler({
               currentSessionId: session.centralSession.sessionId,
             });
           }
-          redirect(response, "/account/sessions");
+          redirect(response, `/account/sessions${accountQuery}`);
         } catch (error) {
           const status = error instanceof HttpInputError || error instanceof PersonalSessionError
             ? error.status : 503;
-          writeHtml(response, status, "Session non modifiée", '<h1>Session non modifiée</h1><p>La demande est invalide, périmée ou concurrente. Aucune fermeture partielle n’a été présentée comme réussie.</p><a class="button" href="/account/sessions">Retour</a>');
+          writeHtml(response, status, "Session non modifiée", `<h1>Session non modifiée</h1><p>La demande est invalide, périmée ou concurrente. Aucune fermeture partielle n’a été présentée comme réussie.</p><a class="button" href="/account/sessions${accountQuery}">Retour</a>`);
         }
         return;
       }
@@ -1110,6 +1266,78 @@ export function createHttpHandler({
         return;
       }
       response.setHeader("allow", accessDecisionRoot ? "GET" : "POST");
+      writeJson(response, 405, { error: "method_not_allowed" });
+      return;
+    }
+    const accessRequestRoute = url.pathname.match(/^\/admin\/access-requests(?:\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\/(approve|refuse))?$/i);
+    if (accessRequestRoute) {
+      let session;
+      try {
+        if (!oidcConfig) throw new Error("oidc_not_configured");
+        session = await openCurrentSession(request);
+      } catch {
+        writeHtml(response, 401, "Connexion requise", '<h1>Connexion requise</h1><p>Une session NSK valide est nécessaire pour traiter les demandes d’accès.</p><a class="button" href="/">Se connecter</a>');
+        return;
+      }
+      if (session.status !== "authenticated" || !session.identityId || !session.csrf) {
+        writeHtml(response, 401, "Nouvelle connexion requise", '<h1>Nouvelle connexion requise</h1><p>Renouvelle ta session afin d’accéder à l’administration sécurisée.</p><a class="button" href="/">Retour</a>');
+        return;
+      }
+      let access;
+      try { access = await authorizeAccessDecisionAdministration(repository, session.identityId); }
+      catch { access = { allowed: false, unavailable: true }; }
+      if (access.unavailable) {
+        writeHtml(response, 503, "Demandes indisponibles", '<h1>Demandes momentanément indisponibles</h1><p>Les pouvoirs ne peuvent pas être vérifiés. Aucune décision n’a été appliquée.</p><a class="button" href="/">Retour</a>');
+        return;
+      }
+      if (!access.allowed) {
+        writeHtml(response, 403, "Accès refusé", '<h1>Accès refusé</h1><p>Cette identité ne possède pas la permission de décider les accès.</p><a class="button" href="/">Retour</a>');
+        return;
+      }
+      if (!accessRequestRoute[1] && request.method === "GET") {
+        try {
+          const [requests, identities, catalogs] = await Promise.all([
+            repository.listAccessRequests("pending"), repository.listIdentities("active"),
+            repository.listLatestApplicationAccessCatalogs(),
+          ]);
+          writeHtml(response, 200, "Demandes d’accès", renderAccessRequestAdministration(
+            requests, identities, catalogs, session.csrf,
+          ));
+        } catch {
+          writeHtml(response, 503, "Demandes indisponibles", '<h1>Demandes momentanément indisponibles</h1><p>Le registre n’a pas pu être consulté. Aucune décision n’a été appliquée.</p><a class="button" href="/">Retour</a>');
+        }
+        return;
+      }
+      if (accessRequestRoute[1] && request.method === "POST") {
+        try {
+          const form = await readForm(request, maxBodyBytes);
+          if (!safeEqual(form.get("csrf"), session.csrf)) throw new HttpInputError(403, "invalid_csrf");
+          const input = {
+            lineId: accessRequestRoute[1].toLowerCase(),
+            operatorIdentityId: session.identityId,
+            justification: String(form.get("justification") ?? "").trim(),
+          };
+          if (accessRequestRoute[2] === "approve") {
+            await approveAccessRequestLine(repository, {
+              ...input,
+              identityId: String(form.get("identity_id") ?? "").toLowerCase(),
+              roleId: String(form.get("role_id") ?? ""),
+              scopeType: String(form.get("scope_type") ?? ""),
+              scopeId: String(form.get("scope_id") ?? "").trim() || null,
+              catalogVersion: Number(form.get("catalog_version")),
+            });
+          } else {
+            await refuseAccessRequestLine(repository, input);
+          }
+          redirect(response, "/admin/access-requests");
+        } catch (error) {
+          const status = error instanceof HttpInputError || error instanceof AccessRequestError ? error.status : 409;
+          const code = error instanceof HttpInputError || error instanceof AccessRequestError ? error.code : "decision_conflict";
+          writeHtml(response, status, "Décision non appliquée", `<h1>Décision non appliquée</h1><p>La demande, l’identité, le catalogue ou le rôle ne permet pas cette décision. Aucun changement partiel n’a été conservé.</p><p class="note">Code : ${escapeHtml(code)}</p><a class="button" href="/admin/access-requests">Retour</a>`);
+        }
+        return;
+      }
+      response.setHeader("allow", accessRequestRoute[1] ? "POST" : "GET");
       writeJson(response, 405, { error: "method_not_allowed" });
       return;
     }

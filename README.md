@@ -185,6 +185,11 @@ limitée à l'audience `n09-portail`, filtre le catalogue d'après les
 affectations centrales actives et confirme la révocation à la déconnexion ;
 voir `docs/LOT-61-PORTAIL-CLOUD.md`.
 
+Le lot 62 active les demandes d’accès publiques : réception bornée depuis le
+portail, décision humaine par application, affectation atomique fondée sur le
+catalogue publié et audit sans privilège implicite ; voir
+`docs/LOT-62-DEMANDES-ACCES.md`.
+
 ## Prérequis et démarrage local
 
 - Python 3.11 ou supérieur ;
@@ -247,6 +252,8 @@ ne contient aucun secret réel. La production reste inchangée.
 - [`docs/LOT-57-CONTRAT-PROMOTION-PRODUCTION.md`](docs/LOT-57-CONTRAT-PROMOTION-PRODUCTION.md)
 - [`docs/LOT-60-ENERGIE-PRODUCTION.md`](docs/LOT-60-ENERGIE-PRODUCTION.md)
 - [`docs/LOT-61-PORTAIL-CLOUD.md`](docs/LOT-61-PORTAIL-CLOUD.md)
+- [`docs/LOT-62-DEMANDES-ACCES.md`](docs/LOT-62-DEMANDES-ACCES.md)
+- [`docs/LOT-63-CONFORMITE-ET-RETOUR-COMPTE.md`](docs/LOT-63-CONFORMITE-ET-RETOUR-COMPTE.md)
 - [`docs/ETAT-PREPROD-INFOMANIAK.md`](docs/ETAT-PREPROD-INFOMANIAK.md)
 - [`docs/CONFORMITE-NSES.md`](docs/CONFORMITE-NSES.md)
 - [`docs/CONTRAT-API-INTERNE.md`](docs/CONTRAT-API-INTERNE.md)

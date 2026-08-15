@@ -134,6 +134,17 @@ function mapApplicationSession(row) {
   };
 }
 
+function mapAccessRequestLine(row) {
+  if (!row) return null;
+  return {
+    lineId: row.line_id, requestId: row.request_id, applicationId: row.application_id,
+    applicationName: row.application_name ?? row.application_id, status: row.status,
+    targetIdentityId: row.target_identity_id, assignmentId: row.assignment_id,
+    decidedAt: asIso(row.decided_at), decidedBy: row.decided_by,
+    decisionJustification: row.decision_justification, version: Number(row.version),
+  };
+}
+
 export class MariaDbRepository {
   constructor(pool) {
     this.pool = pool;
@@ -417,6 +428,197 @@ export class MariaDbRepository {
       );
       await this.#appendAudit(connection, auditEvent);
     });
+  }
+
+  async saveAccessRequest(request, lines, auditEvent) {
+    if (request.status !== "pending" || request.version !== 1 || !lines.length ||
+        auditEvent.action !== "access_request.submitted") throw new Error("invalid access request bundle");
+    return this.#transaction(async (connection) => {
+      const applicationIds = [...lines.map((line) => line.applicationId)].sort();
+      if (lines.some((line) => line.requestId !== request.requestId || line.status !== "pending" || line.version !== 1) ||
+          new Set(applicationIds).size !== applicationIds.length) throw new Error("invalid access request lines");
+      const [duplicates] = await connection.execute(
+        `SELECT request_id, applicant_name, applicant_email, reason, status, requested_at, version
+         FROM access_requests
+         WHERE applicant_email_normalized = ? AND status = 'pending'
+         ORDER BY requested_at, request_id
+         FOR UPDATE`,
+        [request.applicantEmail],
+      );
+      const requestedKey = applicationIds.join(",");
+      let duplicate = null;
+      for (const candidate of duplicates) {
+        const [candidateLines] = await connection.execute(
+          `SELECT application_id FROM access_request_lines
+           WHERE request_id = ? ORDER BY application_id FOR UPDATE`,
+          [candidate.request_id],
+        );
+        if (candidateLines.map((row) => row.application_id).join(",") === requestedKey) {
+          duplicate = candidate;
+          break;
+        }
+      }
+      if (duplicate) return {
+        requestId: duplicate.request_id, applicantName: duplicate.applicant_name,
+        applicantEmail: duplicate.applicant_email, reason: duplicate.reason,
+        status: duplicate.status, requestedAt: asIso(duplicate.requested_at), version: Number(duplicate.version),
+      };
+      await connection.execute(
+        `INSERT INTO access_requests(
+           request_id, applicant_name, applicant_email, applicant_email_normalized,
+           reason, status, requested_at, version
+         ) VALUES (?, ?, ?, ?, ?, 'pending', ?, 1)`,
+        [request.requestId, request.applicantName, request.applicantEmail, request.applicantEmail,
+         request.reason, asMariaDate(request.requestedAt)],
+      );
+      for (const line of lines) {
+        await connection.execute(
+          `INSERT INTO access_request_lines(
+             line_id, request_id, application_id, status, target_identity_id, assignment_id,
+             decided_at, decided_by, decision_justification, version
+           ) VALUES (?, ?, ?, 'pending', NULL, NULL, NULL, NULL, '', 1)`,
+          [line.lineId, line.requestId, line.applicationId],
+        );
+      }
+      await this.#appendAudit(connection, auditEvent);
+      return request;
+    });
+  }
+
+  async getAccessRequestLine(lineId) {
+    const [rows] = await this.pool.execute(
+      `SELECT l.*, a.display_name AS application_name
+       FROM access_request_lines l INNER JOIN applications a ON a.application_id = l.application_id
+       WHERE l.line_id = ?`, [lineId],
+    );
+    return mapAccessRequestLine(rows[0]);
+  }
+
+  async listAccessRequests(status = null) {
+    const [requests] = status
+      ? await this.pool.execute(
+        "SELECT * FROM access_requests WHERE status = ? ORDER BY requested_at DESC, request_id", [status],
+      )
+      : await this.pool.execute("SELECT * FROM access_requests ORDER BY requested_at DESC, request_id");
+    if (!requests.length) return [];
+    const [lines] = await this.pool.query(
+      `SELECT l.*, a.display_name AS application_name
+       FROM access_request_lines l INNER JOIN applications a ON a.application_id = l.application_id
+       ORDER BY l.application_id, l.line_id`,
+    );
+    return requests.map((request) => ({
+      requestId: request.request_id, applicantName: request.applicant_name,
+      applicantEmail: request.applicant_email, reason: request.reason,
+      status: request.status, requestedAt: asIso(request.requested_at), version: Number(request.version),
+      lines: lines.filter((line) => line.request_id === request.request_id).map(mapAccessRequestLine),
+    }));
+  }
+
+  async approveAccessRequestLine({
+    lineId, expectedVersion, targetIdentityId, assignment, assignmentAuditEvent,
+    existingAssignmentId, decidedAt, decidedBy, justification, decisionAuditEvent,
+  }) {
+    return this.#transaction(async (connection) => {
+      const [lineRows] = await connection.execute(
+        "SELECT * FROM access_request_lines WHERE line_id = ? FOR UPDATE", [lineId],
+      );
+      const line = lineRows[0];
+      if (!line || line.status !== "pending" || Number(line.version) !== expectedVersion) {
+        throw new Error("stale access request line");
+      }
+      const [identities] = await connection.execute(
+        "SELECT status FROM identities WHERE identity_id = ? FOR UPDATE", [targetIdentityId],
+      );
+      if (identities[0]?.status !== "active") throw new Error("target identity is unavailable");
+      const assignmentId = assignment?.assignmentId ?? existingAssignmentId;
+      if (assignment) {
+        if (!assignmentAuditEvent || assignment.subjectId !== targetIdentityId ||
+            assignment.applicationId !== line.application_id) throw new Error("invalid assignment request bundle");
+        const [existing] = await connection.execute(
+          "SELECT version FROM access_assignments WHERE assignment_id = ? FOR UPDATE", [assignment.assignmentId],
+        );
+        const previousVersion = existing[0]?.version;
+        if (previousVersion === undefined && assignment.version !== 1) throw new Error("new assignment version must be 1");
+        if (previousVersion !== undefined && assignment.version !== Number(previousVersion) + 1) throw new Error("stale assignment version");
+        await connection.execute(
+          `INSERT INTO access_assignments(
+             assignment_id, subject_id, application_id, role_id, permissions_json,
+             scope_type, scope_id, conditions_json, status, valid_from, valid_until,
+             reason, decided_by, inherited_from_group, version
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           ON DUPLICATE KEY UPDATE role_id = VALUES(role_id), permissions_json = VALUES(permissions_json),
+             scope_type = VALUES(scope_type), scope_id = VALUES(scope_id), conditions_json = VALUES(conditions_json),
+             status = VALUES(status), valid_from = VALUES(valid_from), valid_until = VALUES(valid_until),
+             reason = VALUES(reason), decided_by = VALUES(decided_by),
+             inherited_from_group = VALUES(inherited_from_group), version = VALUES(version)`,
+          [assignment.assignmentId, assignment.subjectId, assignment.applicationId, assignment.roleId,
+           JSON.stringify([...assignment.permissions].sort()), assignment.scopeType, assignment.scopeId,
+           JSON.stringify([...assignment.conditions].sort()), assignment.status, asMariaDate(assignment.validFrom),
+           asMariaDate(assignment.validUntil), assignment.reason ?? "", assignment.decidedBy ?? null,
+           assignment.inheritedFromGroup ?? null, assignment.version],
+        );
+        await this.#appendAudit(connection, assignmentAuditEvent);
+      } else {
+        const [existing] = await connection.execute(
+          `SELECT assignment_id FROM access_assignments
+           WHERE assignment_id = ? AND subject_id = ? AND application_id = ? AND status = 'active' FOR UPDATE`,
+          [assignmentId, targetIdentityId, line.application_id],
+        );
+        if (!existing.length) throw new Error("active assignment is unavailable");
+      }
+      await connection.execute(
+        `UPDATE access_request_lines SET status = 'approved', target_identity_id = ?, assignment_id = ?,
+           decided_at = ?, decided_by = ?, decision_justification = ?, version = version + 1
+         WHERE line_id = ? AND status = 'pending' AND version = ?`,
+        [targetIdentityId, assignmentId, asMariaDate(decidedAt), decidedBy, justification, lineId, expectedVersion],
+      );
+      const request = await this.#refreshAccessRequestState(connection, line.request_id);
+      await this.#appendAudit(connection, decisionAuditEvent);
+      return { line: { ...mapAccessRequestLine(line), status: "approved", targetIdentityId, assignmentId,
+        decidedAt, decidedBy, decisionJustification: justification, version: expectedVersion + 1 }, request };
+    });
+  }
+
+  async refuseAccessRequestLine({ lineId, expectedVersion, decidedAt, decidedBy, justification, auditEvent }) {
+    return this.#transaction(async (connection) => {
+      const [lineRows] = await connection.execute(
+        "SELECT * FROM access_request_lines WHERE line_id = ? FOR UPDATE", [lineId],
+      );
+      const line = lineRows[0];
+      if (!line || line.status !== "pending" || Number(line.version) !== expectedVersion) {
+        throw new Error("stale access request line");
+      }
+      await connection.execute(
+        `UPDATE access_request_lines SET status = 'refused', decided_at = ?, decided_by = ?,
+           decision_justification = ?, version = version + 1
+         WHERE line_id = ? AND status = 'pending' AND version = ?`,
+        [asMariaDate(decidedAt), decidedBy, justification, lineId, expectedVersion],
+      );
+      const request = await this.#refreshAccessRequestState(connection, line.request_id);
+      await this.#appendAudit(connection, auditEvent);
+      return { line: { ...mapAccessRequestLine(line), status: "refused", decidedAt, decidedBy,
+        decisionJustification: justification, version: expectedVersion + 1 }, request };
+    });
+  }
+
+  async #refreshAccessRequestState(connection, requestId) {
+    const [requests] = await connection.execute(
+      "SELECT version FROM access_requests WHERE request_id = ? FOR UPDATE", [requestId],
+    );
+    if (!requests.length) throw new Error("access request not found");
+    const [counts] = await connection.execute(
+      `SELECT status, COUNT(*) AS count FROM access_request_lines
+       WHERE request_id = ? GROUP BY status`, [requestId],
+    );
+    const values = new Map(counts.map((row) => [row.status, Number(row.count)]));
+    const status = values.has("pending") ? "pending"
+      : values.size === 1 && values.has("approved") ? "approved"
+        : values.size === 1 && values.has("refused") ? "refused" : "partially_approved";
+    await connection.execute(
+      "UPDATE access_requests SET status = ?, version = version + 1 WHERE request_id = ?",
+      [status, requestId],
+    );
+    return { requestId, status, version: Number(requests[0].version) + 1 };
   }
 
   async getIdentity(identityId) {
