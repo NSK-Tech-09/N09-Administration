@@ -80,7 +80,7 @@ affichés, ni copiés dans GitHub, ni intégrés aux archives de release.
 ## Recette de production
 
 - Administration répond `200` sur `/health` ;
-- Suivi des tâches répond `200` sur `/health` ;
+- Suivi des tâches répond `200` et `status=ok` sur `/api/health` ;
 - le portail répond `200` et Énergie renvoie la redirection HTTPS attendue ;
 - le sélecteur public présente Courriel, Google, Microsoft, GitHub et
   Infomaniak sans imposer un fournisseur unique ;
