@@ -192,13 +192,19 @@ function trustedPortalMutationOrigin(request, portalOrigins) {
   const requestOrigin = request.headers.origin;
   if (typeof requestOrigin === "string") return portalOrigins.includes(requestOrigin);
   const requestReferer = request.headers.referer;
-  if (typeof requestReferer !== "string") return false;
-  try {
-    const referer = new URL(requestReferer);
-    return !referer.username && !referer.password && portalOrigins.includes(referer.origin);
-  } catch {
-    return false;
+  if (typeof requestReferer === "string") {
+    try {
+      const referer = new URL(requestReferer);
+      return !referer.username && !referer.password && portalOrigins.includes(referer.origin);
+    } catch {
+      return false;
+    }
   }
+  const fetchSite = request.headers["sec-fetch-site"];
+  return (fetchSite === "same-site" || fetchSite === "same-origin") &&
+    request.headers["sec-fetch-mode"] === "navigate" &&
+    request.headers["sec-fetch-dest"] === "document" &&
+    request.headers["sec-fetch-user"] === "?1";
 }
 
 function renderPortalLogin({ returnTo, theme, localReturn = null, emailLoginEnabled = false }) {
