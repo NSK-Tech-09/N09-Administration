@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   createNotificationEventHandler, createTasksNotificationResolverClient,
-  NotificationMaterializationError, tasksNotificationResolverConfig,
+  notificationExternalDeliveryPolicy, NotificationMaterializationError, tasksNotificationResolverConfig,
 } from "./notification-materializer.mjs";
 
 const event = {
@@ -79,6 +79,35 @@ test("matérialise l'interne et bloque chaque canal externe sans expédition", a
   assert.equal(stored.auditEvent.new_value.external_deliveries_blocked, 2);
 });
 
+test("ouvre uniquement le courriel pour les nouveaux événements postérieurs au coupe-circuit", async () => {
+  const stored = [];
+  const repository = { async materializeNotificationResolution(value) { stored.push(value); return { created: true }; } };
+  const resolution = async () => ({
+    policyVersion: "tasks-notification-policy-v1",
+    intents: [{
+      recipientIdentityId: "00000000-0000-4000-8000-000000000001",
+      category: "task_activity", importance: "information", title: "Tâche archivée",
+      message: "Une tâche a été archivée dans N09 – Suivi des tâches.",
+      context: { applicationId: "n09-suivi-taches", resourceType: "task", resourceId: "task_1" },
+      requestedChannels: ["in_app", "email", "push"],
+    }],
+    suppressed: { own_action: 0, preferences: 0, unlinked_identity: 0 },
+  });
+  const policy = { emailEnabled: true, notBefore: new Date("2026-08-12T09:00:00.000Z") };
+  await createNotificationEventHandler({ repository, resolve: resolution, externalDeliveryPolicy: policy })(event);
+  assert.deepEqual(stored[0].externalDeliveries.map(({ channel, status, blockedReason }) =>
+    ({ channel, status, blockedReason })), [
+    { channel: "email", status: "pending", blockedReason: null },
+    { channel: "push", status: "blocked", blockedReason: "channel_not_enabled" },
+  ]);
+  assert.equal(stored[0].auditEvent.new_value.external_deliveries_pending, 1);
+
+  const historical = { ...event, eventId: "event_abcdef0123456789abce", occurredAt: "2026-08-12T08:00:00.000Z" };
+  await createNotificationEventHandler({ repository, resolve: resolution, externalDeliveryPolicy: policy })(historical);
+  assert.equal(stored[1].externalDeliveries[0].status, "blocked");
+  assert.equal(stored[1].externalDeliveries[0].blockedReason, "historical_event");
+});
+
 test("conserve la même empreinte après une coupure entre matérialisation et acquittement", async () => {
   const hashes = [];
   const repository = {
@@ -128,4 +157,14 @@ test("exige HTTPS, un secret distinct et une garde explicite de traitement", () 
     N09_TASKS_NOTIFICATION_RESOLVER_CLIENT_ID: "admin",
     N09_TASKS_NOTIFICATION_RESOLVER_CLIENT_SECRET: "x".repeat(32),
   }), /HTTPS/);
+  assert.deepEqual(notificationExternalDeliveryPolicy({}), { emailEnabled: false, notBefore: null });
+  assert.throws(() => notificationExternalDeliveryPolicy({
+    N09_ALLOW_EXTERNAL_NOTIFICATION_DELIVERY: "true", N09_ENVIRONMENT: "production",
+  }), /NOT_BEFORE/);
+  const policy = notificationExternalDeliveryPolicy({
+    N09_ALLOW_EXTERNAL_NOTIFICATION_DELIVERY: "true", N09_ENVIRONMENT: "production",
+    N09_NOTIFICATION_EXTERNAL_DELIVERY_NOT_BEFORE: "2026-08-16T08:00:00.000Z",
+  });
+  assert.equal(policy.emailEnabled, true);
+  assert.equal(policy.notBefore.toISOString(), "2026-08-16T08:00:00.000Z");
 });

@@ -98,6 +98,21 @@ export function tasksNotificationResolverConfig(environment = process.env) {
   return Object.freeze({ origin, clientId, secret, timeoutMs });
 }
 
+export function notificationExternalDeliveryPolicy(environment = process.env) {
+  if (environment.N09_ALLOW_EXTERNAL_NOTIFICATION_DELIVERY !== "true") {
+    return Object.freeze({ emailEnabled: false, notBefore: null });
+  }
+  if (!["preprod", "production"].includes(environment.N09_ENVIRONMENT)) {
+    throw new Error("external notification delivery requires a managed environment");
+  }
+  const raw = environment.N09_NOTIFICATION_EXTERNAL_DELIVERY_NOT_BEFORE;
+  const notBefore = new Date(raw || "");
+  if (!raw || Number.isNaN(notBefore.valueOf()) || notBefore.toISOString() !== raw) {
+    throw new Error("invalid N09_NOTIFICATION_EXTERNAL_DELIVERY_NOT_BEFORE");
+  }
+  return Object.freeze({ emailEnabled: true, notBefore });
+}
+
 export function createTasksNotificationResolverClient({
   config, fetchImpl = fetch, now = () => Date.now(), createNonce = randomUUID,
 } = {}) {
@@ -143,7 +158,10 @@ function stableId(...parts) {
   return createHash("sha256").update(parts.join("\n"), "utf8").digest("hex");
 }
 
-export function createNotificationEventHandler({ repository, resolve, now = () => new Date() } = {}) {
+export function createNotificationEventHandler({
+  repository, resolve, now = () => new Date(),
+  externalDeliveryPolicy = { emailEnabled: false, notBefore: null },
+} = {}) {
   if (!repository || typeof repository.materializeNotificationResolution !== "function") {
     throw new Error("notification materialization repository is required");
   }
@@ -158,12 +176,21 @@ export function createNotificationEventHandler({ repository, resolve, now = () =
       contextApplicationId: intent.context.applicationId, contextResourceType: intent.context.resourceType,
       contextResourceId: intent.context.resourceId, occurredAt: event.occurredAt, createdAt,
     }));
+    const eventOccurredAt = new Date(event.occurredAt);
     const externalDeliveries = notifications.flatMap((notification, index) =>
-      resolution.intents[index].requestedChannels.filter((channel) => channel !== "in_app").map((channel) => ({
-        deliveryId: stableId(notification.notificationId, channel), notificationId: notification.notificationId,
-        channel, status: "blocked", blockedReason: "channel_not_enabled", createdAt,
-      }))
+      resolution.intents[index].requestedChannels.filter((channel) => channel !== "in_app").map((channel) => {
+        const historical = externalDeliveryPolicy.notBefore && eventOccurredAt < externalDeliveryPolicy.notBefore;
+        const enabled = channel === "email" && externalDeliveryPolicy.emailEnabled && !historical;
+        return {
+          deliveryId: stableId(notification.notificationId, channel), notificationId: notification.notificationId,
+          channel, status: enabled ? "pending" : "blocked",
+          blockedReason: enabled ? null : historical ? "historical_event" : "channel_not_enabled",
+          availableAt: enabled ? eventOccurredAt : null, createdAt,
+        };
+      })
     );
+    const blockedExternalDeliveries = externalDeliveries.filter(({ status }) => status === "blocked").length;
+    const pendingExternalDeliveries = externalDeliveries.filter(({ status }) => status === "pending").length;
     const resolutionHash = createHash("sha256").update(canonicalJson({
       policyVersion: resolution.policyVersion,
       suppressed: resolution.suppressed,
@@ -175,7 +202,8 @@ export function createNotificationEventHandler({ repository, resolve, now = () =
       correlationId: randomUUID(), applicationId: event.sourceApplicationId,
       newValue: {
         source_event_id: event.eventId, policy_version: resolution.policyVersion,
-        internal_notifications: notifications.length, external_deliveries_blocked: externalDeliveries.length,
+        internal_notifications: notifications.length, external_deliveries_blocked: blockedExternalDeliveries,
+        external_deliveries_pending: pendingExternalDeliveries,
         suppressed: resolution.suppressed, resolution_hash: resolutionHash,
       },
     });
