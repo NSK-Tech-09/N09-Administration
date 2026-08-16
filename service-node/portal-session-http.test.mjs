@@ -183,7 +183,9 @@ test("accepte une déconnexion de navigation sans Origin depuis le portail seule
     });
     const portalCookie = login.headers.get("set-cookie").match(new RegExp(`${PORTAL_SESSION_COOKIE}=([^;]+)`))[0];
     const foreign = await fetch(`${origin}/portal/logout?return_to=${encodeURIComponent(`${portalOrigin}/`)}`, {
-      method: "POST", headers: { referer: "https://evil.example.test/", cookie: portalCookie }, redirect: "manual",
+      method: "POST", headers: {
+        origin: "https://evil.example.test", "sec-fetch-site": "cross-site", cookie: portalCookie,
+      }, redirect: "manual",
     });
     assert.equal(foreign.status, 403);
     const forgedNavigation = await postNavigation(
@@ -203,6 +205,20 @@ test("accepte une déconnexion de navigation sans Origin depuis le portail seule
       method: "POST", headers: { referer: `${portalOrigin}/#applications`, cookie: portalCookie }, redirect: "manual",
     });
     assert.equal(refererLogout.status, 303);
+    const rewrittenOriginLogin = await fetch(`${origin}/portal/login?return_to=${encodeURIComponent(`${portalOrigin}/`)}`, {
+      headers: { cookie: identityCookie() }, redirect: "manual",
+    });
+    const rewrittenOriginCookie = rewrittenOriginLogin.headers.get("set-cookie")
+      .match(new RegExp(`${PORTAL_SESSION_COOKIE}=([^;]+)`))[0];
+    const rewrittenOriginLogout = await postNavigation(
+      `${origin}/portal/logout?return_to=${encodeURIComponent(`${portalOrigin}/`)}`,
+      {
+        origin: "https://browser-filter.invalid", "sec-fetch-site": "same-site",
+        "sec-fetch-mode": "navigate", "sec-fetch-dest": "document", "sec-fetch-user": "?1",
+        cookie: rewrittenOriginCookie,
+      },
+    );
+    assert.equal(rewrittenOriginLogout.statusCode, 303);
     const strippedLogin = await fetch(`${origin}/portal/login?return_to=${encodeURIComponent(`${portalOrigin}/`)}`, {
       headers: { cookie: identityCookie() }, redirect: "manual",
     });
