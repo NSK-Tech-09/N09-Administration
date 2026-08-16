@@ -1,7 +1,8 @@
 import { hostname } from "node:os";
 import { consumeNotificationEvents } from "./notification-consumer.mjs";
 import {
-  createNotificationEventHandler, createTasksNotificationResolverClient, tasksNotificationResolverConfig,
+  createNotificationEventHandler, createTasksNotificationResolverClient,
+  notificationExternalDeliveryPolicy, tasksNotificationResolverConfig,
 } from "./notification-materializer.mjs";
 import {
   acquireNotificationProcessingLock, createMariaDbPool, MariaDbRepository,
@@ -26,6 +27,7 @@ try {
       repository, workerId,
       handle: createNotificationEventHandler({
         repository, resolve: createTasksNotificationResolverClient({ config }),
+        externalDeliveryPolicy: notificationExternalDeliveryPolicy(process.env),
       }),
       limit: processing.batchSize, maxAttempts: processing.maxAttempts, leaseMs: processing.leaseMs,
     }),

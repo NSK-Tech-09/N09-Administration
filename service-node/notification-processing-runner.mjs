@@ -10,11 +10,8 @@ export function notificationProcessingConfig(environment = process.env) {
   if (environment.N09_ALLOW_NOTIFICATION_PROCESSING !== "true") {
     throw new Error("notification processing is disabled");
   }
-  if (environment.N09_ENVIRONMENT !== "preprod") {
-    throw new Error("autonomous notification processing is preproduction-only");
-  }
-  if (environment.N09_ALLOW_EXTERNAL_NOTIFICATION_DELIVERY !== "false") {
-    throw new Error("external notification delivery must remain disabled");
+  if (!["preprod", "production"].includes(environment.N09_ENVIRONMENT)) {
+    throw new Error("autonomous notification processing requires a managed environment");
   }
   const integer = (name, fallback, minimum, maximum) => {
     const value = Number(environment[name] || fallback);

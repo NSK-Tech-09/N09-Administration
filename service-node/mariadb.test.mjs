@@ -296,6 +296,62 @@ test("agrège l’exploitation des notifications sans exposer leur contenu", asy
   await assert.rejects(new MariaDbRepository(pool).getNotificationOperationsSnapshot(101), /invalid/);
 });
 
+test("réclame les courriels livrables avec l’adresse courante de l’identité active", async () => {
+  const calls = [];
+  const connection = {
+    beginTransaction: async () => calls.push("begin"), commit: async () => calls.push("commit"),
+    rollback: async () => calls.push("rollback"), release: () => calls.push("release"),
+    execute: async (sql, values = []) => {
+      calls.push({ sql, values });
+      if (sql.includes("FROM notification_external_deliveries d")) return [[{
+        delivery_id: "d".repeat(64), notification_id: "n".repeat(64), processing_attempts: 0,
+        recipient_identity_id: "00000000-0000-4000-8000-000000000001",
+        recipient_email: "f.travers@nsktech.fr", recipient_display_name: "Fred TRAVERS",
+        title: "Tâche mise à jour", message: "Une tâche a été mise à jour.",
+        context_resource_id: "task_1", occurred_at: new Date("2026-08-16T08:00:01.000Z"),
+      }]];
+      return [{ affectedRows: 1 }];
+    },
+  };
+  const result = await new MariaDbRepository({ getConnection: async () => connection })
+    .claimNotificationEmailDeliveries({
+      workerId: "notification-email:test:1", limit: 20,
+      now: new Date("2026-08-16T08:01:00.000Z"), leaseMs: 60_000,
+      notBefore: new Date("2026-08-16T08:00:00.000Z"),
+    });
+  assert.equal(result[0].recipientEmail, "f.travers@nsktech.fr");
+  assert.equal(result[0].processingAttempts, 1);
+  const update = calls.find((call) => typeof call === "object" &&
+    call.sql.includes("UPDATE notification_external_deliveries SET status = 'processing'"));
+  assert.deepEqual(update.values.slice(1), ["notification-email:test:1", "d".repeat(64)]);
+  assert.equal(calls.includes("commit"), true);
+});
+
+test("acquitte une livraison courriel et son audit dans la même transaction", async () => {
+  const calls = [];
+  const connection = {
+    beginTransaction: async () => calls.push("begin"), commit: async () => calls.push("commit"),
+    rollback: async () => calls.push("rollback"), release: () => calls.push("release"),
+    execute: async (sql, values = []) => {
+      calls.push({ sql, values });
+      if (sql.startsWith("SELECT current_hash")) return [[{ current_hash: "" }]];
+      return [{ affectedRows: 1 }];
+    },
+  };
+  await new MariaDbRepository({ getConnection: async () => connection }).completeNotificationEmailDelivery({
+    deliveryId: "d".repeat(64), workerId: "notification-email:test:1",
+    deliveredAt: new Date("2026-08-16T08:01:00.000Z"),
+    auditEvent: createAuditEvent({
+      action: "notification.email_delivered", result: "success", source: "tests",
+      correlationId: "notification-email-correlation", subjectId: "00000000-0000-4000-8000-000000000001",
+      newValue: { delivery_id: "d".repeat(64), notification_id: "n".repeat(64) },
+    }),
+  });
+  assert.equal(calls.some((call) => typeof call === "object" && call.sql.includes("status = 'delivered'")), true);
+  assert.equal(calls.filter((call) => typeof call === "object" && call.sql.includes("INSERT INTO audit_events")).length, 1);
+  assert.equal(calls.at(-2), "commit");
+});
+
 test("conserve uniquement le dernier état borné du consommateur", async () => {
   const calls = [];
   const repository = new MariaDbRepository({ execute: async (sql, values) => {

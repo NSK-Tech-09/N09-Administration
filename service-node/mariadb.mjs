@@ -71,6 +71,12 @@ export async function acquireNotificationProcessingLock(
   });
 }
 
+export async function acquireNotificationEmailDeliveryLock(
+  pool, lockName = "n09:administration:notification-email-delivery:v1",
+) {
+  return acquireNotificationProcessingLock(pool, lockName);
+}
+
 function asMariaDate(value) {
   if (!value) return null;
   return new Date(value).toISOString().replace("T", " ").replace("Z", "");
@@ -1405,13 +1411,14 @@ export class MariaDbRepository {
           throw Object.assign(new Error("notification recipient identity is unavailable"), { code: "recipient_identity_unavailable" });
         }
       }
+      const blockedExternalDeliveryCount = externalDeliveries.filter(({ status }) => status === "blocked").length;
       await connection.execute(
         `INSERT INTO notification_resolutions(
            source_application_id, source_event_id, policy_version, resolution_hash, suppressed_json,
            internal_notification_count, blocked_external_delivery_count, resolved_at
          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
         [event.sourceApplicationId, event.eventId, policyVersion, resolutionHash, JSON.stringify(suppressed),
-         notifications.length, externalDeliveries.length, asMariaDate(resolvedAt)],
+         notifications.length, blockedExternalDeliveryCount, asMariaDate(resolvedAt)],
       );
       for (const notification of notifications) {
         await connection.execute(
@@ -1432,13 +1439,85 @@ export class MariaDbRepository {
           `INSERT INTO notification_external_deliveries(
              delivery_id, notification_id, channel, status, blocked_reason,
              processing_attempts, available_at, claimed_at, claimed_by, delivered_at, last_error_code, created_at
-           ) VALUES (?, ?, ?, 'blocked', ?, 0, NULL, NULL, NULL, NULL, NULL, ?)`,
+           ) VALUES (?, ?, ?, ?, ?, 0, ?, NULL, NULL, NULL, NULL, ?)`,
           [delivery.deliveryId, delivery.notificationId, delivery.channel,
-           delivery.blockedReason, asMariaDate(delivery.createdAt)],
+           delivery.status, delivery.blockedReason, asMariaDate(delivery.availableAt), asMariaDate(delivery.createdAt)],
         );
       }
       await this.#appendAudit(connection, auditEvent);
-      return { created: true, notifications: notifications.length, externalDeliveriesBlocked: externalDeliveries.length };
+      return { created: true, notifications: notifications.length,
+        externalDeliveriesBlocked: blockedExternalDeliveryCount };
+    });
+  }
+
+  async claimNotificationEmailDeliveries({ workerId, limit, now, leaseMs, notBefore }) {
+    return this.#transaction(async (connection) => {
+      const safeLimit = Number(limit);
+      if (!Number.isInteger(safeLimit) || safeLimit < 1 || safeLimit > 100) {
+        throw new Error("invalid notification email claim limit");
+      }
+      const staleBefore = new Date(now.valueOf() - leaseMs);
+      const [rows] = await connection.execute(
+        `SELECT d.delivery_id, d.notification_id, d.processing_attempts,
+           n.recipient_identity_id, n.title, n.message, n.context_resource_id, n.occurred_at,
+           i.email AS recipient_email, i.display_name AS recipient_display_name
+         FROM notification_external_deliveries d
+         JOIN notifications n ON n.notification_id = d.notification_id
+         JOIN identities i ON i.identity_id = n.recipient_identity_id AND i.status = 'active'
+         WHERE d.channel = 'email' AND n.occurred_at >= ?
+           AND ((d.status IN ('pending', 'retry') AND d.available_at <= ?)
+             OR (d.status = 'processing' AND d.claimed_at <= ?))
+         ORDER BY d.available_at, d.created_at, d.delivery_id
+         LIMIT ${safeLimit} FOR UPDATE SKIP LOCKED`,
+        [asMariaDate(notBefore), asMariaDate(now), asMariaDate(staleBefore)],
+      );
+      const claimed = [];
+      for (const row of rows) {
+        await connection.execute(
+          `UPDATE notification_external_deliveries SET status = 'processing', blocked_reason = NULL,
+             processing_attempts = processing_attempts + 1, claimed_at = ?, claimed_by = ?,
+             delivered_at = NULL, last_error_code = NULL
+           WHERE delivery_id = ?`,
+          [asMariaDate(now), workerId, row.delivery_id],
+        );
+        claimed.push(Object.freeze({
+          deliveryId: row.delivery_id, notificationId: row.notification_id,
+          recipientIdentityId: row.recipient_identity_id, recipientEmail: row.recipient_email,
+          recipientDisplayName: row.recipient_display_name, title: row.title, message: row.message,
+          contextResourceId: row.context_resource_id, occurredAt: asIso(row.occurred_at),
+          processingAttempts: Number(row.processing_attempts) + 1,
+        }));
+      }
+      return claimed;
+    });
+  }
+
+  async completeNotificationEmailDelivery({ deliveryId, workerId, deliveredAt, auditEvent }) {
+    return this.#transaction(async (connection) => {
+      const [result] = await connection.execute(
+        `UPDATE notification_external_deliveries SET status = 'delivered', blocked_reason = NULL,
+           available_at = NULL, claimed_at = NULL, claimed_by = NULL, delivered_at = ?, last_error_code = NULL
+         WHERE delivery_id = ? AND channel = 'email' AND status = 'processing' AND claimed_by = ?`,
+        [asMariaDate(deliveredAt), deliveryId, workerId],
+      );
+      if (result.affectedRows !== 1) throw new Error("notification email lease is not owned by worker");
+      await this.#appendAudit(connection, auditEvent);
+    });
+  }
+
+  async failNotificationEmailDelivery({
+    deliveryId, workerId, availableAt, errorCode, quarantined, auditEvent,
+  }) {
+    return this.#transaction(async (connection) => {
+      const [result] = await connection.execute(
+        `UPDATE notification_external_deliveries SET status = ?, blocked_reason = NULL,
+           available_at = ?, claimed_at = NULL, claimed_by = NULL, delivered_at = NULL, last_error_code = ?
+         WHERE delivery_id = ? AND channel = 'email' AND status = 'processing' AND claimed_by = ?`,
+        [quarantined ? "quarantined" : "retry", quarantined ? null : asMariaDate(availableAt),
+         errorCode, deliveryId, workerId],
+      );
+      if (result.affectedRows !== 1) throw new Error("notification email lease is not owned by worker");
+      await this.#appendAudit(connection, auditEvent);
     });
   }
 

@@ -4,19 +4,18 @@ import {
   notificationProcessingConfig, runNotificationProcessingCycle,
 } from "./notification-processing-runner.mjs";
 
-test("ferme le traitement autonome hors préproduction ou si un canal externe est ouvert", () => {
+test("exige une activation explicite et accepte les deux environnements gouvernés", () => {
   assert.throws(() => notificationProcessingConfig({}), /disabled/);
   assert.throws(() => notificationProcessingConfig({
-    N09_ALLOW_NOTIFICATION_PROCESSING: "true", N09_ENVIRONMENT: "production",
-    N09_ALLOW_EXTERNAL_NOTIFICATION_DELIVERY: "false",
-  }), /preproduction-only/);
-  assert.throws(() => notificationProcessingConfig({
-    N09_ALLOW_NOTIFICATION_PROCESSING: "true", N09_ENVIRONMENT: "preprod",
-    N09_ALLOW_EXTERNAL_NOTIFICATION_DELIVERY: "true",
-  }), /must remain disabled/);
+    N09_ALLOW_NOTIFICATION_PROCESSING: "true", N09_ENVIRONMENT: "local",
+  }), /managed environment/);
   assert.deepEqual(notificationProcessingConfig({
     N09_ALLOW_NOTIFICATION_PROCESSING: "true", N09_ENVIRONMENT: "preprod",
     N09_ALLOW_EXTERNAL_NOTIFICATION_DELIVERY: "false",
+  }), { batchSize: 20, maxAttempts: 5, leaseMs: 60_000 });
+  assert.deepEqual(notificationProcessingConfig({
+    N09_ALLOW_NOTIFICATION_PROCESSING: "true", N09_ENVIRONMENT: "production",
+    N09_ALLOW_EXTERNAL_NOTIFICATION_DELIVERY: "true",
   }), { batchSize: 20, maxAttempts: 5, leaseMs: 60_000 });
 });
 
