@@ -22,6 +22,7 @@
     "bootstrap:energy-production": "node energy-production-bootstrap-cli.mjs",
     "bootstrap:portal-production": "node portal-production-bootstrap-cli.mjs",
     "retire:synthetic-preprod": "node retire-synthetic-preprod-cli.mjs",
+    "repair:historical-labels": "node historical-label-repair-cli.mjs",
     "process:notifications": "node notification-consumer-cli.mjs",
     "seed:synthetic-preprod": "node seed-synthetic-preprod-cli.mjs",
     "verify:production-promotion": "node production-promotion-cli.mjs",

@@ -66,7 +66,7 @@ test("charge plusieurs applications techniques sans partager leur audience", () 
   assert.deepEqual(clients.get("energy-production"), { applicationId: "n09-energie", secret: `${secret}-energy` });
 });
 
-test("refuse les doublons et les configurations JSON ambiguÃ«s", () => {
+test("refuse les doublons et les configurations JSON ambiguës", () => {
   assert.throws(() => internalClientsFromEnvironment({ N09_INTERNAL_CLIENTS_JSON: "{}" }), /invalid/);
   assert.throws(() => internalClientsFromEnvironment({
     N09_INTERNAL_CLIENTS_JSON: JSON.stringify([
