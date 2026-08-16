@@ -188,32 +188,13 @@ function safeAccountReturn(value, portalOrigins, fallback) {
   }
 }
 
-function trustedPortalMutationOrigin(request, portalOrigins) {
-  const requestOrigin = request.headers.origin;
-  if (typeof requestOrigin === "string" && requestOrigin !== "null") {
-    return portalOrigins.includes(requestOrigin);
-  }
-  const requestReferer = request.headers.referer;
-  if (typeof requestReferer === "string") {
-    try {
-      const referer = new URL(requestReferer);
-      return !referer.username && !referer.password && portalOrigins.includes(referer.origin);
-    } catch {
-      return false;
-    }
-  }
-  const fetchSite = request.headers["sec-fetch-site"];
-  if (fetchSite === "cross-site") return false;
-  const trustedNavigation = (fetchSite === "same-site" || fetchSite === "same-origin") &&
-    request.headers["sec-fetch-mode"] === "navigate" &&
-    request.headers["sec-fetch-dest"] === "document" &&
-    request.headers["sec-fetch-user"] === "?1";
-  if (trustedNavigation) return true;
+function trustedPortalLogoutRequest(request) {
+  if (request.headers["sec-fetch-site"] === "cross-site") return false;
+  // La preuve réelle est le cookie hôte chiffré, HttpOnly, Secure et SameSite=Lax,
+  // ouvert ensuite avant toute révocation. Origin et Referer restent indicatifs :
+  // certains navigateurs ou filtres de confidentialité les retirent ou les réécrivent.
   const portalCookie = parseCookies(request.headers.cookie).get(PORTAL_SESSION_COOKIE);
-  const navigationHeadersWithheld = (requestOrigin === undefined || requestOrigin === "null") &&
-    requestReferer === undefined &&
-    (fetchSite === undefined || fetchSite === "none" || fetchSite === "same-site" || fetchSite === "same-origin");
-  return navigationHeadersWithheld && typeof portalCookie === "string" && portalCookie.length > 0;
+  return typeof portalCookie === "string" && portalCookie.length > 0;
 }
 
 function renderPortalLogin({ returnTo, theme, localReturn = null, emailLoginEnabled = false }) {
@@ -816,7 +797,7 @@ export function createHttpHandler({
     if (url.pathname === "/portal/logout" && request.method === "POST") {
       const fallback = portalOrigins[0] ? `${portalOrigins[0]}/` : null;
       const returnTo = safePortalReturn(url.searchParams.get("return_to"), portalOrigins, fallback);
-      if (!returnTo || !trustedPortalMutationOrigin(request, portalOrigins)) {
+      if (!returnTo || !trustedPortalLogoutRequest(request)) {
         writeJson(response, 403, { error: "origin_not_allowed" });
         return;
       }
