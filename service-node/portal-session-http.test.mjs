@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
-import { createServer } from "node:http";
+import { createServer, request as httpRequest } from "node:http";
 import test from "node:test";
 import { createAuditEvent } from "./audit.mjs";
 import { createApplicationSessionAuthority } from "./application-session-authority.mjs";
@@ -71,6 +71,17 @@ async function withServer(operation) {
   } finally {
     await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
   }
+}
+
+function postNavigation(url, headers) {
+  return new Promise((resolve, reject) => {
+    const request = httpRequest(url, { method: "POST", headers }, (response) => {
+      response.resume();
+      response.once("end", () => resolve(response));
+    });
+    request.once("error", reject);
+    request.end();
+  });
 }
 
 test("présente une connexion NSK avant le choix du fournisseur", async () => {
@@ -175,14 +186,35 @@ test("accepte une déconnexion de navigation sans Origin depuis le portail seule
       method: "POST", headers: { referer: "https://evil.example.test/", cookie: portalCookie }, redirect: "manual",
     });
     assert.equal(foreign.status, 403);
-    const logout = await fetch(`${origin}/portal/logout?return_to=${encodeURIComponent(`${portalOrigin}/`)}`, {
+    const forgedNavigation = await postNavigation(
+      `${origin}/portal/logout?return_to=${encodeURIComponent(`${portalOrigin}/`)}`,
+      {
+        "sec-fetch-site": "cross-site", "sec-fetch-mode": "navigate",
+        "sec-fetch-dest": "document", "sec-fetch-user": "?1", cookie: portalCookie,
+      },
+    );
+    assert.equal(forgedNavigation.statusCode, 403);
+    const refererLogout = await fetch(`${origin}/portal/logout?return_to=${encodeURIComponent(`${portalOrigin}/`)}`, {
       method: "POST", headers: { referer: `${portalOrigin}/#applications`, cookie: portalCookie }, redirect: "manual",
     });
-    assert.equal(logout.status, 303);
-    assert.equal(logout.headers.get("location"), `${portalOrigin}/`);
-    assert.match(logout.headers.get("set-cookie"), new RegExp(`^${PORTAL_SESSION_COOKIE}=;`));
+    assert.equal(refererLogout.status, 303);
+    const metadataLogin = await fetch(`${origin}/portal/login?return_to=${encodeURIComponent(`${portalOrigin}/`)}`, {
+      headers: { cookie: identityCookie() }, redirect: "manual",
+    });
+    const metadataCookie = metadataLogin.headers.get("set-cookie")
+      .match(new RegExp(`${PORTAL_SESSION_COOKIE}=([^;]+)`))[0];
+    const metadataLogout = await postNavigation(
+      `${origin}/portal/logout?return_to=${encodeURIComponent(`${portalOrigin}/`)}`,
+      {
+        "sec-fetch-site": "same-site", "sec-fetch-mode": "navigate",
+        "sec-fetch-dest": "document", "sec-fetch-user": "?1", cookie: metadataCookie,
+      },
+    );
+    assert.equal(metadataLogout.statusCode, 303);
+    assert.equal(metadataLogout.headers.location, `${portalOrigin}/`);
+    assert.match(metadataLogout.headers["set-cookie"].join(";"), new RegExp(`^${PORTAL_SESSION_COOKIE}=;`));
     const rejected = await fetch(`${origin}/portal/session`, {
-      headers: { origin: portalOrigin, cookie: portalCookie },
+      headers: { origin: portalOrigin, cookie: metadataCookie },
     });
     assert.equal(rejected.status, 401);
   });
