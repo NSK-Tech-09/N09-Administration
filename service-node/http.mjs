@@ -190,7 +190,9 @@ function safeAccountReturn(value, portalOrigins, fallback) {
 
 function trustedPortalMutationOrigin(request, portalOrigins) {
   const requestOrigin = request.headers.origin;
-  if (typeof requestOrigin === "string") return portalOrigins.includes(requestOrigin);
+  if (typeof requestOrigin === "string" && requestOrigin !== "null") {
+    return portalOrigins.includes(requestOrigin);
+  }
   const requestReferer = request.headers.referer;
   if (typeof requestReferer === "string") {
     try {
@@ -201,10 +203,17 @@ function trustedPortalMutationOrigin(request, portalOrigins) {
     }
   }
   const fetchSite = request.headers["sec-fetch-site"];
-  return (fetchSite === "same-site" || fetchSite === "same-origin") &&
+  if (fetchSite === "cross-site") return false;
+  const trustedNavigation = (fetchSite === "same-site" || fetchSite === "same-origin") &&
     request.headers["sec-fetch-mode"] === "navigate" &&
     request.headers["sec-fetch-dest"] === "document" &&
     request.headers["sec-fetch-user"] === "?1";
+  if (trustedNavigation) return true;
+  const portalCookie = parseCookies(request.headers.cookie).get(PORTAL_SESSION_COOKIE);
+  const navigationHeadersWithheld = (requestOrigin === undefined || requestOrigin === "null") &&
+    requestReferer === undefined &&
+    (fetchSite === undefined || fetchSite === "none" || fetchSite === "same-site" || fetchSite === "same-origin");
+  return navigationHeadersWithheld && typeof portalCookie === "string" && portalCookie.length > 0;
 }
 
 function renderPortalLogin({ returnTo, theme, localReturn = null, emailLoginEnabled = false }) {

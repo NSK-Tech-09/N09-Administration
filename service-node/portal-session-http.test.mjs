@@ -194,10 +194,35 @@ test("accepte une déconnexion de navigation sans Origin depuis le portail seule
       },
     );
     assert.equal(forgedNavigation.statusCode, 403);
+    const anonymousStrippedNavigation = await postNavigation(
+      `${origin}/portal/logout?return_to=${encodeURIComponent(`${portalOrigin}/`)}`,
+      {},
+    );
+    assert.equal(anonymousStrippedNavigation.statusCode, 403);
     const refererLogout = await fetch(`${origin}/portal/logout?return_to=${encodeURIComponent(`${portalOrigin}/`)}`, {
       method: "POST", headers: { referer: `${portalOrigin}/#applications`, cookie: portalCookie }, redirect: "manual",
     });
     assert.equal(refererLogout.status, 303);
+    const strippedLogin = await fetch(`${origin}/portal/login?return_to=${encodeURIComponent(`${portalOrigin}/`)}`, {
+      headers: { cookie: identityCookie() }, redirect: "manual",
+    });
+    const strippedCookie = strippedLogin.headers.get("set-cookie")
+      .match(new RegExp(`${PORTAL_SESSION_COOKIE}=([^;]+)`))[0];
+    const strippedLogout = await postNavigation(
+      `${origin}/portal/logout?return_to=${encodeURIComponent(`${portalOrigin}/`)}`,
+      { cookie: strippedCookie },
+    );
+    assert.equal(strippedLogout.statusCode, 303);
+    const nullOriginLogin = await fetch(`${origin}/portal/login?return_to=${encodeURIComponent(`${portalOrigin}/`)}`, {
+      headers: { cookie: identityCookie() }, redirect: "manual",
+    });
+    const nullOriginCookie = nullOriginLogin.headers.get("set-cookie")
+      .match(new RegExp(`${PORTAL_SESSION_COOKIE}=([^;]+)`))[0];
+    const nullOriginLogout = await postNavigation(
+      `${origin}/portal/logout?return_to=${encodeURIComponent(`${portalOrigin}/`)}`,
+      { origin: "null", cookie: nullOriginCookie },
+    );
+    assert.equal(nullOriginLogout.statusCode, 303);
     const metadataLogin = await fetch(`${origin}/portal/login?return_to=${encodeURIComponent(`${portalOrigin}/`)}`, {
       headers: { cookie: identityCookie() }, redirect: "manual",
     });
