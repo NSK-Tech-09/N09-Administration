@@ -188,6 +188,19 @@ function safeAccountReturn(value, portalOrigins, fallback) {
   }
 }
 
+function trustedPortalMutationOrigin(request, portalOrigins) {
+  const requestOrigin = request.headers.origin;
+  if (typeof requestOrigin === "string") return portalOrigins.includes(requestOrigin);
+  const requestReferer = request.headers.referer;
+  if (typeof requestReferer !== "string") return false;
+  try {
+    const referer = new URL(requestReferer);
+    return !referer.username && !referer.password && portalOrigins.includes(referer.origin);
+  } catch {
+    return false;
+  }
+}
+
 function renderPortalLogin({ returnTo, theme, localReturn = null, emailLoginEnabled = false }) {
   localReturn ||= `/portal/login?return_to=${encodeURIComponent(returnTo)}&theme=${encodeURIComponent(theme)}`;
   const infomaniakStart = `/auth/infomaniak/start?return_to=${encodeURIComponent(localReturn)}`;
@@ -786,10 +799,9 @@ export function createHttpHandler({
       return;
     }
     if (url.pathname === "/portal/logout" && request.method === "POST") {
-      const requestOrigin = request.headers.origin;
       const fallback = portalOrigins[0] ? `${portalOrigins[0]}/` : null;
       const returnTo = safePortalReturn(url.searchParams.get("return_to"), portalOrigins, fallback);
-      if (!returnTo || typeof requestOrigin !== "string" || !portalOrigins.includes(requestOrigin)) {
+      if (!returnTo || !trustedPortalMutationOrigin(request, portalOrigins)) {
         writeJson(response, 403, { error: "origin_not_allowed" });
         return;
       }

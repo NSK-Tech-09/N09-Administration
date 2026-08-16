@@ -164,3 +164,26 @@ test("ouvre le compte central en conservant l’application d’origine", async 
       `/account/sessions?return_to=${encodeURIComponent(returnTo)}&theme=dark`);
   });
 });
+
+test("accepte une déconnexion de navigation sans Origin depuis le portail seulement", async () => {
+  await withServer(async (origin) => {
+    const login = await fetch(`${origin}/portal/login?return_to=${encodeURIComponent(`${portalOrigin}/`)}`, {
+      headers: { cookie: identityCookie() }, redirect: "manual",
+    });
+    const portalCookie = login.headers.get("set-cookie").match(new RegExp(`${PORTAL_SESSION_COOKIE}=([^;]+)`))[0];
+    const foreign = await fetch(`${origin}/portal/logout?return_to=${encodeURIComponent(`${portalOrigin}/`)}`, {
+      method: "POST", headers: { referer: "https://evil.example.test/", cookie: portalCookie }, redirect: "manual",
+    });
+    assert.equal(foreign.status, 403);
+    const logout = await fetch(`${origin}/portal/logout?return_to=${encodeURIComponent(`${portalOrigin}/`)}`, {
+      method: "POST", headers: { referer: `${portalOrigin}/#applications`, cookie: portalCookie }, redirect: "manual",
+    });
+    assert.equal(logout.status, 303);
+    assert.equal(logout.headers.get("location"), `${portalOrigin}/`);
+    assert.match(logout.headers.get("set-cookie"), new RegExp(`^${PORTAL_SESSION_COOKIE}=;`));
+    const rejected = await fetch(`${origin}/portal/session`, {
+      headers: { origin: portalOrigin, cookie: portalCookie },
+    });
+    assert.equal(rejected.status, 401);
+  });
+});
