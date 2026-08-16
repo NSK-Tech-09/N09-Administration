@@ -17,6 +17,7 @@ import { createOperatorSessionManagement } from "./operator-session-management.m
 import { createIdentityStateManagement } from "./identity-state-management.mjs";
 import { portalOriginsFromEnvironment } from "./portal-session-broker.mjs";
 import { createEmailLoginDelivery, emailLoginConfigFromEnvironment } from "./email-login.mjs";
+import { createNotificationWorkerLoop } from "./notification-worker-loop.mjs";
 
 async function main() {
   const databaseConfig = mariaDbConfigFromEnvironment(process.env);
@@ -29,6 +30,7 @@ async function main() {
   const portalOrigins = portalOriginsFromEnvironment(process.env);
   const emailLoginConfig = emailLoginConfigFromEnvironment(process.env);
   const emailLoginDelivery = createEmailLoginDelivery(emailLoginConfig);
+  const notificationWorkers = createNotificationWorkerLoop({ environment: process.env });
   const authenticate = createInternalClientAuthenticator({ clients: internalClientsFromEnvironment(process.env) });
   const pool = await createMariaDbPool(databaseConfig);
   await pool.query("SELECT 1");
@@ -63,6 +65,7 @@ async function main() {
   server.on("clientError", (_error, socket) => socket.end("HTTP/1.1 400 Bad Request\r\n\r\n"));
 
   const stop = async () => {
+    await notificationWorkers?.stop();
     await new Promise((resolve) => server.close(resolve));
     await pool.end();
   };
@@ -81,6 +84,7 @@ async function main() {
     portal_session_mode: portalSessionConfig.mode,
     email_login_enabled: emailLoginConfig.enabled,
   }));
+  notificationWorkers?.start();
 }
 
 main().catch(() => {

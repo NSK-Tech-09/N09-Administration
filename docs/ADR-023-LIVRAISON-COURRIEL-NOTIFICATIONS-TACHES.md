@@ -36,7 +36,15 @@ l’identifiant du fournisseur de connexion.
    `deliver:notification-emails` ;
 6. produire une action de recette postérieure au coupe-circuit et confirmer la
    réception sur `f.travers@nsktech.fr` avant d’annoncer le canal opérationnel
-   dans Tâches.
+dans Tâches.
+
+En hébergement Infomaniak, le planificateur Web ne sait appeler que des URL.
+Lorsque `N09_ALLOW_NOTIFICATION_PROCESSING=true`, le processus Node démarre donc
+une boucle interne, sans chevauchement, à la cadence bornée par
+`N09_NOTIFICATION_WORKER_INTERVAL_MS`. Elle matérialise d'abord les événements,
+puis n'appelle la livraison courriel que si sa garde indépendante est ouverte.
+Les verrous MariaDB des deux traitements restent l'autorité contre les doubles
+exécutions et le cycle s'arrête proprement avec le service.
 
 ## Retour arrière
 
