@@ -204,6 +204,11 @@ applications et espace personnel — passent désormais par le même sélecteur 
 voir `docs/ADR-022-CONNEXION-COURRIEL-SANS-MOT-DE-PASSE.md` et
 `docs/LOT-66-CONNEXION-COURRIEL.md`.
 
+Le lot 68 clôt la chaîne de notifications Tâches en production : propriétaire
+MariaDB dédié, traitement autonome, livraison courriel réelle et preuve de
+non-duplication ; voir
+`docs/LOT-68-CLOTURE-NOTIFICATIONS-PRODUCTION.md`.
+
 ## Prérequis et démarrage local
 
 - Python 3.11 ou supérieur ;
@@ -273,6 +278,7 @@ ne contient aucun secret réel. La production reste inchangée.
 - [`docs/LOT-63-CONFORMITE-ET-RETOUR-COMPTE.md`](docs/LOT-63-CONFORMITE-ET-RETOUR-COMPTE.md)
 - [`docs/LOT-65-CONNEXION-NSK-MULTIFOURNISSEURS.md`](docs/LOT-65-CONNEXION-NSK-MULTIFOURNISSEURS.md)
 - [`docs/LOT-66-CONNEXION-COURRIEL.md`](docs/LOT-66-CONNEXION-COURRIEL.md)
+- [`docs/LOT-68-CLOTURE-NOTIFICATIONS-PRODUCTION.md`](docs/LOT-68-CLOTURE-NOTIFICATIONS-PRODUCTION.md)
 - [`docs/ETAT-PREPROD-INFOMANIAK.md`](docs/ETAT-PREPROD-INFOMANIAK.md)
 - [`docs/CONFORMITE-NSES.md`](docs/CONFORMITE-NSES.md)
 - [`docs/CONTRAT-API-INTERNE.md`](docs/CONTRAT-API-INTERNE.md)
