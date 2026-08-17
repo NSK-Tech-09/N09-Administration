@@ -32,6 +32,10 @@ const decide = (changes = {}) => decideAccess({
 
 const vectors = [
   ["accord explicite contextualisé", {}, "access_granted", true],
+  ["affectation globale couvrant un site", { assignments: [assignment({
+    roleId: "tasks-administrator", permissions: ["tasks:read", "tasks:write", "tasks:admin"],
+    scopeType: null, scopeId: null,
+  })], requiredPermission: "tasks:write" }, "access_granted", true],
   ["affectation absente", { assignments: [] }, "assignment_missing", false],
   ["identité suspendue", { identity: { ...identity, status: "suspended" } }, "identity_not_active", false],
   ["identité désactivée", { identity: { ...identity, status: "disabled" } }, "identity_not_active", false],

@@ -30,7 +30,9 @@ export function decideAccess({
     if (assignment.validUntil && now >= new Date(assignment.validUntil)) continue;
     if (!assignment.permissions.includes(requiredPermission)) continue;
     matchingPermission = true;
-    if (assignment.scopeType !== scopeType || assignment.scopeId !== scopeId) continue;
+    const exactScope = assignment.scopeType === scopeType && assignment.scopeId === scopeId;
+    const globalScope = assignment.scopeType === null && assignment.scopeId === null;
+    if (!exactScope && !globalScope) continue;
     matchingScope = true;
     if (!assignment.conditions.every((condition) => conditions.has(condition))) continue;
     matchingConditions = true;
