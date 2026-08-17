@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { generateKeyPairSync, randomUUID, sign } from "node:crypto";
 import { createServer } from "node:http";
 import test from "node:test";
@@ -14,6 +15,23 @@ import { createInternalClientAuthenticator, INTERNAL_CLIENT_HEADERS, signInterna
 import { OIDC_SESSION_COOKIE, open, seal } from "./oidc.mjs";
 import { NOTIFICATION_OPERATIONS_READ_PERMISSION } from "./notification-operations-admin.mjs";
 import { TransactionalMemoryRepository } from "./repository.mjs";
+
+test("synchronise le bandeau Administration avec la validité réelle de la session", () => {
+  const source = readFileSync(new URL("./assets/theme.js", import.meta.url), "utf8");
+  assert.match(source, /fetch\("\/auth\/session", \{ credentials: "include", cache: "no-store" \}\)/);
+  assert.match(source, /previousAuthenticationState === true && !authenticated/);
+  assert.match(source, /window\.location\.reload\(\)/);
+  assert.match(source, /window\.setInterval\(refresh, 60_000\)/);
+  assert.match(source, /document\.addEventListener\("visibilitychange", refreshWhenVisible\)/);
+});
+
+test("revalide le script de session au lieu de conserver son ancienne version", async () => {
+  await withServer({}, async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/assets/theme.js`);
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get("cache-control"), "no-cache");
+  });
+});
 
 const identity = { identityId: "identity-1", status: "active" };
 const application = { applicationId: "tasks", status: "active" };

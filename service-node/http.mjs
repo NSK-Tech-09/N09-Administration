@@ -515,7 +515,9 @@ export function createHttpHandler({
     if (request.method === "GET" && STATIC_ASSETS.has(url.pathname)) {
       const asset = STATIC_ASSETS.get(url.pathname);
       response.statusCode = 200;
-      response.setHeader("cache-control", "public, max-age=86400");
+      response.setHeader("cache-control", asset.type.startsWith("text/javascript")
+        ? "no-cache"
+        : "public, max-age=86400");
       response.setHeader("content-type", asset.type);
       response.setHeader("x-content-type-options", "nosniff");
       response.end(asset.body);
