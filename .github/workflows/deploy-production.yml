@@ -59,8 +59,6 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: administration-${{ github.sha }}
-      - name: Installer le client SSH
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq sshpass
       - name: Vérifier l'identité du serveur et transférer
         env:
           SSHPASS: ${{ secrets.INFOMANIAK_DEPLOY_PASSWORD }}
@@ -74,9 +72,14 @@ jobs:
           install -m 700 -d ~/.ssh
           printf '%s\n' "$SSH_HOST_KEY" > ~/.ssh/known_hosts
           chmod 600 ~/.ssh/known_hosts
+          askpass="$RUNNER_TEMP/ssh-askpass.sh"
+          printf '%s\n' '#!/usr/bin/env bash' 'printf "%s\\n" "$SSHPASS"' > "$askpass"
+          chmod 700 "$askpass"
+          export SSH_ASKPASS="$askpass" SSH_ASKPASS_REQUIRE=force DISPLAY=:0
           archive="n09-administration-${GITHUB_SHA}.tar.gz"
           checksum=$(cut -d ' ' -f 1 artifact.sha256)
           remote_archive="$DEPLOY_ROOT/incoming/$archive"
-          sshpass -e ssh -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" "mkdir -p '$DEPLOY_ROOT/incoming'"
-          sshpass -e scp -P "$SSH_PORT" "$archive" deploy/remote-deploy.sh "$SSH_USER@$SSH_HOST:$DEPLOY_ROOT/incoming/"
-          sshpass -e ssh -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" "bash '$DEPLOY_ROOT/incoming/remote-deploy.sh' '$DEPLOY_ROOT' '$remote_archive' '$checksum' '$GITHUB_SHA' '$HEALTH_URL' 5"
+          ssh_options=(-o BatchMode=no -o ConnectTimeout=20 -o NumberOfPasswordPrompts=1)
+          setsid -w ssh "${ssh_options[@]}" -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" "mkdir -p '$DEPLOY_ROOT/incoming'" </dev/null
+          setsid -w scp "${ssh_options[@]}" -P "$SSH_PORT" "$archive" deploy/remote-deploy.sh "$SSH_USER@$SSH_HOST:$DEPLOY_ROOT/incoming/" </dev/null
+          setsid -w ssh "${ssh_options[@]}" -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" "bash '$DEPLOY_ROOT/incoming/remote-deploy.sh' '$DEPLOY_ROOT' '$remote_archive' '$checksum' '$GITHUB_SHA' '$HEALTH_URL' 5" </dev/null
