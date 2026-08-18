@@ -27,6 +27,8 @@ jobs:
           cache-dependency-path: service-node/pnpm-lock.yaml
       - uses: actions/setup-python@v5
         with: { python-version: "3.12" }
+      - name: Vérifier les scripts de déploiement
+        run: bash -n deploy/*.sh
       - name: Vérifier le noyau
         run: python -m compileall -q n09_admin tests && python -m unittest discover -s tests -v
       - name: Vérifier et préparer le service
@@ -79,7 +81,49 @@ jobs:
           archive="n09-administration-${GITHUB_SHA}.tar.gz"
           checksum=$(cut -d ' ' -f 1 artifact.sha256)
           remote_archive="$DEPLOY_ROOT/incoming/$archive"
-          ssh_options=(-vv -o BatchMode=no -o ConnectTimeout=20 -o NumberOfPasswordPrompts=1)
-          setsid -w ssh "${ssh_options[@]}" -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" "mkdir -p '$DEPLOY_ROOT/incoming'" </dev/null
+          ssh_options=(-o BatchMode=no -o ConnectTimeout=20 -o NumberOfPasswordPrompts=1)
+          remote() {
+            local status=1
+            for delay in 0 10 20 30; do
+              sleep "$delay"
+              setsid -w ssh "${ssh_options[@]}" -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" "$1" </dev/null && return 0
+              status=$?
+            done
+            return "$status"
+          }
+          remote "mkdir -p '$DEPLOY_ROOT/incoming'"
           setsid -w scp "${ssh_options[@]}" -P "$SSH_PORT" "$archive" deploy/remote-deploy.sh "$SSH_USER@$SSH_HOST:$DEPLOY_ROOT/incoming/" </dev/null
-          setsid -w ssh "${ssh_options[@]}" -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" "bash '$DEPLOY_ROOT/incoming/remote-deploy.sh' '$DEPLOY_ROOT' '$remote_archive' '$checksum' '$GITHUB_SHA' '$HEALTH_URL' 5" </dev/null
+          remote "bash '$DEPLOY_ROOT/incoming/remote-deploy.sh' prepare '$DEPLOY_ROOT' '$GITHUB_SHA' '$remote_archive' '$checksum' 5"
+
+          set +e
+          setsid -w ssh "${ssh_options[@]}" -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" "'$DEPLOY_ROOT/shared/restart.sh'" </dev/null
+          set -e
+
+          healthy=false
+          for _ in {1..12}; do
+            if body=$(curl --fail --silent --show-error --connect-timeout 10 --max-time 20 "$HEALTH_URL") &&
+               jq -e --arg commit "$GITHUB_SHA" '.status == "ok" and .release.commit == $commit' <<<"$body" >/dev/null; then
+              healthy=true
+              break
+            fi
+            sleep 5
+          done
+          if [[ $healthy == true ]]; then
+            remote "bash '$DEPLOY_ROOT/incoming/remote-deploy.sh' finalize '$DEPLOY_ROOT' '$GITHUB_SHA' 5"
+            exit 0
+          fi
+
+          remote "bash '$DEPLOY_ROOT/incoming/remote-deploy.sh' rollback '$DEPLOY_ROOT' '$GITHUB_SHA'"
+          set +e
+          setsid -w ssh "${ssh_options[@]}" -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" "'$DEPLOY_ROOT/shared/restart.sh'" </dev/null
+          set -e
+          for _ in {1..12}; do
+            if curl --fail --silent --show-error --connect-timeout 10 --max-time 20 "$HEALTH_URL" |
+               jq -e --arg failed "$GITHUB_SHA" '.status == "ok" and .release.commit != $failed' >/dev/null; then
+              echo "healthcheck failed; previous release restored" >&2
+              exit 1
+            fi
+            sleep 5
+          done
+          echo "healthcheck failed and rollback could not be verified" >&2
+          exit 1
