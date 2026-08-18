@@ -299,4 +299,3 @@ test("accepte une déconnexion de navigation sans Origin depuis le portail seule
     assert.equal(rejected.status, 401);
   });
 });
-
