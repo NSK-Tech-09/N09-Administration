@@ -77,12 +77,12 @@ case "$action" in
       for protected in "${keep[@]}"; do [[ $candidate == "$protected" ]] && kept=true; done
       [[ $kept == true || ${#keep[@]} -ge $retention ]] || keep+=("$candidate")
     done < <(find "$root/releases" -mindepth 1 -maxdepth 1 -type d -printf '%T@ %p\n' | sort -nr | cut -d ' ' -f 2-)
-    cleanup_transaction
     while IFS= read -r candidate; do
       kept=false
       for protected in "${keep[@]}"; do [[ $candidate == "$protected" ]] && kept=true; done
       [[ $kept == true ]] || rm -rf -- "$candidate"
     done < <(find "$root/releases" -mindepth 1 -maxdepth 1 -type d -print)
+    cleanup_transaction
     printf 'deployed %s\n' "$commit"
     ;;
   rollback)
