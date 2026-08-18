@@ -24,9 +24,32 @@ const sessionActions = document.querySelector(".header-actions");
 const accountAction = sessionActions?.querySelector('a[href="/account/sessions"]');
 const logoutAction = sessionActions?.querySelector('form[action="/auth/logout"]');
 let loginAction = null;
+let userCopy = null;
 let previousAuthenticationState = null;
 
+const quickAccount = document.querySelector('#nsk-quick-access option[value="/account/sessions"]');
+if (quickAccount) quickAccount.value = "/account";
+
 if (sessionActions && accountAction && logoutAction) {
+  const requestedReturn = new URLSearchParams(window.location.search).get("return_to");
+  const returnTo = window.location.pathname.startsWith("/account") && requestedReturn
+    ? requestedReturn
+    : window.location.href;
+  const accountUrl = new URL("/account", window.location.origin);
+  accountUrl.searchParams.set("return_to", new URL(returnTo, window.location.origin).href);
+  accountUrl.searchParams.set("theme", initial);
+  accountAction.href = accountUrl.toString();
+  accountAction.textContent = "Mon compte";
+  userCopy = document.createElement("span");
+  userCopy.className = "header-user-copy";
+  userCopy.style.display = "grid";
+  userCopy.style.minWidth = "145px";
+  userCopy.innerHTML = "<strong>Utilisateur NSK Tech 09</strong><small>Session active</small>";
+  sessionActions.prepend(userCopy);
+  Object.assign(sessionActions.style, {
+    minHeight: "62px", padding: "8px 10px", border: "1px solid var(--line)",
+    borderRadius: "8px", background: "var(--muted-bg)",
+  });
   sessionActions.style.visibility = "hidden";
   loginAction = document.createElement("a");
   loginAction.className = "button secondary";
@@ -34,8 +57,13 @@ if (sessionActions && accountAction && logoutAction) {
   sessionActions.append(loginAction);
 }
 
-function displayAuthenticationState(authenticated) {
+function displayAuthenticationState(authenticated, displayName = "Utilisateur NSK Tech 09") {
   if (!sessionActions || !accountAction || !logoutAction || !loginAction) return;
+  if (userCopy) {
+    userCopy.hidden = !authenticated;
+    const name = userCopy.querySelector("strong");
+    if (name) name.textContent = displayName;
+  }
   accountAction.hidden = !authenticated;
   logoutAction.hidden = !authenticated;
   loginAction.hidden = authenticated;
@@ -45,9 +73,12 @@ function displayAuthenticationState(authenticated) {
 async function refreshAuthenticationState() {
   if (!sessionActions) return;
   let authenticated = false;
+  let displayName = "Utilisateur NSK Tech 09";
   try {
     const response = await fetch("/auth/session", { credentials: "include", cache: "no-store" });
-    authenticated = response.ok && (await response.json()).authenticated === true;
+    const state = response.ok ? await response.json() : { authenticated: false };
+    authenticated = state.authenticated === true;
+    displayName = state.display_name || displayName;
   } catch {
     authenticated = false;
   }
@@ -61,7 +92,7 @@ async function refreshAuthenticationState() {
     ? "/"
     : `${window.location.pathname}${window.location.search}${window.location.hash}`;
   loginAction.href = `/auth/login?return_to=${encodeURIComponent(returnTo)}`;
-  displayAuthenticationState(authenticated);
+  displayAuthenticationState(authenticated, displayName);
   previousAuthenticationState = authenticated;
 }
 

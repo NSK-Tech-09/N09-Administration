@@ -172,7 +172,7 @@ test("ouvre le compte central en conservant l’application d’origine", async 
     });
     assert.equal(account.status, 303);
     assert.equal(account.headers.get("location"),
-      `/account/sessions?return_to=${encodeURIComponent(returnTo)}&theme=dark`);
+      `/account?return_to=${encodeURIComponent(returnTo)}&theme=dark`);
   });
 });
 
