@@ -12,7 +12,8 @@ read_state() {
   archive=${transaction[2]:-}
 }
 cleanup_transaction() {
-  rm -f -- "$archive" "$root/incoming/remote-deploy.sh" "$state"
+  find "$root/incoming" -mindepth 1 -maxdepth 1 -type f -delete
+  rm -f -- "$state"
   rm -rf -- "$lock"
 }
 
@@ -68,11 +69,20 @@ case "$action" in
     fi
     read_state
     [[ $(readlink -f "$root/current") == "$root/releases/$commit" ]] || die "current release does not match transaction"
-    mapfile -t old < <(find "$root/releases" -mindepth 1 -maxdepth 1 -type d -printf '%T@ %p\n' | sort -nr | tail -n "+$((retention + 1))" | cut -d ' ' -f 2-)
+    current=$(readlink -f "$root/current")
+    keep=("$current")
+    [[ $previous != "$current" && $previous == "$root/releases/"* ]] && keep+=("$previous")
+    while IFS= read -r candidate; do
+      kept=false
+      for protected in "${keep[@]}"; do [[ $candidate == "$protected" ]] && kept=true; done
+      [[ $kept == true || ${#keep[@]} -ge $retention ]] || keep+=("$candidate")
+    done < <(find "$root/releases" -mindepth 1 -maxdepth 1 -type d -printf '%T@ %p\n' | sort -nr | cut -d ' ' -f 2-)
     cleanup_transaction
-    for candidate in "${old[@]}"; do
-      [[ $(readlink -f "$root/current") == "$candidate" || $previous == "$candidate" ]] || rm -rf -- "$candidate"
-    done
+    while IFS= read -r candidate; do
+      kept=false
+      for protected in "${keep[@]}"; do [[ $candidate == "$protected" ]] && kept=true; done
+      [[ $kept == true ]] || rm -rf -- "$candidate"
+    done < <(find "$root/releases" -mindepth 1 -maxdepth 1 -type d -print)
     printf 'deployed %s\n' "$commit"
     ;;
   rollback)
