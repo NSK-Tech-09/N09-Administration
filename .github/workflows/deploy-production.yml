@@ -79,7 +79,7 @@ jobs:
           archive="n09-administration-${GITHUB_SHA}.tar.gz"
           checksum=$(cut -d ' ' -f 1 artifact.sha256)
           remote_archive="$DEPLOY_ROOT/incoming/$archive"
-          ssh_options=(-o BatchMode=no -o ConnectTimeout=20 -o NumberOfPasswordPrompts=1)
+          ssh_options=(-vv -o BatchMode=no -o ConnectTimeout=20 -o NumberOfPasswordPrompts=1)
           setsid -w ssh "${ssh_options[@]}" -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" "mkdir -p '$DEPLOY_ROOT/incoming'" </dev/null
           setsid -w scp "${ssh_options[@]}" -P "$SSH_PORT" "$archive" deploy/remote-deploy.sh "$SSH_USER@$SSH_HOST:$DEPLOY_ROOT/incoming/" </dev/null
           setsid -w ssh "${ssh_options[@]}" -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" "bash '$DEPLOY_ROOT/incoming/remote-deploy.sh' '$DEPLOY_ROOT' '$remote_archive' '$checksum' '$GITHUB_SHA' '$HEALTH_URL' 5" </dev/null
