@@ -154,7 +154,8 @@ function redirect(response, location) {
 function safeLoginReturnPath(value) {
   if (typeof value !== "string" || value.includes("\r") || value.includes("\n") ||
       (value !== "/" && !value.startsWith("/application-login/authorize?") &&
-       !value.startsWith("/portal/login?") && !value.startsWith("/account/sessions?"))) return null;
+       !value.startsWith("/portal/login?") && !value.startsWith("/account?") &&
+       !value.startsWith("/account/sessions?"))) return null;
   const parsed = new URL(value, "https://n09.invalid");
   return parsed.origin === "https://n09.invalid" ? `${parsed.pathname}${parsed.search}` : null;
 }
@@ -169,8 +170,11 @@ function openEmailLoginConfirmation(value, sessionSecret) {
 
 const ACCOUNT_APPLICATION_ORIGINS = Object.freeze([
   "https://energie.nsktech.fr",
+  "https://preprod-energie.nsktech.fr",
   "https://prod-taches.nsktech.fr",
+  "https://preprod-taches.nsktech.fr",
   "https://prod-admin.nsktech.fr",
+  "https://preprod-admin.nsktech.fr",
 ]);
 
 function safeAccountTheme(value) {
@@ -367,7 +371,27 @@ function renderPersonalSessions(sessions, csrf, actionToken, { returnTo, theme }
   }).join("");
   const closeOthers = activeOthers
     ? `<form method="post" action="/account/sessions/revoke-others${accountQuery}"><input type="hidden" name="csrf" value="${escapeHtml(csrf)}"><button class="secondary" type="submit">Fermer toutes les autres sessions (${escapeHtml(activeOthers)})</button></form>` : "";
-  return `<h1>Mes sessions</h1><p>Retrouve ici les connexions ouvertes dans l’écosystème NSK Tech 09. Une fermeture distante prend effet au prochain contrôle serveur de l’application.</p><div class="facts"><p><strong>Protection :</strong> cette page n’affiche aucun cookie, secret, adresse réseau ni identifiant technique de session.</p></div><nav><a class="button" href="${escapeHtml(returnTo)}">${returnLabel}</a>${closeOthers}<a class="button secondary" href="/">Administration</a><form method="post" action="/auth/logout"><button class="secondary" type="submit">Fermer la session actuelle</button></form></nav><div class="directory">${cards || '<div class="facts"><p>Aucune session enregistrée.</p></div>'}</div>`;
+  return `<h1>Mes sessions</h1><p>Retrouve ici les connexions ouvertes dans l’écosystème NSK Tech 09. Une fermeture distante prend effet au prochain contrôle serveur de l’application.</p><div class="facts"><p><strong>Protection :</strong> cette page n’affiche aucun cookie, secret, adresse réseau ni identifiant technique de session.</p></div><nav><a class="button" href="${escapeHtml(returnTo)}">${returnLabel}</a>${closeOthers}<a class="button secondary" href="/account${accountQuery}">Mon compte</a><form method="post" action="/auth/logout"><button class="secondary" type="submit">Fermer la session actuelle</button></form></nav><div class="directory">${cards || '<div class="facts"><p>Aucune session enregistrée.</p></div>'}</div>`;
+}
+
+function renderPersonalAccount({ identity, applications, assignments, sessions, providerKey, emailLoginEnabled, returnTo, theme }) {
+  const query = `?return_to=${encodeURIComponent(returnTo)}&theme=${encodeURIComponent(theme)}`;
+  const applicationById = new Map(applications.map((application) => [application.applicationId, application]));
+  const roleLabels = { administrator: "Administrateur", admin: "Administrateur", owner: "Propriétaire", reader: "Lecteur", user: "Utilisateur" };
+  const activeAssignments = assignments.filter((assignment) =>
+    assignment.subjectId === identity.identityId && assignment.status === "active"
+  );
+  const accessCards = activeAssignments.map((assignment) => {
+    const application = applicationById.get(assignment.applicationId);
+    const scope = assignment.scopeType === "global" ? "Tous les périmètres"
+      : `${assignment.scopeType}${assignment.scopeId ? ` · ${assignment.scopeId}` : ""}`;
+    return `<article class="entry assignment"><p><span class="pill">Accès actif</span></p><h3>${escapeHtml(application?.displayName || assignment.applicationId)}</h3><p><strong>${escapeHtml(roleLabels[assignment.roleId] || assignment.roleId)}</strong><br>${escapeHtml(scope)}</p><p class="note">Ces droits sont affichés en lecture seule. Seule une décision habilitée dans Administration peut les modifier.</p></article>`;
+  }).join("");
+  const providerName = providerKey === EMAIL_LOGIN_PROVIDER ? "Courriel" : providerKey === "infomaniak" ? "Infomaniak" : providerKey;
+  const sessionActivity = sessions.slice(0, 3).map((item) =>
+    `<li><strong>${escapeHtml(item.applicationName)}</strong> · dernière activité ${escapeHtml(formatDate(item.lastSeenAt))}${item.current ? " · session actuelle" : ""}</li>`
+  ).join("");
+  return `<h1>Mon compte NSK Tech 09</h1><p>Ton espace personnel central réunit ton identité, tes accès et la sécurité de tes connexions. Il est distinct de la console d’administration.</p><nav><a class="button" href="${escapeHtml(returnTo)}">Retour à l’application</a><a class="button secondary" href="/account/sessions${query}">Gérer mes sessions</a></nav><div class="directory account-sections"><section class="entry assignment"><p><span class="pill">Identité ${escapeHtml(identity.status)}</span></p><h2>Profil et coordonnées</h2><p><strong>${escapeHtml(identity.displayName)}</strong><br><a href="mailto:${escapeHtml(identity.email)}">${escapeHtml(identity.email)}</a></p><p class="note">L’adresse affichée est l’adresse de référence de ton identité NSK Tech 09. Sa modification exige une vérification centrale.</p></section><section class="entry"><h2>Méthodes de connexion</h2><p><strong>Méthode de cette session :</strong> ${escapeHtml(providerName || "centrale")}</p><p>Infomaniak : <span class="pill">Disponible</span><br>Courriel sans mot de passe : <span class="pill${emailLoginEnabled ? "" : " inactive"}">${emailLoginEnabled ? "Disponible" : "Non configuré"}</span></p><p class="note">Aucun mot de passe NSK n’est stocké par les applications. Les méthodes reconnues conduisent à la même identité centrale.</p></section><section class="entry"><h2>Sessions et activité récente</h2><p><strong>${escapeHtml(sessions.filter((item) => item.state === "active").length)}</strong> session(s) active(s)</p><ul class="permissions">${sessionActivity || "<li>Aucune activité récente enregistrée.</li>"}</ul><a class="button secondary" href="/account/sessions${query}">Voir et fermer mes sessions</a></section><section class="entry"><h2>Données personnelles</h2><p>Les données affichées servent à l’identification, à l’attribution des accès et à la traçabilité de sécurité.</p><p><a href="https://nsktech.fr/#confidentialite" target="_blank" rel="noopener noreferrer">Consulter la politique de confidentialité</a></p><p class="note">Les demandes de rectification ou d’exercice de droits sont instruites sans suppression de la traçabilité légitime.</p></section></div><h2>Applications, rôles et périmètres</h2><p>Cette vue est informative : elle ne permet ni de s’accorder un rôle ni d’élargir un périmètre.</p><div class="directory">${accessCards || '<div class="facts"><p>Aucun accès applicatif actif n’est attribué à cette identité.</p></div>'}</div>`;
 }
 
 function renderOperatorSessions(sessions, csrf, actionToken) {
@@ -823,7 +847,7 @@ export function createHttpHandler({
       const fallback = portalOrigins[0] ? `${portalOrigins[0]}/#applications` : "https://nsktech.fr/#applications";
       const returnTo = safeAccountReturn(url.searchParams.get("return_to"), portalOrigins, fallback);
       const theme = safeAccountTheme(url.searchParams.get("theme"));
-      const accountPath = `/account/sessions?return_to=${encodeURIComponent(returnTo)}&theme=${encodeURIComponent(theme)}`;
+      const accountPath = `/account?return_to=${encodeURIComponent(returnTo)}&theme=${encodeURIComponent(theme)}`;
       try {
         const session = await openCurrentSession(request);
         if (session.status !== "authenticated") throw new Error("fresh_authentication_required");
@@ -842,7 +866,7 @@ export function createHttpHandler({
         ? `<p>Demande enregistrée : <strong>${escapeHtml(session.requestId)}</strong></p>` : "";
       const administrationLinks = [];
       if (session?.status === "authenticated" && session.csrf) {
-        administrationLinks.push('<a class="button" href="/account/sessions">Mes sessions</a>');
+        administrationLinks.push('<a class="button" href="/account">Mon compte</a>');
         try {
           const decision = await authorizeIdentityLinkAdministration(repository, session.identityId);
           if (decision.allowed) administrationLinks.push('<a class="button" href="/admin/link-requests">Administrer les rattachements</a>');
@@ -1176,6 +1200,47 @@ export function createHttpHandler({
       response.setHeader("location", "/");
       response.setHeader("set-cookie", cookie(OIDC_SESSION_COOKIE, "", { maxAge: 0 }));
       response.end();
+      return;
+    }
+    if (url.pathname === "/account" && request.method === "GET") {
+      const accountFallback = portalOrigins[0] ? `${portalOrigins[0]}/#applications` : "https://nsktech.fr/#applications";
+      const accountReturnTo = safeAccountReturn(url.searchParams.get("return_to"), portalOrigins, accountFallback);
+      const accountTheme = safeAccountTheme(url.searchParams.get("theme"));
+      const accountPath = `/account?return_to=${encodeURIComponent(accountReturnTo)}&theme=${encodeURIComponent(accountTheme)}`;
+      let session;
+      try {
+        if (!oidcConfig) throw new Error("oidc_not_configured");
+        session = await openCurrentSession(request);
+      } catch {
+        redirect(response, `/auth/login?return_to=${encodeURIComponent(accountPath)}&theme=${encodeURIComponent(accountTheme)}`);
+        return;
+      }
+      if (session.status !== "authenticated" || !session.identityId || !session.centralSession?.sessionId) {
+        redirect(response, `/auth/login?return_to=${encodeURIComponent(accountPath)}&theme=${encodeURIComponent(accountTheme)}`);
+        return;
+      }
+      try {
+        const [identity, applications, assignments, sessions] = await Promise.all([
+          repository.getIdentity(session.identityId),
+          repository.listApplications(),
+          repository.listAllAssignments(),
+          personalSessionManagement
+            ? personalSessionManagement.listOwn({
+              identityId: session.identityId,
+              currentSessionId: session.centralSession.sessionId,
+            })
+            : [],
+        ]);
+        if (!identity || identity.status !== "active") throw new Error("identity_not_active");
+        writeHtml(response, 200, "Mon compte", renderPersonalAccount({
+          identity, applications, assignments, sessions,
+          providerKey: session.providerKey ?? "infomaniak",
+          emailLoginEnabled: emailLogin?.enabled === true,
+          returnTo: accountReturnTo, theme: accountTheme,
+        }));
+      } catch {
+        writeHtml(response, 503, "Compte indisponible", '<h1>Compte momentanément indisponible</h1><p>Ton identité et tes droits ne peuvent pas être affichés de façon fiable. Aucun changement n’a été effectué.</p><a class="button" href="/">Retour</a>');
+      }
       return;
     }
     const personalSessionsRoot = url.pathname === "/account/sessions";

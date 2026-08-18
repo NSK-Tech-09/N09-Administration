@@ -46,11 +46,38 @@ const sessions = [
 ];
 
 async function withServer(personalSessionManagement, operation) {
-  const server = createServer(createHttpHandler({ repository: {}, oidcConfig, personalSessionManagement }));
+  const repository = {
+    getIdentity: async () => ({ identityId, displayName: "Fred TRAVERS", email: "f.travers@nsktech.fr", status: "active" }),
+    listApplications: async () => [{ applicationId: "n09-suivi-taches", displayName: "N09 – Suivi des tâches", status: "active" }],
+    listAllAssignments: async () => [{
+      assignmentId: "assignment-1", subjectId: identityId, applicationId: "n09-suivi-taches",
+      roleId: "administrator", scopeType: "global", scopeId: null, status: "active",
+    }],
+  };
+  const server = createServer(createHttpHandler({ repository, oidcConfig, personalSessionManagement }));
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
   try { await operation(`http://127.0.0.1:${server.address().port}`); }
   finally { await new Promise((resolve) => server.close(resolve)); }
 }
+
+test("présente le compte central sans permettre de modifier ses propres droits", async () => {
+  await withServer({ listOwn: async () => sessions }, async (origin) => {
+    const returnTo = "https://prod-taches.nsktech.fr/?theme=gray";
+    const response = await fetch(`${origin}/account?return_to=${encodeURIComponent(returnTo)}&theme=gray`, {
+      headers: { cookie: sessionCookie() },
+    });
+    const html = await response.text();
+    assert.equal(response.status, 200);
+    assert.match(html, /Mon compte NSK Tech 09/);
+    assert.match(html, /Fred TRAVERS/);
+    assert.match(html, /f\.travers@nsktech\.fr/);
+    assert.match(html, /N09 – Suivi des tâches/);
+    assert.match(html, /Administrateur/);
+    assert.match(html, /lecture seule/);
+    assert.match(html, /Retour à l’application/);
+    assert.doesNotMatch(html, /Accorder cet accès|action="\/admin\/access-decisions\/grant"/);
+  });
+});
 
 test("présente les sessions sans identifiant technique et marque la courante", async () => {
   const calls = [];
