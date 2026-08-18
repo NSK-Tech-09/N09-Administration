@@ -101,7 +101,7 @@ jobs:
             "bash '$DEPLOY_ROOT/incoming/remote-deploy.sh' prepare '$DEPLOY_ROOT' '$GITHUB_SHA' '$remote_archive' '$checksum' 5 '$HEALTH_URL'" </dev/null
           prepare_status=$?
           set -e
-          [[ $prepare_status -eq 0 || $prepare_status -eq 255 ]] || exit "$prepare_status"
+          [[ $prepare_status -eq 0 || $prepare_status -eq 141 || $prepare_status -eq 255 ]] || exit "$prepare_status"
 
           set +e
           setsid -w ssh "${ssh_options[@]}" -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" "'$DEPLOY_ROOT/shared/restart.sh'" </dev/null
