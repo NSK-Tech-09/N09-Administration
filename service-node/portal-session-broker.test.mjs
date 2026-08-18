@@ -57,9 +57,10 @@ test("émet une session portail propre à son audience et restitue seulement les
   const { repository, authority } = seeded();
   const value = await issuePortalSession({
     repository, sessionAuthority: authority, sessionSecret,
-    identitySession: { ...identity, status: "authenticated" },
+    identitySession: { ...identity, status: "authenticated", providerKey: "infomaniak" },
   });
   const session = openPortalSession(value, sessionSecret);
+  assert.equal(session.providerKey, "infomaniak");
   const directory = await portalDirectory({ repository, sessionAuthority: authority, session });
   assert.equal(directory.identity.displayName, "Fred");
   assert.deepEqual(directory.applications, ["n09-energie"]);
