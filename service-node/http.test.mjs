@@ -1035,4 +1035,3 @@ test("n'expose jamais le détail d'une panne interne", async () => {
     assert.doesNotMatch(responseText, /secret diagnostic/);
   });
 });
-
