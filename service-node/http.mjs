@@ -387,7 +387,9 @@ function renderPersonalAccount({ identity, applications, assignments, sessions, 
       : `${assignment.scopeType}${assignment.scopeId ? ` · ${assignment.scopeId}` : ""}`;
     return `<article class="entry assignment"><p><span class="pill">Accès actif</span></p><h3>${escapeHtml(application?.displayName || assignment.applicationId)}</h3><p><strong>${escapeHtml(roleLabels[assignment.roleId] || assignment.roleId)}</strong><br>${escapeHtml(scope)}</p><p class="note">Ces droits sont affichés en lecture seule. Seule une décision habilitée dans Administration peut les modifier.</p></article>`;
   }).join("");
-  const providerName = providerKey === EMAIL_LOGIN_PROVIDER ? "Courriel" : providerKey === "infomaniak" ? "Infomaniak" : providerKey;
+  const providerName = providerKey === EMAIL_LOGIN_PROVIDER ? "Courriel"
+    : providerKey === "infomaniak" ? "Infomaniak"
+      : providerKey === "nsktech" ? "Session NSK Tech 09" : providerKey;
   const sessionActivity = sessions.slice(0, 3).map((item) =>
     `<li><strong>${escapeHtml(item.applicationName)}</strong> · dernière activité ${escapeHtml(formatDate(item.lastSeenAt))}${item.current ? " · session actuelle" : ""}</li>`
   ).join("");
@@ -848,9 +850,37 @@ export function createHttpHandler({
       const returnTo = safeAccountReturn(url.searchParams.get("return_to"), portalOrigins, fallback);
       const theme = safeAccountTheme(url.searchParams.get("theme"));
       const accountPath = `/account?return_to=${encodeURIComponent(returnTo)}&theme=${encodeURIComponent(theme)}`;
+      let accountSessionCookie = null;
       try {
-        const session = await openCurrentSession(request);
+        let session;
+        try {
+          session = await openCurrentSession(request);
+        } catch {
+          if (!oidcConfig || !sessionAuthority || !administrationSessionAuthority) throw new Error("account_bridge_unavailable");
+          const portalSession = openPortalSession(
+            parseCookies(request.headers.cookie).get(PORTAL_SESSION_COOKIE), oidcConfig.sessionSecret,
+          );
+          const directory = await portalDirectory({ repository, sessionAuthority, session: portalSession });
+          session = await attachCentralSession({
+            sessionVersion: CURRENT_SESSION_VERSION,
+            providerKey: portalSession.providerKey ?? "nsktech",
+            issuer: "nsktech:portal-session",
+            subject: portalSession.identityId,
+            identityId: portalSession.identityId,
+            displayName: directory.identity.displayName,
+            status: "authenticated",
+            csrf: randomUUID(),
+            expiresAt: Math.min(portalSession.expiresAt, Date.now() + 8 * 60 * 60 * 1000),
+          });
+          if (!session.centralSession?.sessionId) throw new Error("account_session_not_enrolled");
+          accountSessionCookie = cookie(
+            OIDC_SESSION_COOKIE,
+            seal(session, oidcConfig.sessionSecret, "oidc-session"),
+            { maxAge: Math.max(1, Math.ceil((session.expiresAt - Date.now()) / 1000)) },
+          );
+        }
         if (session.status !== "authenticated") throw new Error("fresh_authentication_required");
+        if (accountSessionCookie) response.setHeader("set-cookie", accountSessionCookie);
         redirect(response, accountPath);
       } catch {
         redirect(response, `/auth/login?return_to=${encodeURIComponent(accountPath)}&theme=${encodeURIComponent(theme)}`);

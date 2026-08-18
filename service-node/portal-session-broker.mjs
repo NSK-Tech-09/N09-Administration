@@ -62,6 +62,7 @@ export async function issuePortalSession({ repository, sessionAuthority, identit
     identityId: identitySession.identityId,
     displayName: identity.displayName,
     email: identity.email,
+    providerKey: typeof identitySession.providerKey === "string" ? identitySession.providerKey : null,
     credential: issued.credential,
     expiresAt,
   }, sessionSecret, PORTAL_SESSION_PURPOSE);
@@ -70,6 +71,7 @@ export async function issuePortalSession({ repository, sessionAuthority, identit
 export function openPortalSession(value, sessionSecret, now = Date.now()) {
   const session = open(value, sessionSecret, PORTAL_SESSION_PURPOSE, now);
   if (session.version !== 1 || typeof session.identityId !== "string" ||
+      (session.providerKey !== null && session.providerKey !== undefined && typeof session.providerKey !== "string") ||
       typeof session.credential?.sessionId !== "string" || typeof session.credential?.secret !== "string") {
     throw new Error("portal_session_invalid");
   }

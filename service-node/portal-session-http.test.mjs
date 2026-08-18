@@ -5,7 +5,7 @@ import test from "node:test";
 import { createAuditEvent } from "./audit.mjs";
 import { createApplicationSessionAuthority } from "./application-session-authority.mjs";
 import { createHttpHandler } from "./http.mjs";
-import { cookie, OIDC_SESSION_COOKIE, seal } from "./oidc.mjs";
+import { cookie, OIDC_SESSION_COOKIE, open, seal } from "./oidc.mjs";
 import { bootstrapPortalProduction } from "./portal-production-bootstrap.mjs";
 import { PORTAL_APPLICATION_ID, PORTAL_SESSION_COOKIE } from "./portal-session-broker.mjs";
 import { TransactionalMemoryRepository } from "./repository.mjs";
@@ -59,10 +59,16 @@ function identityCookie() {
   return cookie(OIDC_SESSION_COOKIE, value, { maxAge: 60 });
 }
 
-async function withServer(operation) {
+async function withServer(operation, { accountBridge = false } = {}) {
   const { repository, authority } = await seeded();
+  const administrationSessionAuthority = accountBridge ? {
+    mode: "enforce",
+    assess: async () => ({ allowed: true, reasonCode: "test_session_allowed" }),
+    issue: async () => ({ sessionId: randomUUID(), secret: "A".repeat(43) }),
+  } : null;
   const server = createServer(createHttpHandler({
-    repository, oidcConfig, sessionAuthority: authority, portalOrigins: [portalOrigin],
+    repository, oidcConfig, administrationSessionAuthority,
+    sessionAuthority: authority, portalOrigins: [portalOrigin],
   }));
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
   try {
@@ -174,6 +180,40 @@ test("ouvre le compte central en conservant l’application d’origine", async 
     assert.equal(account.headers.get("location"),
       `/account?return_to=${encodeURIComponent(returnTo)}&theme=dark`);
   });
+});
+
+test("prolonge une session portail valide vers le compte central sans nouvelle connexion", async () => {
+  await withServer(async (origin) => {
+    const login = await fetch(`${origin}/portal/login?return_to=${encodeURIComponent(`${portalOrigin}/`)}`, {
+      headers: { cookie: identityCookie() }, redirect: "manual",
+    });
+    const portalCookie = login.headers.get("set-cookie").match(new RegExp(`${PORTAL_SESSION_COOKIE}=([^;]+)`))[0];
+    const returnTo = `${portalOrigin}/#applications`;
+    const account = await fetch(`${origin}/portal/account?return_to=${encodeURIComponent(returnTo)}&theme=gray`, {
+      headers: { cookie: portalCookie }, redirect: "manual",
+    });
+    assert.equal(account.status, 303);
+    assert.equal(account.headers.get("location"),
+      `/account?return_to=${encodeURIComponent(returnTo)}&theme=gray`);
+    const accountCookie = account.headers.get("set-cookie");
+    assert.match(accountCookie, new RegExp(`^${OIDC_SESSION_COOKIE}=`));
+    const sealedSession = decodeURIComponent(accountCookie.match(new RegExp(`^${OIDC_SESSION_COOKIE}=([^;]+)`))[1]);
+    const session = open(sealedSession, sessionSecret, "oidc-session");
+    assert.equal(session.status, "authenticated");
+    assert.equal(session.identityId, identity.identityId);
+    assert.equal(session.providerKey, "nsktech");
+    assert.equal(typeof session.centralSession?.sessionId, "string");
+
+    const logout = await fetch(`${origin}/portal/logout?return_to=${encodeURIComponent(`${portalOrigin}/`)}`, {
+      method: "POST", headers: { cookie: portalCookie }, redirect: "manual",
+    });
+    assert.equal(logout.status, 303);
+    const rejected = await fetch(`${origin}/portal/account?return_to=${encodeURIComponent(returnTo)}`, {
+      headers: { cookie: portalCookie }, redirect: "manual",
+    });
+    assert.match(rejected.headers.get("location"), /^\/auth\/login\?/);
+    assert.equal(rejected.headers.get("set-cookie"), null);
+  }, { accountBridge: true });
 });
 
 test("accepte une déconnexion de navigation sans Origin depuis le portail seulement", async () => {
