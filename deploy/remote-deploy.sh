@@ -102,7 +102,10 @@ case "$action" in
     for candidate in "${ordered[@]}"; do
       kept=false
       for protected in "${keep[@]}"; do [[ $candidate == "$protected" ]] && kept=true; done
-      [[ $kept == true ]] || rm -rf -- "$candidate"
+      if [[ $kept != true ]]; then
+        chmod -R u+w -- "$candidate"
+        rm -rf -- "$candidate"
+      fi
     done
     cleanup_transaction
     printf 'deployed %s\n' "$commit"
