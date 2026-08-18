@@ -287,7 +287,7 @@ test("applique le socle visuel et de navigation obligatoire de NSK Tech 09", asy
     assert.match(html, /Ouvrir le portail NSK Tech 09 dans un nouvel onglet/);
     assert.match(html, /aria-label="Accès rapide"/);
     assert.match(html, /Choisir le thème/);
-    assert.match(html, /N09 – Administration · version 0\.2\.3 · application web installable/);
+    assert.match(html, /N09 – Administration · version 0\.2\.5 · application web installable/);
     assert.match(html, /Mentions légales/);
     assert.match(html, /Confidentialité/);
     assert.match(html, /Comprendre\. Concevoir\. Transmettre\./);
