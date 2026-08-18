@@ -10,6 +10,7 @@ read_state() {
   [[ ${transaction[0]:-} == "$commit" ]] || die "deployment state belongs to another commit"
   previous=${transaction[1]:-}
   archive=${transaction[2]:-}
+  phase=${transaction[3]:-}
 }
 cleanup_transaction() {
   find "$root/incoming" -mindepth 1 -maxdepth 1 -type f -delete
@@ -26,12 +27,24 @@ lock="$root/shared/deployment.lock"
 
 case "$action" in
   prepare)
-    [[ $# -eq 6 ]] || die "prepare expects: root commit archive sha256 retention"
-    archive=$4 expected_sha=$5 retention=$6
+    [[ $# -eq 7 ]] || die "prepare expects: root commit archive sha256 retention health-url"
+    archive=$4 expected_sha=$5 retention=$6 health_url=$7
     [[ $archive == "$root/incoming/"* ]] || die "archive must be inside incoming"
     [[ $expected_sha =~ ^[0-9a-f]{64}$ ]] || die "invalid checksum"
     [[ $retention =~ ^[2-9][0-9]*$ ]] || die "retention must be at least 2"
     mkdir -p "$root/incoming" "$root/releases" "$root/shared"
+    if [[ -f $state ]]; then
+      mapfile -t interrupted <"$state"
+      interrupted_commit=${interrupted[0]:-}
+      [[ $interrupted_commit =~ ^[0-9a-f]{40}$ ]] || die "invalid stale deployment state"
+      [[ $(readlink -f "$root/current") == "$root/releases/$interrupted_commit" ]] || die "unfinished unhealthy deployment requires rollback"
+      if [[ ${interrupted[3]:-} != healthy ]]; then
+        body=$(curl --fail --silent --show-error --connect-timeout 10 --max-time 20 "$health_url") || die "cannot verify interrupted deployment"
+        HEALTH_BODY="$body" EXPECTED_COMMIT="$interrupted_commit" node -e 'const b=JSON.parse(process.env.HEALTH_BODY); process.exit(b.status === "ok" && b.release?.commit === process.env.EXPECTED_COMMIT ? 0 : 1)' || die "unfinished unhealthy deployment requires rollback"
+      fi
+      rm -f -- "$state"
+      rm -rf -- "$lock"
+    fi
     mkdir "$lock" || die "another deployment transaction is active"
     trap 'rm -rf -- "$lock"' ERR
     [[ ! -e $state ]] || die "stale deployment state exists"
@@ -52,11 +65,18 @@ case "$action" in
     [[ -f "$release/release.env" && -f "$release/service-node/server.mjs" ]] || die "incomplete release"
     if find "$release" -name '.env' -o -name '.env.production' | grep -q .; then die "secret-like environment file in release"; fi
     chmod -R a-w "$release"
-    printf '%s\n%s\n%s\n' "$commit" "$previous" "$archive" >"$state.next"
+    printf '%s\n%s\n%s\n%s\n' "$commit" "$previous" "$archive" prepared >"$state.next"
     mv -f "$state.next" "$state"
     ln -s "$release" "$root/current.next"
     mv -Tf "$root/current.next" "$root/current"
     trap - ERR
+    ;;
+  confirm)
+    [[ $# -eq 3 ]] || die "confirm expects: root commit"
+    read_state
+    [[ $(readlink -f "$root/current") == "$root/releases/$commit" ]] || die "current release does not match transaction"
+    printf '%s\n%s\n%s\n%s\n' "$commit" "$previous" "$archive" healthy >"$state.next"
+    mv -f "$state.next" "$state"
     ;;
   finalize)
     [[ $# -eq 4 ]] || die "finalize expects: root commit retention"
@@ -68,6 +88,7 @@ case "$action" in
       exit 0
     fi
     read_state
+    [[ $phase == healthy ]] || die "release health was not confirmed"
     [[ $(readlink -f "$root/current") == "$root/releases/$commit" ]] || die "current release does not match transaction"
     current=$(readlink -f "$root/current")
     keep=("$current")
@@ -77,11 +98,12 @@ case "$action" in
       for protected in "${keep[@]}"; do [[ $candidate == "$protected" ]] && kept=true; done
       [[ $kept == true || ${#keep[@]} -ge $retention ]] || keep+=("$candidate")
     done < <(find "$root/releases" -mindepth 1 -maxdepth 1 -type d -printf '%T@ %p\n' | sort -nr | cut -d ' ' -f 2-)
-    while IFS= read -r candidate; do
+    mapfile -t candidates < <(find "$root/releases" -mindepth 1 -maxdepth 1 -type d -print)
+    for candidate in "${candidates[@]}"; do
       kept=false
       for protected in "${keep[@]}"; do [[ $candidate == "$protected" ]] && kept=true; done
       [[ $kept == true ]] || rm -rf -- "$candidate"
-    done < <(find "$root/releases" -mindepth 1 -maxdepth 1 -type d -print)
+    done
     cleanup_transaction
     printf 'deployed %s\n' "$commit"
     ;;

@@ -93,7 +93,7 @@ jobs:
           }
           remote "mkdir -p '$DEPLOY_ROOT/incoming'"
           setsid -w scp "${ssh_options[@]}" -P "$SSH_PORT" "$archive" deploy/remote-deploy.sh "$SSH_USER@$SSH_HOST:$DEPLOY_ROOT/incoming/" </dev/null
-          remote "bash '$DEPLOY_ROOT/incoming/remote-deploy.sh' prepare '$DEPLOY_ROOT' '$GITHUB_SHA' '$remote_archive' '$checksum' 5"
+          remote "bash '$DEPLOY_ROOT/incoming/remote-deploy.sh' prepare '$DEPLOY_ROOT' '$GITHUB_SHA' '$remote_archive' '$checksum' 5 '$HEALTH_URL'"
 
           set +e
           setsid -w ssh "${ssh_options[@]}" -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" "'$DEPLOY_ROOT/shared/restart.sh'" </dev/null
@@ -109,6 +109,7 @@ jobs:
             sleep 5
           done
           if [[ $healthy == true ]]; then
+            remote "bash '$DEPLOY_ROOT/shared/deploy-transaction.sh' confirm '$DEPLOY_ROOT' '$GITHUB_SHA'"
             set +e
             remote "bash '$DEPLOY_ROOT/shared/deploy-transaction.sh' finalize '$DEPLOY_ROOT' '$GITHUB_SHA' 5"
             finalize_status=$?
