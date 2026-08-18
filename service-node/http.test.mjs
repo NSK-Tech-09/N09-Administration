@@ -18,11 +18,15 @@ import { TransactionalMemoryRepository } from "./repository.mjs";
 
 test("synchronise le bandeau Administration avec la validité réelle de la session", () => {
   const source = readFileSync(new URL("./assets/theme.js", import.meta.url), "utf8");
+  const httpSource = readFileSync(new URL("./http.mjs", import.meta.url), "utf8");
   assert.match(source, /fetch\("\/auth\/session", \{ credentials: "include", cache: "no-store" \}\)/);
   assert.match(source, /previousAuthenticationState === true && !authenticated/);
   assert.match(source, /window\.location\.reload\(\)/);
   assert.match(source, /window\.setInterval\(refresh, 60_000\)/);
   assert.match(source, /document\.addEventListener\("visibilitychange", refreshWhenVisible\)/);
+  assert.match(httpSource, /href="\/account">Mon compte<\/a>/);
+  assert.match(httpSource, /option value="\/account">Mon compte<\/option>/);
+  assert.match(httpSource, /theme\.js\?v=0\.2\.2/);
 });
 
 test("revalide le script de session au lieu de conserver son ancienne version", async () => {
@@ -282,7 +286,7 @@ test("applique le socle visuel et de navigation obligatoire de NSK Tech 09", asy
     assert.match(html, /Ouvrir le portail NSK Tech 09 dans un nouvel onglet/);
     assert.match(html, /aria-label="Accès rapide"/);
     assert.match(html, /Choisir le thème/);
-    assert.match(html, /N09 – Administration · version 0\.2\.1 · application web installable/);
+    assert.match(html, /N09 – Administration · version 0\.2\.2 · application web installable/);
     assert.match(html, /Mentions légales/);
     assert.match(html, /Confidentialité/);
     assert.match(html, /Comprendre\. Concevoir\. Transmettre\./);
