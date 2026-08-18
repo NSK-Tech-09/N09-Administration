@@ -21,8 +21,8 @@ La cible contient uniquement :
 ```
 
 `shared/.env` est créé sur l'hébergement en mode `0600` et n'est ni transféré,
-ni recopié dans les releases. Il peut être vide lorsque toutes les variables
-sont injectées par le Manager. La commande de lancement stable du Manager,
+ni recopié dans les releases. À l'amorçage, copier sans l'afficher la
+configuration active `current/service-node/.env`. La commande de lancement stable du Manager,
 exécutée depuis le dossier du site, est :
 
 ```sh
@@ -38,6 +38,9 @@ les déploiements suivants redémarrent ainsi l'application par SSH sans API
 privée. Le workflow refuse de déployer si le crochet manque ou n'est pas validé.
 La racine privée `/srv/customer` est volontaire : le compte SSH Node.js minimal
 voit le dossier du site en lecture seule sur l'infrastructure Infomaniak.
+`shared/start-command` contient
+`cd "$N09_ACTIVE_RELEASE/service-node" && exec node server.mjs`. Le lanceur
+préserve toujours le `PORT` imposé par le Manager après le chargement de `.env`.
 
 ## GitHub et compte Infomaniak
 

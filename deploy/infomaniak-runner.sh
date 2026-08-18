@@ -26,16 +26,19 @@ while true; do
   generation=$(cat "$trigger")
   release=$(readlink -f "$root/current")
   [[ -d "$release" ]] || { echo "current release is missing" >&2; exit 1; }
+  export N09_ACTIVE_RELEASE="$release"
 
+  platform_port=${PORT:-}
   set -a
   # shellcheck disable=SC1091
   . "$shared/.env"
   [[ ! -f "$release/release.env" ]] || . "$release/release.env"
   set +a
+  [[ -z "$platform_port" ]] || export PORT="$platform_port"
   start_command=$(cat "$shared/start-command")
 
   cd "$root"
-  bash -lc "exec $start_command" &
+  bash -lc "$start_command" &
   child=$!
   printf '%s\t%s\n' "$generation" "$release" >"$ack.next"
   mv -f "$ack.next" "$ack"
