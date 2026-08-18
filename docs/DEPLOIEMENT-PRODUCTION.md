@@ -10,27 +10,34 @@ dépendances verrouillées, crée une archive immuable et enregistre son SHA-256
 La cible contient uniquement :
 
 ```text
-application/
+/srv/customer/
   current -> releases/<commit complet>
   releases/<commit complet>/
   incoming/
   shared/.env
+  shared/runner.sh
   shared/restart.sh
+  shared/start-command
 ```
 
 `shared/.env` est créé sur l'hébergement en mode `0600` et n'est ni transféré,
-ni recopié dans les releases. La commande de lancement stable, exécutée depuis
-`application/`, est :
+ni recopié dans les releases. Il peut être vide lorsque toutes les variables
+sont injectées par le Manager. La commande de lancement stable du Manager,
+exécutée depuis le dossier du site, est :
 
 ```sh
-set -a; . shared/.env; . current/release.env; set +a; exec node current/service-node/server.mjs
+N09_DEPLOY_ROOT=/srv/customer bash /srv/customer/shared/runner.sh
 ```
 
-Le crochet `shared/restart.sh`, mode `0700`, contient exclusivement la commande
-de redémarrage bornée à cette application. Le workflow refuse de déployer s'il
-manque. La documentation Infomaniak ne publie actuellement aucune API de
-redémarrage Node.js : ce crochet doit donc être validé sur l'hébergement avant
-l'activation du workflow. Il ne doit contenir aucun secret.
+`runner.sh`, fourni dans `deploy/infomaniak-runner.sh`, lance la commande non
+secrète de `shared/start-command`, charge la configuration partagée et surveille
+un déclencheur. `restart.sh`, fourni dans `deploy/infomaniak-restart.sh`, change
+ce déclencheur puis attend l'accusé de réception du lanceur. Les deux fichiers
+sont en mode `0700`. Cette amorce unique remplace l'action manuelle du Manager ;
+les déploiements suivants redémarrent ainsi l'application par SSH sans API
+privée. Le workflow refuse de déployer si le crochet manque ou n'est pas validé.
+La racine privée `/srv/customer` est volontaire : le compte SSH Node.js minimal
+voit le dossier du site en lecture seule sur l'infrastructure Infomaniak.
 
 ## GitHub et compte Infomaniak
 
