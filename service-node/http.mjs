@@ -40,7 +40,7 @@ import {
 const DEFAULT_MAX_BODY_BYTES = 64 * 1024;
 const CURRENT_SESSION_VERSION = 2;
 const EMAIL_LOGIN_CONFIRMATION_COOKIE = "n09_email_login_confirmation";
-const ADMIN_VERSION = "0.2.3";
+const ADMIN_VERSION = "0.2.5";
 const STATIC_ASSETS = new Map([
   ["/assets/nsktech09-logo-master.png", { type: "image/png", body: readFileSync(new URL("./assets/nsktech09-logo-master.png", import.meta.url)) }],
   ["/assets/Manrope-VariableFont_wght.ttf", { type: "font/ttf", body: readFileSync(new URL("./assets/Manrope-VariableFont_wght.ttf", import.meta.url)) }],
@@ -535,6 +535,30 @@ export function createHttpHandler({
     return credential ? { ...session, centralSession: credential } : session;
   }
 
+  async function personalAccountContent(session, returnTo, theme) {
+    if (session?.status !== "authenticated" || !session.identityId || !session.centralSession?.sessionId) {
+      throw new Error("fresh_authentication_required");
+    }
+    const [identity, applications, assignments, sessions] = await Promise.all([
+      repository.getIdentity(session.identityId),
+      repository.listApplications(),
+      repository.listAllAssignments(),
+      personalSessionManagement
+        ? personalSessionManagement.listOwn({
+          identityId: session.identityId,
+          currentSessionId: session.centralSession.sessionId,
+        })
+        : [],
+    ]);
+    if (!identity || identity.status !== "active") throw new Error("identity_not_active");
+    return renderPersonalAccount({
+      identity, applications, assignments, sessions,
+      providerKey: session.providerKey ?? "infomaniak",
+      emailLoginEnabled: emailLogin?.enabled === true,
+      returnTo, theme,
+    });
+  }
+
   return async function handle(request, response) {
     setSecurityHeaders(response);
     const url = new URL(request.url, "https://n09.invalid");
@@ -855,6 +879,15 @@ export function createHttpHandler({
         let session;
         try {
           session = await openCurrentSession(request);
+          if (!session.centralSession?.sessionId) {
+            session = await attachCentralSession(session);
+            if (!session.centralSession?.sessionId) throw new Error("account_session_not_enrolled");
+            accountSessionCookie = cookie(
+              OIDC_SESSION_COOKIE,
+              seal(session, oidcConfig.sessionSecret, "oidc-session"),
+              { maxAge: Math.max(1, Math.ceil((session.expiresAt - Date.now()) / 1000)) },
+            );
+          }
         } catch {
           if (!oidcConfig || !sessionAuthority || !administrationSessionAuthority) throw new Error("account_bridge_unavailable");
           const portalSession = openPortalSession(
@@ -879,9 +912,8 @@ export function createHttpHandler({
             { maxAge: Math.max(1, Math.ceil((session.expiresAt - Date.now()) / 1000)) },
           );
         }
-        if (session.status !== "authenticated") throw new Error("fresh_authentication_required");
-        if (accountSessionCookie) response.setHeader("set-cookie", accountSessionCookie);
-        redirect(response, accountPath);
+        const content = await personalAccountContent(session, returnTo, theme);
+        writeHtml(response, 200, "Mon compte", content, accountSessionCookie ? [accountSessionCookie] : []);
       } catch {
         redirect(response, `/auth/login?return_to=${encodeURIComponent(accountPath)}&theme=${encodeURIComponent(theme)}`);
       }
@@ -1245,29 +1277,10 @@ export function createHttpHandler({
         redirect(response, `/auth/login?return_to=${encodeURIComponent(accountPath)}&theme=${encodeURIComponent(accountTheme)}`);
         return;
       }
-      if (session.status !== "authenticated" || !session.identityId || !session.centralSession?.sessionId) {
-        redirect(response, `/auth/login?return_to=${encodeURIComponent(accountPath)}&theme=${encodeURIComponent(accountTheme)}`);
-        return;
-      }
       try {
-        const [identity, applications, assignments, sessions] = await Promise.all([
-          repository.getIdentity(session.identityId),
-          repository.listApplications(),
-          repository.listAllAssignments(),
-          personalSessionManagement
-            ? personalSessionManagement.listOwn({
-              identityId: session.identityId,
-              currentSessionId: session.centralSession.sessionId,
-            })
-            : [],
-        ]);
-        if (!identity || identity.status !== "active") throw new Error("identity_not_active");
-        writeHtml(response, 200, "Mon compte", renderPersonalAccount({
-          identity, applications, assignments, sessions,
-          providerKey: session.providerKey ?? "infomaniak",
-          emailLoginEnabled: emailLogin?.enabled === true,
-          returnTo: accountReturnTo, theme: accountTheme,
-        }));
+        writeHtml(response, 200, "Mon compte", await personalAccountContent(
+          session, accountReturnTo, accountTheme,
+        ));
       } catch {
         writeHtml(response, 503, "Compte indisponible", '<h1>Compte momentanément indisponible</h1><p>Ton identité et tes droits ne peuvent pas être affichés de façon fiable. Aucun changement n’a été effectué.</p><a class="button" href="/">Retour</a>');
       }
@@ -1839,3 +1852,4 @@ export function createHttpHandler({
     }
   };
 }
+
