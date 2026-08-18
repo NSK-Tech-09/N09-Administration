@@ -176,10 +176,10 @@ test("ouvre le compte central en conservant l’application d’origine", async 
     const account = await fetch(`${origin}/portal/account?return_to=${encodeURIComponent(returnTo)}&theme=dark`, {
       headers: { cookie: identityCookie() }, redirect: "manual",
     });
-    assert.equal(account.status, 303);
-    assert.equal(account.headers.get("location"),
-      `/account?return_to=${encodeURIComponent(returnTo)}&theme=dark`);
-  });
+    assert.equal(account.status, 200);
+    assert.match(account.headers.get("content-type"), /^text\/html/);
+    assert.match(await account.text(), /Mon compte NSK Tech 09/);
+  }, { accountBridge: true });
 });
 
 test("prolonge une session portail valide vers le compte central sans nouvelle connexion", async () => {
@@ -192,9 +192,8 @@ test("prolonge une session portail valide vers le compte central sans nouvelle c
     const account = await fetch(`${origin}/portal/account?return_to=${encodeURIComponent(returnTo)}&theme=gray`, {
       headers: { cookie: portalCookie }, redirect: "manual",
     });
-    assert.equal(account.status, 303);
-    assert.equal(account.headers.get("location"),
-      `/account?return_to=${encodeURIComponent(returnTo)}&theme=gray`);
+    assert.equal(account.status, 200);
+    assert.match(await account.text(), /Mon compte NSK Tech 09/);
     const accountCookie = account.headers.get("set-cookie");
     assert.match(accountCookie, new RegExp(`^${OIDC_SESSION_COOKIE}=`));
     const sealedSession = decodeURIComponent(accountCookie.match(new RegExp(`^${OIDC_SESSION_COOKIE}=([^;]+)`))[1]);
@@ -300,3 +299,4 @@ test("accepte une déconnexion de navigation sans Origin depuis le portail seule
     assert.equal(rejected.status, 401);
   });
 });
+
