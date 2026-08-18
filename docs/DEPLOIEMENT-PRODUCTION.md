@@ -59,11 +59,15 @@ jamais être désactivé.
 
 ## Activation et retour arrière
 
-Après vérification de l'archive, le script crée la release en lecture seule,
-remplace atomiquement `current`, redémarre puis exige pendant 30 secondes un
-`/health` à l'état `ok` portant le commit complet attendu. À défaut, il restaure
-le lien précédent, redémarre et met le job en échec. Les cinq dernières releases
-sont conservées ; les archives de transfert sont supprimées dans tous les cas.
+Après vérification de l'archive, le script ouvre une transaction protégée, crée
+la release en lecture seule et remplace atomiquement `current`. Le workflow
+demande ensuite le redémarrage dans une connexion séparée : Infomaniak peut
+fermer cette session pendant le redémarrage, ce qui est attendu. Le runner exige
+alors pendant 60 secondes un `/health` à l'état `ok` portant le commit complet.
+Il finalise la transaction seulement après cette preuve. À défaut, il restaure
+le lien précédent, redémarre, vérifie le retour du service et met le job en
+échec. Les cinq dernières releases sont conservées ; les archives et l'état de
+transaction sont supprimés à la finalisation ou au retour arrière.
 
 Pour une restauration volontaire, repointer `current` vers une release connue,
 exécuter `shared/restart.sh`, puis vérifier `/health`. Une migration de données
