@@ -1,0 +1,81 @@
+name: Déployer Administration en production
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: administration-production
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+      - uses: pnpm/action-setup@v4
+        with: { version: 11.16.0, run_install: false }
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: pnpm
+          cache-dependency-path: service-node/pnpm-lock.yaml
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - name: Vérifier le noyau
+        run: python -m compileall -q n09_admin tests && python -m unittest discover -s tests -v
+      - name: Vérifier et préparer le service
+        working-directory: service-node
+        run: pnpm install --frozen-lockfile && pnpm test && pnpm prune --prod
+      - name: Construire l'artefact immuable
+        env:
+          RELEASE_COMMIT: ${{ github.sha }}
+        run: |
+          built_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          printf 'N09_RELEASE_COMMIT=%s\nN09_RELEASE_BUILT_AT=%s\n' "$RELEASE_COMMIT" "$built_at" > release.env
+          tar -czf "n09-administration-$RELEASE_COMMIT.tar.gz" service-node release.env
+          sha256sum "n09-administration-$RELEASE_COMMIT.tar.gz" > artifact.sha256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: administration-${{ github.sha }}
+          path: |
+            n09-administration-${{ github.sha }}.tar.gz
+            artifact.sha256
+            deploy/remote-deploy.sh
+          if-no-files-found: error
+          retention-days: 7
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: production
+    steps:
+      - uses: actions/download-artifact@v4
+        with: { name: administration-${{ github.sha }} }
+      - name: Installer le client SSH
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq sshpass
+      - name: Vérifier l'identité du serveur et transférer
+        env:
+          SSHPASS: ${{ secrets.INFOMANIAK_DEPLOY_PASSWORD }}
+          SSH_HOST: ${{ secrets.INFOMANIAK_DEPLOY_HOST }}
+          SSH_PORT: ${{ secrets.INFOMANIAK_DEPLOY_PORT }}
+          SSH_USER: ${{ secrets.INFOMANIAK_DEPLOY_USERNAME }}
+          SSH_HOST_KEY: ${{ secrets.INFOMANIAK_SSH_HOST_KEY }}
+          DEPLOY_ROOT: ${{ vars.INFOMANIAK_DEPLOY_ROOT }}
+          HEALTH_URL: ${{ vars.PRODUCTION_HEALTH_URL }}
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$SSH_HOST_KEY" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+          archive="n09-administration-${GITHUB_SHA}.tar.gz"
+          checksum=$(cut -d ' ' -f 1 artifact.sha256)
+          remote_archive="$DEPLOY_ROOT/incoming/$archive"
+          sshpass -e ssh -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" "mkdir -p '$DEPLOY_ROOT/incoming'"
+          sshpass -e scp -P "$SSH_PORT" "$archive" deploy/remote-deploy.sh "$SSH_USER@$SSH_HOST:$DEPLOY_ROOT/incoming/"
+          sshpass -e ssh -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" "bash '$DEPLOY_ROOT/incoming/remote-deploy.sh' '$DEPLOY_ROOT' '$remote_archive' '$checksum' '$GITHUB_SHA' '$HEALTH_URL' 5"

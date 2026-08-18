@@ -234,6 +234,8 @@ ne contient aucun secret réel. La production reste inchangée.
 
 ## Documents
 
+- [`docs/DEPLOIEMENT-PRODUCTION.md`](docs/DEPLOIEMENT-PRODUCTION.md)
+
 - [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)
 - [`docs/CONTRAT-IDENTITE-ACCES.md`](docs/CONTRAT-IDENTITE-ACCES.md)
 - [`docs/PLAN-MIGRATION-SUIVI-TACHES.md`](docs/PLAN-MIGRATION-SUIVI-TACHES.md)

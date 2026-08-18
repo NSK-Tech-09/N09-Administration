@@ -459,6 +459,7 @@ export function createHttpHandler({
   identityStateManagement = null,
   portalOrigins = [],
   emailLogin = null,
+  release = { commit: "unknown", builtAt: null, environment: "unknown" },
 }) {
   if (!repository) throw new Error("repository is required");
   if (typeof authenticate !== "function") throw new Error("authenticate must be a function");
@@ -550,7 +551,7 @@ export function createHttpHandler({
       return;
     }
     if (url.pathname === "/health" && request.method === "GET") {
-      writeJson(response, 200, { status: "ok" });
+      writeJson(response, 200, { status: "ok", release });
       return;
     }
     if (url.pathname === "/auth/login" && request.method === "GET") {

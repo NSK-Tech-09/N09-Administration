@@ -38,6 +38,18 @@ export function httpConfigFromEnvironment(environment) {
   return { host, port: port(environment.N09_HTTP_PORT ?? environment.PORT, 3000) };
 }
 
+export function releaseMetadataFromEnvironment(environment) {
+  const commit = required(environment, "N09_RELEASE_COMMIT");
+  if (!/^[0-9a-f]{40}$/.test(commit)) throw new Error("N09_RELEASE_COMMIT must be a full Git commit");
+  const builtAt = required(environment, "N09_RELEASE_BUILT_AT");
+  if (Number.isNaN(Date.parse(builtAt))) throw new Error("N09_RELEASE_BUILT_AT must be an ISO date");
+  return Object.freeze({
+    commit,
+    builtAt,
+    environment: required(environment, "N09_ENVIRONMENT"),
+  });
+}
+
 export function administrationSessionConfigFromEnvironment(environment) {
   const mode = environment.N09_ADMIN_SESSION_MODE?.trim() || "disabled";
   if (!["disabled", "observe", "enforce"].includes(mode)) {

@@ -9,6 +9,7 @@ import { createMariaDbPool, MariaDbRepository } from "./mariadb.mjs";
 import {
   administrationSessionConfigFromEnvironment, energyApplicationSessionConfigFromEnvironment,
   httpConfigFromEnvironment, mariaDbConfigFromEnvironment,
+  releaseMetadataFromEnvironment,
   portalApplicationSessionConfigFromEnvironment, tasksApplicationSessionConfigFromEnvironment,
 } from "./runtime-config.mjs";
 import { oidcConfigFromEnvironment } from "./oidc.mjs";
@@ -22,6 +23,7 @@ import { createNotificationWorkerLoop } from "./notification-worker-loop.mjs";
 async function main() {
   const databaseConfig = mariaDbConfigFromEnvironment(process.env);
   const httpConfig = httpConfigFromEnvironment(process.env);
+  const release = releaseMetadataFromEnvironment(process.env);
   const oidcConfig = oidcConfigFromEnvironment(process.env);
   const administrationSessionConfig = administrationSessionConfigFromEnvironment(process.env);
   const tasksSessionConfig = tasksApplicationSessionConfigFromEnvironment(process.env);
@@ -61,6 +63,7 @@ async function main() {
     emailLogin: emailLoginConfig.enabled
       ? { ...emailLoginConfig, delivery: emailLoginDelivery }
       : { enabled: false },
+    release,
   }));
   server.on("clientError", (_error, socket) => socket.end("HTTP/1.1 400 Bad Request\r\n\r\n"));
 
