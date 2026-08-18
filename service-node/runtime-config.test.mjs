@@ -3,8 +3,24 @@ import test from "node:test";
 import {
   administrationSessionConfigFromEnvironment, energyApplicationSessionConfigFromEnvironment,
   httpConfigFromEnvironment, mariaDbConfigFromEnvironment,
+  releaseMetadataFromEnvironment,
   portalApplicationSessionConfigFromEnvironment, tasksApplicationSessionConfigFromEnvironment,
 } from "./runtime-config.mjs";
+
+test("valide les métadonnées immuables de la release", () => {
+  const environment = {
+    N09_RELEASE_COMMIT: "0123456789abcdef0123456789abcdef01234567",
+    N09_RELEASE_BUILT_AT: "2026-08-18T12:00:00Z",
+    N09_ENVIRONMENT: "production",
+  };
+  assert.deepEqual(releaseMetadataFromEnvironment(environment), {
+    commit: environment.N09_RELEASE_COMMIT,
+    builtAt: environment.N09_RELEASE_BUILT_AT,
+    environment: "production",
+  });
+  assert.throws(() => releaseMetadataFromEnvironment({ ...environment, N09_RELEASE_COMMIT: "court" }), /full Git commit/);
+  assert.throws(() => releaseMetadataFromEnvironment({ ...environment, N09_RELEASE_BUILT_AT: "demain" }), /ISO date/);
+});
 
 const databaseEnvironment = {
   N09_DB_HOST: "database.internal",

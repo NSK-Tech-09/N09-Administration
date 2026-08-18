@@ -263,11 +263,16 @@ test("présente la demande seulement au responsable des décisions d’accès", 
   });
 });
 
-test("expose une santé minimale sans information interne", async () => {
-  await withServer({}, async (baseUrl) => {
+test("expose une santé versionnée sans information interne", async () => {
+  const release = {
+    commit: "0123456789abcdef0123456789abcdef01234567",
+    builtAt: "2026-08-18T12:00:00Z",
+    environment: "production",
+  };
+  await withServer({ release }, async (baseUrl) => {
     const response = await fetch(`${baseUrl}/health`);
     assert.equal(response.status, 200);
-    assert.deepEqual(await response.json(), { status: "ok" });
+    assert.deepEqual(await response.json(), { status: "ok", release });
     assert.equal(response.headers.get("cache-control"), "no-store");
     assert.equal(response.headers.get("strict-transport-security"), "max-age=31536000; includeSubDomains");
     assert.equal(response.headers.get("x-content-type-options"), "nosniff");
