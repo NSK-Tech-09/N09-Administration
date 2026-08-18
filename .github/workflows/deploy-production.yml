@@ -17,15 +17,15 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v5
-      - uses: pnpm/action-setup@v4
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
         with: { version: 11.16.0, run_install: false }
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: "24"
           cache: pnpm
           cache-dependency-path: service-node/pnpm-lock.yaml
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with: { python-version: "3.12" }
       - name: Vérifier les scripts de déploiement
         run: bash -n deploy/*.sh
@@ -42,7 +42,7 @@ jobs:
           printf 'N09_RELEASE_COMMIT=%s\nN09_RELEASE_BUILT_AT=%s\n' "$RELEASE_COMMIT" "$built_at" > release.env
           tar -czf "n09-administration-$RELEASE_COMMIT.tar.gz" service-node release.env
           sha256sum "n09-administration-$RELEASE_COMMIT.tar.gz" > artifact.sha256
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: administration-${{ github.sha }}
           path: |
@@ -58,7 +58,7 @@ jobs:
     timeout-minutes: 15
     environment: production
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: administration-${{ github.sha }}
       - name: Vérifier l'identité du serveur et transférer
