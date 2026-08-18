@@ -93,7 +93,15 @@ jobs:
           }
           remote "mkdir -p '$DEPLOY_ROOT/incoming'"
           setsid -w scp "${ssh_options[@]}" -P "$SSH_PORT" "$archive" deploy/remote-deploy.sh "$SSH_USER@$SSH_HOST:$DEPLOY_ROOT/incoming/" </dev/null
-          remote "bash '$DEPLOY_ROOT/incoming/remote-deploy.sh' prepare '$DEPLOY_ROOT' '$GITHUB_SHA' '$remote_archive' '$checksum' 5 '$HEALTH_URL'"
+          # La bascule de current peut provoquer un redémarrage immédiat chez
+          # Infomaniak et fermer ContainerSSH avant son accusé de réception.
+          # Une seule tentative évite de rejouer une transaction déjà préparée.
+          set +e
+          setsid -w ssh "${ssh_options[@]}" -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" \
+            "bash '$DEPLOY_ROOT/incoming/remote-deploy.sh' prepare '$DEPLOY_ROOT' '$GITHUB_SHA' '$remote_archive' '$checksum' 5 '$HEALTH_URL'" </dev/null
+          prepare_status=$?
+          set -e
+          [[ $prepare_status -eq 0 || $prepare_status -eq 255 ]] || exit "$prepare_status"
 
           set +e
           setsid -w ssh "${ssh_options[@]}" -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" "'$DEPLOY_ROOT/shared/restart.sh'" </dev/null
