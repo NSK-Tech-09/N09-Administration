@@ -70,7 +70,7 @@ le lien précédent, redémarre, vérifie le retour du service et met le job en
 échec. Les cinq dernières releases sont conservées ; les archives et l'état de
 transaction sont supprimés à la finalisation ou au retour arrière. Le script
 transactionnel persistant rend ces opérations idempotentes après une coupure SSH.
-Le code `255` d'une préparation n'est toléré que provisoirement : le déploiement
+Les codes `141` (SIGPIPE) et `255` d'une préparation ne sont tolérés que provisoirement : le déploiement
 n'est confirmé que si le healthcheck public expose ensuite le commit exact.
 Après cette preuve publique, le code `255` est aussi toléré pour une
 finalisation rejouée quatre fois : ContainerSSH peut clore ces sessions alors
