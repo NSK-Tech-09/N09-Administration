@@ -57,7 +57,8 @@ jobs:
     environment: production
     steps:
       - uses: actions/download-artifact@v4
-        with: { name: administration-${{ github.sha }} }
+        with:
+          name: administration-${{ github.sha }}
       - name: Installer le client SSH
         run: sudo apt-get update -qq && sudo apt-get install -y -qq sshpass
       - name: Vérifier l'identité du serveur et transférer
