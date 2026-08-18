@@ -15,6 +15,7 @@ La cible contient uniquement :
   releases/<commit complet>/
   incoming/
   shared/.env
+  shared/deploy-transaction.sh
   shared/runner.sh
   shared/restart.sh
   shared/start-command
@@ -67,7 +68,8 @@ alors pendant 60 secondes un `/health` à l'état `ok` portant le commit complet
 Il finalise la transaction seulement après cette preuve. À défaut, il restaure
 le lien précédent, redémarre, vérifie le retour du service et met le job en
 échec. Les cinq dernières releases sont conservées ; les archives et l'état de
-transaction sont supprimés à la finalisation ou au retour arrière.
+transaction sont supprimés à la finalisation ou au retour arrière. Le script
+transactionnel persistant rend ces opérations idempotentes après une coupure SSH.
 
 Pour une restauration volontaire, repointer `current` vers une release connue,
 exécuter `shared/restart.sh`, puis vérifier `/health`. Une migration de données

@@ -36,6 +36,7 @@ case "$action" in
     [[ ! -e $state ]] || die "stale deployment state exists"
     [[ -f "$root/shared/.env" ]] || die "missing protected shared/.env"
     [[ -x "$root/shared/restart.sh" ]] || die "missing protected shared/restart.sh"
+    install -m 700 "$0" "$root/shared/deploy-transaction.sh"
     actual_sha=$(sha256sum "$archive" | cut -d ' ' -f 1)
     [[ $actual_sha == "$expected_sha" ]] || die "archive checksum mismatch"
     release="$root/releases/$commit"
@@ -60,6 +61,11 @@ case "$action" in
     [[ $# -eq 4 ]] || die "finalize expects: root commit retention"
     retention=$4
     [[ $retention =~ ^[2-9][0-9]*$ ]] || die "retention must be at least 2"
+    if [[ ! -f $state ]]; then
+      [[ $(readlink -f "$root/current") == "$root/releases/$commit" ]] || die "missing deployment state"
+      printf 'already deployed %s\n' "$commit"
+      exit 0
+    fi
     read_state
     [[ $(readlink -f "$root/current") == "$root/releases/$commit" ]] || die "current release does not match transaction"
     mapfile -t old < <(find "$root/releases" -mindepth 1 -maxdepth 1 -type d -printf '%T@ %p\n' | sort -nr | tail -n "+$((retention + 1))" | cut -d ' ' -f 2-)
@@ -71,6 +77,10 @@ case "$action" in
     ;;
   rollback)
     [[ $# -eq 3 ]] || die "rollback expects: root commit"
+    if [[ ! -f $state ]]; then
+      [[ $(readlink -f "$root/current") != "$root/releases/$commit" ]] || die "missing deployment state"
+      exit 0
+    fi
     read_state
     [[ -n $previous && -d $previous ]] || die "previous release is unavailable"
     ln -sfn "$previous" "$root/current"

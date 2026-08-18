@@ -109,11 +109,11 @@ jobs:
             sleep 5
           done
           if [[ $healthy == true ]]; then
-            remote "bash '$DEPLOY_ROOT/incoming/remote-deploy.sh' finalize '$DEPLOY_ROOT' '$GITHUB_SHA' 5"
+            remote "bash '$DEPLOY_ROOT/shared/deploy-transaction.sh' finalize '$DEPLOY_ROOT' '$GITHUB_SHA' 5"
             exit 0
           fi
 
-          remote "bash '$DEPLOY_ROOT/incoming/remote-deploy.sh' rollback '$DEPLOY_ROOT' '$GITHUB_SHA'"
+          remote "bash '$DEPLOY_ROOT/shared/deploy-transaction.sh' rollback '$DEPLOY_ROOT' '$GITHUB_SHA'"
           set +e
           setsid -w ssh "${ssh_options[@]}" -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" "'$DEPLOY_ROOT/shared/restart.sh'" </dev/null
           set -e
