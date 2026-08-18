@@ -109,7 +109,11 @@ jobs:
             sleep 5
           done
           if [[ $healthy == true ]]; then
+            set +e
             remote "bash '$DEPLOY_ROOT/shared/deploy-transaction.sh' finalize '$DEPLOY_ROOT' '$GITHUB_SHA' 5"
+            finalize_status=$?
+            set -e
+            [[ $finalize_status -eq 0 || $finalize_status -eq 255 ]] || exit "$finalize_status"
             exit 0
           fi
 
