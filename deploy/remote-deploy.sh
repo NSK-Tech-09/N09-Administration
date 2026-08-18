@@ -93,13 +93,13 @@ case "$action" in
     current=$(readlink -f "$root/current")
     keep=("$current")
     [[ $previous != "$current" && $previous == "$root/releases/"* ]] && keep+=("$previous")
-    while IFS= read -r candidate; do
+    mapfile -t ordered < <(find "$root/releases" -mindepth 1 -maxdepth 1 -type d -printf '%T@ %p\n' | sort -nr | cut -d ' ' -f 2-)
+    for candidate in "${ordered[@]}"; do
       kept=false
       for protected in "${keep[@]}"; do [[ $candidate == "$protected" ]] && kept=true; done
       [[ $kept == true || ${#keep[@]} -ge $retention ]] || keep+=("$candidate")
-    done < <(find "$root/releases" -mindepth 1 -maxdepth 1 -type d -printf '%T@ %p\n' | sort -nr | cut -d ' ' -f 2-)
-    mapfile -t candidates < <(find "$root/releases" -mindepth 1 -maxdepth 1 -type d -print)
-    for candidate in "${candidates[@]}"; do
+    done
+    for candidate in "${ordered[@]}"; do
       kept=false
       for protected in "${keep[@]}"; do [[ $candidate == "$protected" ]] && kept=true; done
       [[ $kept == true ]] || rm -rf -- "$candidate"
