@@ -21,14 +21,11 @@ document.querySelector("#nsk-quick-access")?.addEventListener("change", (event) 
 });
 
 const sessionActions = document.querySelector(".header-actions");
-const accountAction = sessionActions?.querySelector('a[href="/account/sessions"]');
+const accountAction = sessionActions?.querySelector('a[href="/account"]');
 const logoutAction = sessionActions?.querySelector('form[action="/auth/logout"]');
 let loginAction = null;
 let userCopy = null;
 let previousAuthenticationState = null;
-
-const quickAccount = document.querySelector('#nsk-quick-access option[value="/account/sessions"]');
-if (quickAccount) quickAccount.value = "/account";
 
 if (sessionActions && accountAction && logoutAction) {
   const requestedReturn = new URLSearchParams(window.location.search).get("return_to");
