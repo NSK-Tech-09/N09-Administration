@@ -26,7 +26,8 @@ test("synchronise le bandeau Administration avec la validité réelle de la sess
   assert.match(source, /document\.addEventListener\("visibilitychange", refreshWhenVisible\)/);
   assert.match(httpSource, /href="\/account">Mon compte<\/a>/);
   assert.match(httpSource, /option value="\/account">Mon compte<\/option>/);
-  assert.match(httpSource, /theme\.js\?v=0\.2\.2/);
+  assert.match(httpSource, /theme\.js\?v=0\.2\.3/);
+  assert.match(httpSource, /\[hidden\]\{display:none!important\}/);
 });
 
 test("revalide le script de session au lieu de conserver son ancienne version", async () => {
@@ -286,7 +287,7 @@ test("applique le socle visuel et de navigation obligatoire de NSK Tech 09", asy
     assert.match(html, /Ouvrir le portail NSK Tech 09 dans un nouvel onglet/);
     assert.match(html, /aria-label="Accès rapide"/);
     assert.match(html, /Choisir le thème/);
-    assert.match(html, /N09 – Administration · version 0\.2\.2 · application web installable/);
+    assert.match(html, /N09 – Administration · version 0\.2\.3 · application web installable/);
     assert.match(html, /Mentions légales/);
     assert.match(html, /Confidentialité/);
     assert.match(html, /Comprendre\. Concevoir\. Transmettre\./);
