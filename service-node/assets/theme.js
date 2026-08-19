@@ -28,7 +28,6 @@ const protectedAuthenticatedPage = currentPath === "/account" || currentPath.sta
   currentPath === "/notifications" || currentPath.startsWith("/notifications/") ||
   currentPath === "/admin" || currentPath.startsWith("/admin/");
 let loginAction = null;
-let userCopy = null;
 let previousAuthenticationState = null;
 
 if (sessionActions && accountAction && logoutAction) {
@@ -40,15 +39,12 @@ if (sessionActions && accountAction && logoutAction) {
   accountUrl.searchParams.set("return_to", new URL(returnTo, window.location.origin).href);
   accountUrl.searchParams.set("theme", initial);
   accountAction.href = accountUrl.toString();
-  accountAction.textContent = "Mon compte";
-  userCopy = document.createElement("span");
-  userCopy.className = "header-user-copy";
-  userCopy.style.display = "grid";
-  userCopy.style.minWidth = "145px";
-  userCopy.innerHTML = "<strong>Utilisateur NSK Tech 09</strong><small>Session active</small>";
-  sessionActions.prepend(userCopy);
-  Object.assign(sessionActions.style, {
-    minHeight: "62px", padding: "8px 10px", border: "1px solid var(--line)",
+  accountAction.className = "header-user-card";
+  accountAction.setAttribute("aria-label", "Ouvrir Mon compte");
+  accountAction.innerHTML = "<strong>Utilisateur NSK Tech 09</strong><small>Session active · Voir mon compte</small>";
+  Object.assign(accountAction.style, {
+    display: "grid", minWidth: "190px", padding: "8px 12px", color: "var(--text)",
+    textDecoration: "none", lineHeight: "1.35", border: "1px solid var(--line)",
     borderRadius: "8px", background: "var(--muted-bg)",
   });
   sessionActions.style.visibility = "hidden";
@@ -60,11 +56,8 @@ if (sessionActions && accountAction && logoutAction) {
 
 function displayAuthenticationState(authenticated, displayName = "Utilisateur NSK Tech 09") {
   if (!sessionActions || !accountAction || !logoutAction || !loginAction) return;
-  if (userCopy) {
-    userCopy.hidden = !authenticated;
-    const name = userCopy.querySelector("strong");
-    if (name) name.textContent = displayName;
-  }
+  const name = accountAction.querySelector("strong");
+  if (name) name.textContent = displayName;
   accountAction.hidden = !authenticated;
   logoutAction.hidden = !authenticated;
   loginAction.hidden = authenticated || protectedAuthenticatedPage;
