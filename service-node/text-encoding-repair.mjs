@@ -111,7 +111,10 @@ export async function repairHistoricalTextEncoding(repository, {
   const reason = typeof justification === "string" ? justification.trim() : "";
   if (reason.length < 30 || reason.length > 500) throw new Error("invalid text encoding repair justification");
   const email = typeof operatorEmail === "string" ? operatorEmail.trim().toLowerCase() : "";
-  const operator = await repository.getIdentityByEmail(email);
+  if (typeof repository?.findIdentityByEmail !== "function") {
+    throw new Error("text encoding repair identity lookup is unavailable");
+  }
+  const operator = await repository.findIdentityByEmail(email);
   if (!operator || operator.status !== "active" || !UUID_PATTERN.test(operator.identityId)) {
     throw new Error("text encoding repair operator must be an active identity");
   }

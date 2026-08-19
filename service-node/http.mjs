@@ -42,7 +42,7 @@ import {
 const DEFAULT_MAX_BODY_BYTES = 64 * 1024;
 const CURRENT_SESSION_VERSION = 2;
 const EMAIL_LOGIN_CONFIRMATION_COOKIE = "n09_email_login_confirmation";
-const ADMIN_VERSION = "0.2.9";
+const ADMIN_VERSION = "0.2.10";
 const STATIC_ASSETS = new Map([
   ["/assets/nsktech09-logo-master.png", { type: "image/png", body: readFileSync(new URL("./assets/nsktech09-logo-master.png", import.meta.url)) }],
   ["/assets/Manrope-VariableFont_wght.ttf", { type: "font/ttf", body: readFileSync(new URL("./assets/Manrope-VariableFont_wght.ttf", import.meta.url)) }],
