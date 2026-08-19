@@ -1,6 +1,6 @@
 {
   "name": "n09-administration-service",
-  "version": "0.2.6",
+  "version": "0.2.7",
   "private": true,
   "type": "module",
   "packageManager": "pnpm@11.16.0",
@@ -23,6 +23,7 @@
     "bootstrap:portal-production": "node portal-production-bootstrap-cli.mjs",
     "retire:synthetic-preprod": "node retire-synthetic-preprod-cli.mjs",
     "repair:historical-labels": "node historical-label-repair-cli.mjs",
+    "grant:legal-owner-authority": "node responsible-authority-cli.mjs",
     "process:notifications": "node notification-consumer-cli.mjs",
     "deliver:notification-emails": "node notification-email-delivery-cli.mjs",
     "seed:synthetic-preprod": "node seed-synthetic-preprod-cli.mjs",
