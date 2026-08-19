@@ -72,5 +72,11 @@ jobs:
           apply=false
           [[ "$MODE" == "apply" ]] && apply=true
           remote="set -e; set -a; . '$DEPLOY_ROOT/shared/.env'; set +a; export N09_APPLY_TEXT_ENCODING_REPAIR=$apply; export N09_ALLOW_TEXT_ENCODING_REPAIR=true; export N09_TEXT_ENCODING_REPAIR_CONFIRMATION='$CONFIRMATION'; export N09_TEXT_ENCODING_REPAIR_OPERATOR_EMAIL=f.travers@nsktech.fr; export N09_TEXT_ENCODING_REPAIR_JUSTIFICATION=\$(printf '%s' '$justification_b64' | base64 -d); cd '$DEPLOY_ROOT/current/service-node'; node text-encoding-repair-cli.mjs"
+          output="$RUNNER_TEMP/text-encoding-repair.log"
+          set +e
           setsid -w ssh -o BatchMode=no -o ConnectTimeout=20 -o NumberOfPasswordPrompts=1 \
-            -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" "$remote" </dev/null
+            -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" "$remote" </dev/null >"$output" 2>&1
+          status=$?
+          set -e
+          cat "$output"
+          exit "$status"
