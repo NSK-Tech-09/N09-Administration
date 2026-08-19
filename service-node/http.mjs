@@ -25,6 +25,7 @@ import {
 import {
   authorizeIdentityLifecycleAdministration, IdentityStateError,
 } from "./identity-state-management.mjs";
+import { assessResponsibleAuthority } from "./responsible-authority.mjs";
 import {
   exchangeApplicationLoginCode, issueApplicationLoginCode, validateAuthorizationRequest,
 } from "./application-login.mjs";
@@ -40,7 +41,7 @@ import {
 const DEFAULT_MAX_BODY_BYTES = 64 * 1024;
 const CURRENT_SESSION_VERSION = 2;
 const EMAIL_LOGIN_CONFIRMATION_COOKIE = "n09_email_login_confirmation";
-const ADMIN_VERSION = "0.2.6";
+const ADMIN_VERSION = "0.2.7";
 const STATIC_ASSETS = new Map([
   ["/assets/nsktech09-logo-master.png", { type: "image/png", body: readFileSync(new URL("./assets/nsktech09-logo-master.png", import.meta.url)) }],
   ["/assets/Manrope-VariableFont_wght.ttf", { type: "font/ttf", body: readFileSync(new URL("./assets/Manrope-VariableFont_wght.ttf", import.meta.url)) }],
@@ -430,6 +431,18 @@ function renderPersonalAccount({
     ? `<p><strong>${escapeHtml(sessions.filter((item) => item.state === "active").length)}</strong> session(s) active(s)</p><ul class="permissions">${sessionActivity || "<li>Aucune activité récente enregistrée.</li>"}</ul><a class="button secondary" href="/account/sessions${query}">Voir et fermer mes sessions</a>`
     : '<p><span class="pill inactive">Fonction temporairement indisponible</span></p><p>Ton profil et tes droits restent consultables. La gestion centralisée des sessions n’est pas activée pour cette connexion.</p>';
   return `<h1>Mon compte NSK Tech 09</h1><p>Ton espace personnel central réunit ton identité, tes accès et la sécurité de tes connexions. Il est distinct de la console d’administration.</p><nav><a class="button" href="${escapeHtml(returnTo)}">Retour à l’application</a>${sessionNavigation}</nav><div class="directory account-sections"><section class="entry assignment"><p><span class="pill">Identité ${escapeHtml(identity.status)}</span></p><h2>Profil et coordonnées</h2><p><strong>${escapeHtml(identity.displayName)}</strong><br><a href="mailto:${escapeHtml(identity.email)}">${escapeHtml(identity.email)}</a></p><p class="note">L’adresse affichée est l’adresse de référence de ton identité NSK Tech 09. Sa modification exige une vérification centrale.</p></section><section class="entry"><h2>Méthodes de connexion</h2><p><strong>Méthode de cette session :</strong> ${escapeHtml(providerName || "centrale")}</p><p>Infomaniak : <span class="pill">Disponible</span><br>Courriel sans mot de passe : <span class="pill${emailLoginEnabled ? "" : " inactive"}">${emailLoginEnabled ? "Disponible" : "Non configuré"}</span></p><p class="note">Aucun mot de passe NSK n’est stocké par les applications. Les méthodes reconnues conduisent à la même identité centrale.</p></section><section class="entry"><h2>Sessions et activité récente</h2>${sessionSection}</section><section class="entry"><h2>Données personnelles</h2><p>Les données affichées servent à l’identification, à l’attribution des accès et à la traçabilité de sécurité.</p><p><a href="https://nsktech.fr/#confidentialite" target="_blank" rel="noopener noreferrer">Consulter la politique de confidentialité</a></p><p class="note">Les demandes de rectification ou d’exercice de droits sont instruites sans suppression de la traçabilité légitime.</p></section></div><h2>Applications, rôles et périmètres</h2><p>Cette vue est informative : elle ne permet ni de s’accorder un rôle ni d’élargir un périmètre.</p><div class="directory">${accessCards || '<div class="facts"><p>Aucun accès applicatif actif n’est attribué à cette identité.</p></div>'}</div>`;
+}
+
+function renderResponsibleAuthority(snapshot) {
+  if (!snapshot) {
+    return '<div class="facts"><p><span class="pill inactive">Supervision indisponible</span></p><p>Les pouvoirs administratifs ne peuvent pas être vérifiés pour le moment.</p></div>';
+  }
+  const status = snapshot.complete
+    ? `<span class="pill">Autorité complète · ${escapeHtml(snapshot.grantedCount)}/${escapeHtml(snapshot.totalCount)}</span>`
+    : `<span class="pill inactive">Autorité à compléter · ${escapeHtml(snapshot.grantedCount)}/${escapeHtml(snapshot.totalCount)}</span>`;
+  const cards = snapshot.powers.map((power) => `<article class="entry${power.allowed ? " assignment" : ""}"><p><span class="pill${power.allowed ? "" : " inactive"}">${power.allowed ? "Pouvoir accordé" : "Pouvoir manquant"}</span></p><h3>${escapeHtml(power.label)}</h3><p>${escapeHtml(power.description)}</p>${power.allowed ? `<a class="button secondary" href="${escapeHtml(power.href)}">Ouvrir</a>` : '<p class="note">Une habilitation explicite et auditée est nécessaire.</p>'}</article>`).join("");
+  const title = snapshot.legalOwner ? "Responsable légal et opérationnel" : "Autorité administrative";
+  return `<div class="facts"><p><strong>${title} :</strong> ${status}</p><p>${snapshot.complete ? "Tous les pouvoirs de gouvernance sont disponibles, chacun restant séparé, contrôlé et audité." : "Aucun passe-droit global n’est utilisé : les pouvoirs manquants doivent être accordés séparément."}</p></div><h2>Supervision générale</h2><div class="directory">${cards}</div>`;
 }
 
 function renderOperatorSessions(sessions, csrf, actionToken) {
@@ -971,8 +984,14 @@ export function createHttpHandler({
       const requestReference = session?.requestId
         ? `<p>Demande enregistrée : <strong>${escapeHtml(session.requestId)}</strong></p>` : "";
       const administrationLinks = [];
+      let responsibleAuthority;
       if (session?.status === "authenticated" && session.csrf) {
         administrationLinks.push('<a class="button" href="/account">Mon compte</a>');
+        try {
+          responsibleAuthority = await assessResponsibleAuthority(repository, session.identityId);
+        } catch {
+          responsibleAuthority = null;
+        }
         try {
           const decision = await authorizeIdentityLinkAdministration(repository, session.identityId);
           if (decision.allowed) administrationLinks.push('<a class="button" href="/admin/link-requests">Administrer les rattachements</a>');
@@ -1010,8 +1029,13 @@ export function createHttpHandler({
           } catch { /* no notification affordance on repository failure */ }
         }
       }
+      const authorityPanel = session?.status === "authenticated" &&
+        (responsibleAuthority === null || responsibleAuthority?.legalOwner || responsibleAuthority?.grantedCount > 0)
+        ? renderResponsibleAuthority(responsibleAuthority) : "";
+      const authenticatedTitle = responsibleAuthority?.legalOwner
+        ? "Poste de pilotage NSK Tech 09" : "Identité vérifiée";
       const content = session
-        ? `<h1>Identité vérifiée</h1><p>Bienvenue <strong>${escapeHtml(session.displayName)}</strong>. La preuve d’identité est valide.</p><div class="facts"><p>État NSK : <strong>${session.status === "authenticated" ? "rattachée" : "rattachement requis"}</strong></p>${requestReference}<p>${session.status === "authenticated" ? "Le compte NSK est reconnu ; les droits restent contrôlés séparément." : "Aucun compte, rôle ou droit n’a été créé automatiquement. Une décision humaine reste obligatoire."}</p></div><nav>${administrationLinks.join("")}<form method="post" action="/auth/logout"><button class="secondary" type="submit">Fermer la session</button></form></nav>`
+        ? `<h1>${authenticatedTitle}</h1><p>Bienvenue <strong>${escapeHtml(responsibleAuthority?.identity?.displayName || session.displayName)}</strong>. La preuve d’identité est valide.</p><div class="facts"><p>État NSK : <strong>${session.status === "authenticated" ? "rattachée" : "rattachement requis"}</strong></p>${requestReference}<p>${session.status === "authenticated" ? "Le compte NSK est reconnu ; les droits restent contrôlés séparément." : "Aucun compte, rôle ou droit n’a été créé automatiquement. Une décision humaine reste obligatoire."}</p></div>${authorityPanel}<h2>Accès rapides</h2><nav>${administrationLinks.join("")}<form method="post" action="/auth/logout"><button class="secondary" type="submit">Fermer la session</button></form></nav>`
         : `<h1>Le cœur d’identité est prêt</h1><p>Choisis ta méthode pour présenter une preuve d’identité au registre central NSK.</p><div class="facts"><p><strong>Une identité centrale :</strong> la méthode de connexion ne change ni ton compte ni tes droits.</p><p><strong>Zéro privilège implicite :</strong> une identité inconnue reste sans droit.</p></div>${oidcConfig ? '<a class="button" href="/auth/login?return_to=%2F">Choisir une méthode de connexion</a>' : '<p>Le service d’identité n’est pas encore configuré.</p>'}`;
       writeHtml(response, 200, "Accueil", content);
       return;

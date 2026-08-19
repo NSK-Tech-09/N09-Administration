@@ -1,0 +1,59 @@
+name: Habiliter le responsable légal en production
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirmation:
+        description: Saisir GRANT_NSK_LEGAL_OWNER_AUTHORITY
+        required: true
+        type: string
+      justification:
+        description: Justification explicite et auditée
+        required: true
+        type: string
+
+concurrency:
+  group: administration-production-governance
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  grant:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: production
+    steps:
+      - uses: actions/checkout@v7
+      - name: Vérifier la confirmation et la release publique
+        env:
+          CONFIRMATION: ${{ inputs.confirmation }}
+          JUSTIFICATION: ${{ inputs.justification }}
+          HEALTH_URL: ${{ vars.PRODUCTION_HEALTH_URL }}
+        run: |
+          [[ "$CONFIRMATION" == "GRANT_NSK_LEGAL_OWNER_AUTHORITY" ]]
+          [[ ${#JUSTIFICATION} -ge 30 && ${#JUSTIFICATION} -le 500 ]]
+          body=$(curl --fail --silent --show-error --connect-timeout 10 --max-time 20 "$HEALTH_URL")
+          jq -e --arg commit "$GITHUB_SHA" '.status == "ok" and .release.commit == $commit' <<<"$body" >/dev/null
+      - name: Accorder séparément les pouvoirs audités
+        env:
+          SSHPASS: ${{ secrets.INFOMANIAK_DEPLOY_PASSWORD }}
+          SSH_HOST: ${{ secrets.INFOMANIAK_DEPLOY_HOST }}
+          SSH_PORT: ${{ secrets.INFOMANIAK_DEPLOY_PORT }}
+          SSH_USER: ${{ secrets.INFOMANIAK_DEPLOY_USERNAME }}
+          SSH_HOST_KEY: ${{ secrets.INFOMANIAK_SSH_HOST_KEY }}
+          DEPLOY_ROOT: ${{ vars.INFOMANIAK_DEPLOY_ROOT }}
+          JUSTIFICATION: ${{ inputs.justification }}
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$SSH_HOST_KEY" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+          askpass="$RUNNER_TEMP/ssh-askpass.sh"
+          printf '%s\n' '#!/usr/bin/env bash' 'printf "%s\\n" "$SSHPASS"' > "$askpass"
+          chmod 700 "$askpass"
+          export SSH_ASKPASS="$askpass" SSH_ASKPASS_REQUIRE=force DISPLAY=:0
+          justification_b64=$(printf '%s' "$JUSTIFICATION" | base64 -w0)
+          remote="set -e; set -a; . '$DEPLOY_ROOT/shared/.env'; set +a; export N09_ALLOW_LEGAL_OWNER_AUTHORITY=true; export N09_LEGAL_OWNER_AUTHORITY_CONFIRMATION=GRANT_NSK_LEGAL_OWNER_AUTHORITY; export N09_LEGAL_OWNER_EMAIL=f.travers@nsktech.fr; export N09_LEGAL_OWNER_AUTHORITY_JUSTIFICATION=\$(printf '%s' '$justification_b64' | base64 -d); cd '$DEPLOY_ROOT/current/service-node'; node responsible-authority-cli.mjs"
+          setsid -w ssh -o BatchMode=no -o ConnectTimeout=20 -o NumberOfPasswordPrompts=1 \
+            -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" "$remote" </dev/null
