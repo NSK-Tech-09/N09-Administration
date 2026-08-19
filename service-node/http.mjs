@@ -40,7 +40,7 @@ import {
 const DEFAULT_MAX_BODY_BYTES = 64 * 1024;
 const CURRENT_SESSION_VERSION = 2;
 const EMAIL_LOGIN_CONFIRMATION_COOKIE = "n09_email_login_confirmation";
-const ADMIN_VERSION = "0.2.5";
+const ADMIN_VERSION = "0.2.6";
 const STATIC_ASSETS = new Map([
   ["/assets/nsktech09-logo-master.png", { type: "image/png", body: readFileSync(new URL("./assets/nsktech09-logo-master.png", import.meta.url)) }],
   ["/assets/Manrope-VariableFont_wght.ttf", { type: "font/ttf", body: readFileSync(new URL("./assets/Manrope-VariableFont_wght.ttf", import.meta.url)) }],
@@ -380,16 +380,44 @@ function renderPersonalAccount({
 }) {
   const query = `?return_to=${encodeURIComponent(returnTo)}&theme=${encodeURIComponent(theme)}`;
   const applicationById = new Map(applications.map((application) => [application.applicationId, application]));
-  const roleLabels = { administrator: "Administrateur", admin: "Administrateur", owner: "Propriétaire", reader: "Lecteur", user: "Utilisateur" };
+  const canonicalApplicationLabels = { "n09-suivi-taches": "N09 – Suivi des tâches" };
+  const applicationLabel = (applicationId) => canonicalApplicationLabels[applicationId] ||
+    applicationById.get(applicationId)?.displayName || applicationId;
+  const roleLabels = {
+    administrator: "Administrateur", admin: "Administrateur", owner: "Propriétaire",
+    reader: "Lecteur", user: "Utilisateur", "energy-owner": "Propriétaire Énergie",
+    "portal-user": "Utilisateur du portail", "tasks-administrator": "Administrateur des tâches",
+    "tasks-pilot-reader": "Lecteur du pilote", "tasks-writer": "Contributeur aux tâches",
+  };
   const activeAssignments = assignments.filter((assignment) =>
     assignment.subjectId === identity.identityId && assignment.status === "active"
   );
-  const accessCards = activeAssignments.map((assignment) => {
-    const application = applicationById.get(assignment.applicationId);
-    const scope = assignment.scopeType === "global" ? "Tous les périmètres"
-      : `${assignment.scopeType}${assignment.scopeId ? ` · ${assignment.scopeId}` : ""}`;
-    return `<article class="entry assignment"><p><span class="pill">Accès actif</span></p><h3>${escapeHtml(application?.displayName || assignment.applicationId)}</h3><p><strong>${escapeHtml(roleLabels[assignment.roleId] || assignment.roleId)}</strong><br>${escapeHtml(scope)}</p><p class="note">Ces droits sont affichés en lecture seule. Seule une décision habilitée dans Administration peut les modifier.</p></article>`;
-  }).join("");
+  const scopeLabel = (assignment) => {
+    if (!assignment.scopeType || assignment.scopeType === "global") return "Tous les périmètres";
+    const type = assignment.scopeType === "site" ? "Site" : assignment.scopeType;
+    return assignment.scopeId ? `${type} : ${assignment.scopeId}` : `${type} attribué`;
+  };
+  const assignmentsByApplication = new Map();
+  for (const assignment of activeAssignments) {
+    const grouped = assignmentsByApplication.get(assignment.applicationId) ?? [];
+    grouped.push(assignment);
+    assignmentsByApplication.set(assignment.applicationId, grouped);
+  }
+  const accessCards = [...assignmentsByApplication.entries()]
+    .sort(([leftId], [rightId]) => {
+      const left = applicationLabel(leftId);
+      const right = applicationLabel(rightId);
+      return left.localeCompare(right, "fr");
+    })
+    .map(([applicationId, groupedAssignments]) => {
+      const rows = groupedAssignments
+        .sort((left, right) => (roleLabels[left.roleId] || left.roleId)
+          .localeCompare(roleLabels[right.roleId] || right.roleId, "fr"))
+        .map((assignment) => `<li class="access-role"><strong>${escapeHtml(roleLabels[assignment.roleId] || assignment.roleId)}</strong><span>${escapeHtml(scopeLabel(assignment))}</span></li>`)
+        .join("");
+      const count = groupedAssignments.length;
+      return `<article class="entry assignment access-application"><div class="access-application-heading"><h3>${escapeHtml(applicationLabel(applicationId))}</h3><span class="pill">${escapeHtml(count)} rôle${count > 1 ? "s" : ""} actif${count > 1 ? "s" : ""}</span></div><ul class="access-role-list">${rows}</ul><p class="note">Affichage en lecture seule. Les modifications nécessitent une décision habilitée dans Administration.</p></article>`;
+    }).join("");
   const providerName = providerKey === EMAIL_LOGIN_PROVIDER ? "Courriel"
     : providerKey === "infomaniak" ? "Infomaniak"
       : providerKey === "nsktech" ? "Session NSK Tech 09" : providerKey;
@@ -565,12 +593,14 @@ export function createHttpHandler({
       } catch { /* account identity and rights remain available without session inventory */ }
     }
     if (!identity || identity.status !== "active") throw new Error("identity_not_active");
-    return renderPersonalAccount({
+    const accountContent = renderPersonalAccount({
       identity, applications, assignments, sessions, sessionsAvailable,
       providerKey: session.providerKey ?? "infomaniak",
       emailLoginEnabled: emailLogin?.enabled === true,
       returnTo, theme,
     });
+    const accountReturnLayout = `<style>#contenu{position:relative}#contenu>h1,#contenu>p:first-of-type{padding-right:230px}#contenu>nav:first-of-type>a:first-child{position:absolute;right:34px;top:76px;white-space:nowrap}#contenu>nav:first-of-type:not(:has(a:nth-of-type(2))){margin:0}.access-application-heading{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}.access-application-heading h3{margin-top:3px}.access-role-list{list-style:none;margin:18px 0;padding:0;display:grid;gap:10px}.access-role{display:grid;gap:3px;padding:12px;border-radius:9px;background:var(--muted-bg)}.access-role span{color:var(--muted);font-size:13px}@media(max-width:850px){#contenu>h1,#contenu>p:first-of-type{padding-right:0}#contenu>nav:first-of-type>a:first-child{position:static;white-space:normal}#contenu>nav:first-of-type:not(:has(a:nth-of-type(2))){margin-top:22px}}</style>`;
+    return `${accountReturnLayout}${accountContent}`;
   }
 
   return async function handle(request, response) {

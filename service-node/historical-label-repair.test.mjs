@@ -55,7 +55,7 @@ test("reste en lecture seule par défaut et inventorie uniquement les libellés 
   const result = await repairHistoricalLabels(repository, { database: "n09_admin_prod" });
 
   assert.equal(result.applied, false);
-  assert.equal(result.planned.length, 4);
+  assert.equal(result.planned.length, HISTORICAL_LABEL_REPAIRS.length);
   assert.equal(repository.auditCount(), auditCount);
   for (const target of HISTORICAL_LABEL_REPAIRS) {
     const current = target.kind === "identity"
@@ -65,7 +65,7 @@ test("reste en lecture seule par défaut et inventorie uniquement les libellés 
   }
 });
 
-test("répare les quatre libellés, conserve les états et devient idempotent", async () => {
+test("répare les libellés ciblés, conserve les états et devient idempotent", async () => {
   const repository = new TransactionalMemoryRepository();
   seedOperator(repository);
   HISTORICAL_LABEL_REPAIRS.forEach((target) => seed(repository, target));
@@ -75,10 +75,10 @@ test("répare les quatre libellés, conserve les états et devient idempotent", 
     apply: true,
     allowRepair: "true",
     operatorIdentityId: operator.identityId,
-    justification: "Correction contrôlée de quatre libellés historiques mal encodés.",
+    justification: "Correction contrôlée des libellés historiques mal encodés.",
   };
   const first = await repairHistoricalLabels(repository, input);
-  assert.equal(first.changed.length, 4);
+  assert.equal(first.changed.length, HISTORICAL_LABEL_REPAIRS.length);
   assert.equal(repository.getIdentity("00000000-0000-4000-8000-000000000009").status, "archived");
   assert.equal(repository.getApplication("n09-synthetic").status, "retired");
   for (const target of HISTORICAL_LABEL_REPAIRS) {
@@ -90,7 +90,7 @@ test("répare les quatre libellés, conserve les états et devient idempotent", 
   const auditCount = repository.auditCount();
   const second = await repairHistoricalLabels(repository, input);
   assert.deepEqual(second.changed, []);
-  assert.equal(second.unchanged.length, 4);
+  assert.equal(second.unchanged.length, HISTORICAL_LABEL_REPAIRS.length);
   assert.equal(repository.auditCount(), auditCount);
   assert.equal(repository.verifyAuditChain(), true);
 });
@@ -106,7 +106,7 @@ test("refuse une valeur inattendue avant toute écriture", async () => {
   await assert.rejects(repairHistoricalLabels(repository, {
     database: "n09_admin_prod", apply: true, allowRepair: "true",
     operatorIdentityId: operator.identityId,
-    justification: "Correction contrôlée de quatre libellés historiques mal encodés.",
+    justification: "Correction contrôlée des libellés historiques mal encodés.",
   }), /unexpected historical label/);
   assert.equal(repository.auditCount(), auditCount);
   assert.equal(repository.getIdentity(HISTORICAL_LABEL_REPAIRS[0].id).displayName, HISTORICAL_LABEL_REPAIRS[0].legacy);

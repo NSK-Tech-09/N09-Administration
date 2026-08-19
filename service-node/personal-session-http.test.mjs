@@ -48,10 +48,13 @@ const sessions = [
 async function withServer(personalSessionManagement, operation) {
   const repository = {
     getIdentity: async () => ({ identityId, displayName: "Fred TRAVERS", email: "f.travers@nsktech.fr", status: "active" }),
-    listApplications: async () => [{ applicationId: "n09-suivi-taches", displayName: "N09 – Suivi des tâches", status: "active" }],
+    listApplications: async () => [{ applicationId: "n09-suivi-taches", displayName: "N09 â€“ Suivi des tÃ¢ches", status: "active" }],
     listAllAssignments: async () => [{
       assignmentId: "assignment-1", subjectId: identityId, applicationId: "n09-suivi-taches",
-      roleId: "administrator", scopeType: "global", scopeId: null, status: "active",
+      roleId: "tasks-administrator", scopeType: null, scopeId: null, status: "active",
+    }, {
+      assignmentId: "assignment-2", subjectId: identityId, applicationId: "n09-suivi-taches",
+      roleId: "tasks-writer", scopeType: "site", scopeId: "site_del11230f7985", status: "active",
     }],
   };
   const server = createServer(createHttpHandler({ repository, oidcConfig, personalSessionManagement }));
@@ -72,9 +75,17 @@ test("présente le compte central sans permettre de modifier ses propres droits"
     assert.match(html, /Fred TRAVERS/);
     assert.match(html, /f\.travers@nsktech\.fr/);
     assert.match(html, /N09 – Suivi des tâches/);
-    assert.match(html, /Administrateur/);
+    assert.doesNotMatch(html, /â€“|tÃ¢ches/);
+    assert.match(html, /Administrateur des tâches/);
+    assert.match(html, /Contributeur aux tâches/);
+    assert.match(html, /2 rôles actifs/);
+    assert.equal(html.match(/<h3>N09 – Suivi des tâches<\/h3>/g)?.length, 1);
+    assert.match(html, /Tous les périmètres/);
+    assert.doesNotMatch(html, />null</);
     assert.match(html, /lecture seule/);
     assert.match(html, /Retour à l’application/);
+    assert.match(html, /right:34px;top:76px/);
+    assert.match(html, /@media\(max-width:850px\)/);
     assert.doesNotMatch(html, /Accorder cet accès|action="\/admin\/access-decisions\/grant"/);
   });
 });
