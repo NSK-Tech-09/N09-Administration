@@ -22,7 +22,10 @@ test("synchronise le bandeau Administration avec la validité réelle de la sess
   assert.match(source, /fetch\("\/auth\/session", \{ credentials: "include", cache: "no-store" \}\)/);
   assert.match(source, /response\.status !== 401/);
   assert.match(source, /authenticationUnavailable/);
-  assert.match(source, /window\.location\.pathname === "\/account"/);
+  assert.match(source, /currentPath === "\/account"/);
+  assert.match(source, /currentPath === "\/notifications"/);
+  assert.match(source, /currentPath === "\/admin"/);
+  assert.match(source, /authenticated \|\| protectedAuthenticatedPage/);
   assert.match(source, /window\.location\.replace\(loginHref\)/);
   assert.match(source, /previousAuthenticationState === true && !authenticated/);
   assert.match(source, /window\.location\.reload\(\)/);
@@ -30,7 +33,7 @@ test("synchronise le bandeau Administration avec la validité réelle de la sess
   assert.match(source, /document\.addEventListener\("visibilitychange", refreshWhenVisible\)/);
   assert.match(httpSource, /href="\/account">Mon compte<\/a>/);
   assert.match(httpSource, /option value="\/account">Mon compte<\/option>/);
-  assert.match(httpSource, /theme\.js\?v=0\.2\.3/);
+  assert.match(httpSource, /theme\.js\?v=0\.2\.4/);
   assert.match(httpSource, /\[hidden\]\{display:none!important\}/);
 });
 

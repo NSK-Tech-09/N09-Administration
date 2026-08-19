@@ -23,6 +23,10 @@ document.querySelector("#nsk-quick-access")?.addEventListener("change", (event) 
 const sessionActions = document.querySelector(".header-actions");
 const accountAction = sessionActions?.querySelector('a[href="/account"]');
 const logoutAction = sessionActions?.querySelector('form[action="/auth/logout"]');
+const currentPath = window.location.pathname;
+const protectedAuthenticatedPage = currentPath === "/account" || currentPath.startsWith("/account/") ||
+  currentPath === "/notifications" || currentPath.startsWith("/notifications/") ||
+  currentPath === "/admin" || currentPath.startsWith("/admin/");
 let loginAction = null;
 let userCopy = null;
 let previousAuthenticationState = null;
@@ -63,7 +67,7 @@ function displayAuthenticationState(authenticated, displayName = "Utilisateur NS
   }
   accountAction.hidden = !authenticated;
   logoutAction.hidden = !authenticated;
-  loginAction.hidden = authenticated;
+  loginAction.hidden = authenticated || protectedAuthenticatedPage;
   sessionActions.style.visibility = "";
 }
 
@@ -88,13 +92,11 @@ async function refreshAuthenticationState() {
   const loginHref = `/auth/login?return_to=${encodeURIComponent(returnTo)}`;
   loginAction.href = loginHref;
 
-  const protectedAccountPage = window.location.pathname === "/account" ||
-    window.location.pathname.startsWith("/account/");
   if (authenticationUnavailable) {
-    displayAuthenticationState(protectedAccountPage || previousAuthenticationState === true, displayName);
+    displayAuthenticationState(protectedAuthenticatedPage || previousAuthenticationState === true, displayName);
     return;
   }
-  if (!authenticated && protectedAccountPage) {
+  if (!authenticated && protectedAuthenticatedPage) {
     window.location.replace(loginHref);
     return;
   }
