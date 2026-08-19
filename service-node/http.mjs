@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { evaluateAccessRequestAsync } from "./api.mjs";
 import { createAuditEvent } from "./audit.mjs";
 import { publishApplicationAccessCatalog } from "./application-access-catalog.mjs";
+import { applicationDisplayName } from "./application-display-name.mjs";
 import { receiveNotificationEvents } from "./notification-ingress.mjs";
 import { createLinkRequest } from "./federated-identity.mjs";
 import {
@@ -349,7 +350,11 @@ function renderNotifications(notifications, unreadCount, csrf) {
     const readAction = unread
       ? `<form method="post" action="/notifications/${escapeHtml(notification.notificationId)}/read"><input type="hidden" name="csrf" value="${escapeHtml(csrf)}"><button class="secondary" type="submit">Marquer comme lue</button></form>`
       : '<span class="pill">Lue</span>';
-    return `<article class="entry notification${unread ? " unread" : ""}"><p><span class="pill${unread ? "" : " inactive"}">${unread ? "Non lue" : "Lue"}</span> · ${escapeHtml(notification.sourceApplicationName)}</p><h3>${escapeHtml(notification.title)}</h3><p>${escapeHtml(notification.message)}</p><p class="muted">${escapeHtml(formatDate(notification.occurredAt))} · ${escapeHtml(notification.contextResourceType)} <code>${escapeHtml(notification.contextResourceId)}</code></p>${readAction}</article>`;
+    const sourceApplicationName = applicationDisplayName(
+      notification.sourceApplicationId,
+      notification.sourceApplicationName,
+    );
+    return `<article class="entry notification${unread ? " unread" : ""}"><p><span class="pill${unread ? "" : " inactive"}">${unread ? "Non lue" : "Lue"}</span> · ${escapeHtml(sourceApplicationName)}</p><h3>${escapeHtml(notification.title)}</h3><p>${escapeHtml(notification.message)}</p><p class="muted">${escapeHtml(formatDate(notification.occurredAt))} · ${escapeHtml(notification.contextResourceType)} <code>${escapeHtml(notification.contextResourceId)}</code></p>${readAction}</article>`;
   }).join("");
   const allRead = unreadCount > 0
     ? `<form method="post" action="/notifications/read-all"><input type="hidden" name="csrf" value="${escapeHtml(csrf)}"><button type="submit">Tout marquer comme lu</button></form>` : "";
@@ -381,9 +386,10 @@ function renderPersonalAccount({
 }) {
   const query = `?return_to=${encodeURIComponent(returnTo)}&theme=${encodeURIComponent(theme)}`;
   const applicationById = new Map(applications.map((application) => [application.applicationId, application]));
-  const canonicalApplicationLabels = { "n09-suivi-taches": "N09 – Suivi des tâches" };
-  const applicationLabel = (applicationId) => canonicalApplicationLabels[applicationId] ||
-    applicationById.get(applicationId)?.displayName || applicationId;
+  const applicationLabel = (applicationId) => applicationDisplayName(
+    applicationId,
+    applicationById.get(applicationId)?.displayName,
+  );
   const roleLabels = {
     administrator: "Administrateur", admin: "Administrateur", owner: "Propriétaire",
     reader: "Lecteur", user: "Utilisateur", "energy-owner": "Propriétaire Énergie",

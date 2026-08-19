@@ -2,6 +2,7 @@ import {
   createApplicationSessionAuditEvent,
   revokeApplicationSession,
 } from "./application-session.mjs";
+import { applicationDisplayName } from "./application-display-name.mjs";
 
 export class PersonalSessionError extends Error {
   constructor(code, status = 409) {
@@ -63,7 +64,7 @@ export function createPersonalSessionManagement({ repository, now = () => new Da
       sessionId: record.sessionId,
       version: record.version,
       applicationId: record.applicationId,
-      applicationName: applicationNames.get(record.applicationId) || record.applicationId,
+      applicationName: applicationDisplayName(record.applicationId, applicationNames.get(record.applicationId)),
       contextLabel: record.contextLabel,
       issuedAt: record.issuedAt,
       lastSeenAt: record.lastSeenAt,
