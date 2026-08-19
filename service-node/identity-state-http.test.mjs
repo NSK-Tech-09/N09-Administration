@@ -53,13 +53,14 @@ function repositoryWithPermission(permission = IDENTITY_SUSPENSION_PERMISSION) {
   return repository;
 }
 
-function sessionCookie() {
-  return `${OIDC_SESSION_COOKIE}=${seal({
+function sessionCookie(centralSession = true) {
+  const session = {
     sessionVersion: 2, issuer: "https://login.infomaniak.com", subject: "provider-subject",
     identityId: operatorId, displayName: "Opérateur", status: "authenticated", csrf,
-    centralSession: { sessionId: currentSessionId, secret: "S".repeat(43) },
     expiresAt: Date.now() + 60_000,
-  }, oidcConfig.sessionSecret, "oidc-session")}`;
+  };
+  if (centralSession) session.centralSession = { sessionId: currentSessionId, secret: "S".repeat(43) };
+  return `${OIDC_SESSION_COOKIE}=${seal(session, oidcConfig.sessionSecret, "oidc-session")}`;
 }
 
 const identities = [
@@ -67,8 +68,12 @@ const identities = [
   { identityId: targetId, displayName: "Personne cible", email: "target@example.test", status: "active", activeSessionCount: 2, current: false, canSuspend: true, canReactivate: false, canDisable: false },
 ];
 
-async function withServer({ repository = repositoryWithPermission(), identityStateManagement }, operation) {
-  const server = createServer(createHttpHandler({ repository, oidcConfig, identityStateManagement }));
+async function withServer({
+  repository = repositoryWithPermission(), identityStateManagement, administrationSessionAuthority,
+}, operation) {
+  const server = createServer(createHttpHandler({
+    repository, oidcConfig, identityStateManagement, administrationSessionAuthority,
+  }));
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
   try { await operation(`http://127.0.0.1:${server.address().port}`); }
   finally { await new Promise((resolve) => server.close(resolve)); }
@@ -98,6 +103,29 @@ test("présente les identités sans identifiant technique et protège l’auto-s
     assert.doesNotMatch(html, new RegExp(operatorId));
     assert.doesNotMatch(html, new RegExp(targetId));
   });
+});
+
+test("ouvre le cycle de vie sans imposer une nouvelle connexion à une session locale valide", async () => {
+  const issued = [];
+  await withServer({
+    administrationSessionAuthority: {
+      mode: "observe",
+      issue: async (input) => {
+        issued.push(input);
+        return { sessionId: currentSessionId, secret: "S".repeat(43) };
+      },
+      observe: async () => ({ outcome: "active" }),
+    },
+    identityStateManagement: { listLifecycle: async () => identities },
+  }, async (origin) => {
+    const response = await fetch(`${origin}/admin/identities`, {
+      headers: { cookie: sessionCookie(false) },
+    });
+    assert.equal(response.status, 200);
+    assert.match(response.headers.get("set-cookie"), /n09_oidc_session=/);
+    assert.match(await response.text(), /Cycle de vie des identités/);
+  });
+  assert.deepEqual(issued, [{ identityId: operatorId }]);
 });
 
 test("transmet uniquement la cible scellée avec CSRF et justification", async () => {

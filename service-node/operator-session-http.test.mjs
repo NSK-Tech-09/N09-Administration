@@ -46,13 +46,14 @@ function repositoryWithPermission(permission = SESSION_REVOCATION_PERMISSION) {
   return repository;
 }
 
-function sessionCookie(identityId = operatorId) {
-  return `${OIDC_SESSION_COOKIE}=${seal({
+function sessionCookie(identityId = operatorId, centralSession = true) {
+  const session = {
     sessionVersion: 2, issuer: "https://login.infomaniak.com", subject: "provider-subject",
     identityId, displayName: "Opérateur", status: "authenticated", csrf,
-    centralSession: { sessionId: currentSessionId, secret: "S".repeat(43) },
     expiresAt: Date.now() + 60_000,
-  }, oidcConfig.sessionSecret, "oidc-session")}`;
+  };
+  if (centralSession) session.centralSession = { sessionId: currentSessionId, secret: "S".repeat(43) };
+  return `${OIDC_SESSION_COOKIE}=${seal(session, oidcConfig.sessionSecret, "oidc-session")}`;
 }
 
 const sessions = [
@@ -74,8 +75,12 @@ const sessions = [
   },
 ];
 
-async function withServer({ repository = repositoryWithPermission(), operatorSessionManagement }, operation) {
-  const server = createServer(createHttpHandler({ repository, oidcConfig, operatorSessionManagement }));
+async function withServer({
+  repository = repositoryWithPermission(), operatorSessionManagement, administrationSessionAuthority,
+}, operation) {
+  const server = createServer(createHttpHandler({
+    repository, oidcConfig, operatorSessionManagement, administrationSessionAuthority,
+  }));
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
   try { await operation(`http://127.0.0.1:${server.address().port}`); }
   finally { await new Promise((resolve) => server.close(resolve)); }
@@ -113,6 +118,31 @@ test("présente la console sans identifiant technique ni secret", async () => {
     assert.doesNotMatch(html, new RegExp(targetSessionId));
     assert.doesNotMatch(html, /secretHash|SSSSSS/i);
   });
+  assert.deepEqual(calls, [{ operatorIdentityId: operatorId, currentSessionId }]);
+});
+
+test("inscrit sans reconnexion une session locale valide avant d’ouvrir la supervision", async () => {
+  const issued = [];
+  const calls = [];
+  const centralSession = { sessionId: currentSessionId, secret: "S".repeat(43) };
+  await withServer({
+    administrationSessionAuthority: {
+      mode: "observe",
+      issue: async (input) => { issued.push(input); return centralSession; },
+      observe: async () => ({ outcome: "active" }),
+    },
+    operatorSessionManagement: {
+      listActive: async (input) => { calls.push(input); return sessions; },
+    },
+  }, async (origin) => {
+    const response = await fetch(`${origin}/admin/sessions`, {
+      headers: { cookie: sessionCookie(operatorId, false) },
+    });
+    assert.equal(response.status, 200);
+    assert.match(response.headers.get("set-cookie"), /n09_oidc_session=/);
+    assert.match(await response.text(), /Sessions actives de l’écosystème/);
+  });
+  assert.deepEqual(issued, [{ identityId: operatorId }]);
   assert.deepEqual(calls, [{ operatorIdentityId: operatorId, currentSessionId }]);
 });
 
