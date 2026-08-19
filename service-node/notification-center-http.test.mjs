@@ -58,6 +58,9 @@ test("présente le centre personnel avec compteur, source et contexte", async ()
     assert.doesNotMatch(html, /â€“|tÃ¢ches/);
     assert.match(html, /Non lue/);
     assert.match(html, /task_1/);
+    assert.match(html, /class="notification-heading"/);
+    assert.ok(html.indexOf("Tout marquer comme lu") < html.indexOf('class="summary"'));
+    assert.doesNotMatch(html, />Retour à l’accueil</);
     assert.doesNotMatch(html, /Supprimer/);
   });
 });
