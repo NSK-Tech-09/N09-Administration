@@ -22,7 +22,14 @@ test("synchronise le bandeau Administration avec la validité réelle de la sess
   assert.match(source, /fetch\("\/auth\/session", \{ credentials: "include", cache: "no-store" \}\)/);
   assert.match(source, /response\.status !== 401/);
   assert.match(source, /authenticationUnavailable/);
-  assert.match(source, /window\.location\.pathname === "\/account"/);
+  assert.match(source, /currentPath === "\/account"/);
+  assert.match(source, /currentPath === "\/notifications"/);
+  assert.match(source, /currentPath === "\/admin"/);
+  assert.match(source, /authenticated \|\| protectedAuthenticatedPage/);
+  assert.match(source, /accountAction\.className = "header-user-card"/);
+  assert.match(source, /Session active · Voir mon compte/);
+  assert.match(source, /Ouvrir Mon compte/);
+  assert.doesNotMatch(source, /header-user-copy|sessionActions\.prepend/);
   assert.match(source, /window\.location\.replace\(loginHref\)/);
   assert.match(source, /previousAuthenticationState === true && !authenticated/);
   assert.match(source, /window\.location\.reload\(\)/);
@@ -30,7 +37,7 @@ test("synchronise le bandeau Administration avec la validité réelle de la sess
   assert.match(source, /document\.addEventListener\("visibilitychange", refreshWhenVisible\)/);
   assert.match(httpSource, /href="\/account">Mon compte<\/a>/);
   assert.match(httpSource, /option value="\/account">Mon compte<\/option>/);
-  assert.match(httpSource, /theme\.js\?v=0\.2\.3/);
+  assert.match(httpSource, /theme\.js\?v=0\.2\.4/);
   assert.match(httpSource, /\[hidden\]\{display:none!important\}/);
 });
 
@@ -296,7 +303,7 @@ test("applique le socle visuel et de navigation obligatoire de NSK Tech 09", asy
     assert.match(html, /Ouvrir le portail NSK Tech 09 dans un nouvel onglet/);
     assert.match(html, /aria-label="Accès rapide"/);
     assert.match(html, /Choisir le thème/);
-    assert.match(html, /N09 – Administration · version 0\.2\.7 · application web installable/);
+    assert.match(html, /N09 – Administration · version 0\.2\.8 · application web installable/);
     assert.match(html, /Mentions légales/);
     assert.match(html, /Confidentialité/);
     assert.match(html, /Comprendre\. Concevoir\. Transmettre\./);

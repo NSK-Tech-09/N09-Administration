@@ -4,6 +4,7 @@ import {
   createApplicationSessionAuditEvent,
   revokeApplicationSession,
 } from "./application-session.mjs";
+import { applicationDisplayName } from "./application-display-name.mjs";
 import { ADMIN_APPLICATION_ID } from "./identity-link-admin.mjs";
 
 export const SESSION_REVOCATION_PERMISSION = "administration:sessions:revoke";
@@ -81,7 +82,7 @@ export function createOperatorSessionManagement({ repository, now = () => new Da
           identityEmail: identity.email,
           identityStatus: identity.status,
           applicationId: record.applicationId,
-          applicationName: applicationNames.get(record.applicationId) || record.applicationId,
+          applicationName: applicationDisplayName(record.applicationId, applicationNames.get(record.applicationId)),
           contextLabel: record.contextLabel,
           issuedAt: record.issuedAt,
           lastSeenAt: record.lastSeenAt,

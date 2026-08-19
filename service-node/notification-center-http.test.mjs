@@ -31,7 +31,7 @@ async function withServer(repository, operation) {
 function notification() {
   return {
     notificationId: "a".repeat(64), sourceApplicationId: "n09-suivi-taches",
-    sourceApplicationName: "N09 – Suivi des tâches", category: "task_activity",
+    sourceApplicationName: "N09 â€“ Suivi des tÃ¢ches", category: "task_activity",
     importance: "information", title: "Tâche archivée",
     message: "Une tâche a été archivée dans N09 – Suivi des tâches.",
     contextApplicationId: "n09-suivi-taches", contextResourceType: "task", contextResourceId: "task_1",
@@ -54,8 +54,13 @@ test("présente le centre personnel avec compteur, source et contexte", async ()
     const html = await response.text();
     assert.match(html, /Centre de notifications/);
     assert.match(html, /Tâche archivée/);
+    assert.match(html, /N09 – Suivi des tâches/);
+    assert.doesNotMatch(html, /â€“|tÃ¢ches/);
     assert.match(html, /Non lue/);
     assert.match(html, /task_1/);
+    assert.match(html, /class="notification-heading"/);
+    assert.ok(html.indexOf("Tout marquer comme lu") < html.indexOf('class="summary"'));
+    assert.doesNotMatch(html, />Retour à l’accueil</);
     assert.doesNotMatch(html, /Supprimer/);
   });
 });
