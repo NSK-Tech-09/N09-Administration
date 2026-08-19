@@ -18,7 +18,7 @@ test("prévisualise puis applique atomiquement toutes les réparations et devien
   let received;
   const repository = {
     listHistoricalTextFields: async () => fields,
-    getIdentityByEmail: async () => ({
+    findIdentityByEmail: async () => ({
       identityId: "60a40cd7-f2a4-4393-8021-9f806b42b41a", status: "active",
     }),
     applyHistoricalTextRepairs: async (repairs, auditEvent) => {
@@ -59,7 +59,7 @@ test("refuse toute application non confirmée ou portée par une identité inact
     listHistoricalTextFields: async () => [{
       dataset: "access_assignments", recordId: "assignment-1", field: "reason", value: "DÃ©cision",
     }],
-    getIdentityByEmail: async () => ({ identityId: "60a40cd7-f2a4-4393-8021-9f806b42b41a", status: "suspended" }),
+    findIdentityByEmail: async () => ({ identityId: "60a40cd7-f2a4-4393-8021-9f806b42b41a", status: "suspended" }),
   };
   await assert.rejects(repairHistoricalTextEncoding(repository, {
     database: "n09_admin_prod", apply: true,
