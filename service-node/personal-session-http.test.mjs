@@ -14,7 +14,7 @@ const oidcConfig = {
   sessionSecret: "a-long-random-session-secret-with-32-chars",
 };
 
-function sessionCookie() {
+function sessionCookie({ centralSession = true } = {}) {
   return `${OIDC_SESSION_COOKIE}=${seal({
     sessionVersion: 2,
     issuer: "https://login.infomaniak.com",
@@ -23,7 +23,7 @@ function sessionCookie() {
     displayName: "Fred",
     status: "authenticated",
     csrf,
-    centralSession: { sessionId: currentSessionId, secret: "S".repeat(43) },
+    centralSession: centralSession ? { sessionId: currentSessionId, secret: "S".repeat(43) } : null,
     expiresAt: Date.now() + 60_000,
   }, oidcConfig.sessionSecret, "oidc-session")}`;
 }
@@ -76,6 +76,25 @@ test("présente le compte central sans permettre de modifier ses propres droits"
     assert.match(html, /lecture seule/);
     assert.match(html, /Retour à l’application/);
     assert.doesNotMatch(html, /Accorder cet accès|action="\/admin\/access-decisions\/grant"/);
+  });
+});
+
+test("présente le profil et les droits lorsque la gestion des sessions n’est pas activée", async () => {
+  await withServer({
+    listOwn: async () => assert.fail("l’inventaire de sessions ne doit pas être appelé"),
+  }, async (origin) => {
+    const returnTo = "https://prod-taches.nsktech.fr/?theme=gray";
+    const response = await fetch(`${origin}/account?return_to=${encodeURIComponent(returnTo)}&theme=gray`, {
+      headers: { cookie: sessionCookie({ centralSession: false }) },
+    });
+    const html = await response.text();
+    assert.equal(response.status, 200);
+    assert.match(html, /Mon compte NSK Tech 09/);
+    assert.match(html, /Fred TRAVERS/);
+    assert.match(html, /N09 – Suivi des tâches/);
+    assert.match(html, /Fonction temporairement indisponible/);
+    assert.doesNotMatch(html, /Compte momentanément indisponible/);
+    assert.doesNotMatch(html, /Gérer mes sessions/);
   });
 });
 
