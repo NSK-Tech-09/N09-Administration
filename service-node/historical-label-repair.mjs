@@ -28,6 +28,12 @@ export const HISTORICAL_LABEL_REPAIRS = Object.freeze([
     legacy: "N09 \u00e2\u20ac\u201c Administration",
     canonical: "N09 – Administration",
   }),
+  Object.freeze({
+    kind: "application",
+    id: "n09-suivi-taches",
+    legacy: "N09 \u00e2\u20ac\u201c Suivi des t\u00c3\u00a2ches",
+    canonical: "N09 – Suivi des tâches",
+  }),
 ]);
 
 function normalizedText(value) {

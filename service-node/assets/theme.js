@@ -71,24 +71,38 @@ async function refreshAuthenticationState() {
   if (!sessionActions) return;
   let authenticated = false;
   let displayName = "Utilisateur NSK Tech 09";
+  let authenticationUnavailable = false;
   try {
     const response = await fetch("/auth/session", { credentials: "include", cache: "no-store" });
+    if (!response.ok && response.status !== 401) throw new Error("session_check_unavailable");
     const state = response.ok ? await response.json() : { authenticated: false };
     authenticated = state.authenticated === true;
     displayName = state.display_name || displayName;
   } catch {
-    authenticated = false;
-  }
-
-  if (previousAuthenticationState === true && !authenticated) {
-    window.location.reload();
-    return;
+    authenticationUnavailable = true;
   }
 
   const returnTo = window.location.pathname.startsWith("/auth/")
     ? "/"
     : `${window.location.pathname}${window.location.search}${window.location.hash}`;
-  loginAction.href = `/auth/login?return_to=${encodeURIComponent(returnTo)}`;
+  const loginHref = `/auth/login?return_to=${encodeURIComponent(returnTo)}`;
+  loginAction.href = loginHref;
+
+  const protectedAccountPage = window.location.pathname === "/account" ||
+    window.location.pathname.startsWith("/account/");
+  if (authenticationUnavailable) {
+    displayAuthenticationState(protectedAccountPage || previousAuthenticationState === true, displayName);
+    return;
+  }
+  if (!authenticated && protectedAccountPage) {
+    window.location.replace(loginHref);
+    return;
+  }
+  if (previousAuthenticationState === true && !authenticated) {
+    window.location.reload();
+    return;
+  }
+
   displayAuthenticationState(authenticated, displayName);
   previousAuthenticationState = authenticated;
 }
