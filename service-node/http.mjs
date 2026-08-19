@@ -567,7 +567,7 @@ export function createHttpHandler({
     } catch { /* observation must never influence current access */ }
   }
 
-  async function openCurrentSession(request) {
+  function readCurrentSession(request) {
     if (!oidcConfig) throw new Error("oidc_not_configured");
     const session = open(
       parseCookies(request.headers.cookie).get(OIDC_SESSION_COOKIE),
@@ -575,6 +575,10 @@ export function createHttpHandler({
       "oidc-session",
     );
     if (session?.sessionVersion !== CURRENT_SESSION_VERSION) throw new Error("session_cookie_outdated");
+    return session;
+  }
+
+  async function validateCurrentSession(session) {
     observeSessionInBackground(session);
     if (administrationSessionAuthority?.mode === "enforce" && session?.status === "authenticated") {
       const assessment = await administrationSessionAuthority.assess({
@@ -586,10 +590,35 @@ export function createHttpHandler({
     return session;
   }
 
+  async function openCurrentSession(request) {
+    return validateCurrentSession(readCurrentSession(request));
+  }
+
   async function attachCentralSession(session) {
     if (!administrationSessionAuthority || session?.status !== "authenticated" || !session.identityId) return session;
     const credential = await administrationSessionAuthority.issue({ identityId: session.identityId });
     return credential ? { ...session, centralSession: credential } : session;
+  }
+
+  async function openSupervisionSession(request, response) {
+    let session = readCurrentSession(request);
+    if (session?.status === "authenticated" && session.identityId && session.csrf &&
+        !session.centralSession?.sessionId) {
+      try {
+        const enrolled = await attachCentralSession(session);
+        if (enrolled.centralSession?.sessionId) {
+          session = enrolled;
+          response.setHeader("set-cookie", cookie(
+            OIDC_SESSION_COOKIE,
+            seal(session, oidcConfig.sessionSecret, "oidc-session"),
+            { maxAge: Math.max(1, Math.ceil((session.expiresAt - Date.now()) / 1000)) },
+          ));
+        }
+      } catch (error) {
+        if (administrationSessionAuthority?.mode === "enforce") throw error;
+      }
+    }
+    return validateCurrentSession(session);
   }
 
   async function personalAccountContent(session, returnTo, theme) {
@@ -1055,7 +1084,7 @@ export function createHttpHandler({
       let session;
       try {
         if (!oidcConfig) throw new Error("oidc_not_configured");
-        session = await openCurrentSession(request);
+        session = await openSupervisionSession(request, response);
       } catch {
         writeHtml(response, 401, "Connexion requise", '<h1>Connexion requise</h1><p>Une session NSK valide est nécessaire pour administrer le cycle de vie des identités.</p><a class="button" href="/">Se connecter</a>');
         return;
@@ -1135,7 +1164,7 @@ export function createHttpHandler({
       let session;
       try {
         if (!oidcConfig) throw new Error("oidc_not_configured");
-        session = await openCurrentSession(request);
+        session = await openSupervisionSession(request, response);
       } catch {
         writeHtml(response, 401, "Connexion requise", '<h1>Connexion requise</h1><p>Une session NSK valide est nécessaire pour administrer les sessions.</p><a class="button" href="/">Se connecter</a>');
         return;
@@ -1372,7 +1401,7 @@ export function createHttpHandler({
       let session;
       try {
         if (!oidcConfig) throw new Error("oidc_not_configured");
-        session = await openCurrentSession(request);
+        session = await openSupervisionSession(request, response);
       } catch {
         writeHtml(response, 401, "Connexion requise", '<h1>Connexion requise</h1><p>Une session NSK valide est nécessaire pour gérer tes connexions.</p><a class="button" href="/">Se connecter</a>');
         return;
