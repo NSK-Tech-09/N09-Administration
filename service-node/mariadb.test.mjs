@@ -741,3 +741,39 @@ test("désactive l’identité et révoque sessions et affectations MariaDB dans
   assert.equal(calls.filter((call) => call === "commit").length, 1);
   assert.equal(calls.at(-1), "release");
 });
+
+test("inventorie uniquement les colonnes métier autorisées pour le nettoyage d’encodage", async () => {
+  const calls = [];
+  const pool = {
+    execute: async (sql) => {
+      calls.push(sql);
+      return [[{ record_id: "record-1", text_value: "DÃ©cision" }]];
+    },
+  };
+  const fields = await new MariaDbRepository(pool).listHistoricalTextFields();
+  assert.equal(fields.length, 10);
+  assert.ok(fields.some((item) => item.dataset === "access_assignments" && item.field === "reason"));
+  assert.ok(fields.some((item) => item.dataset === "applications" && item.field === "display_name"));
+  assert.equal(calls.some((sql) => /audit_events|notifications|catalog_versions/.test(sql)), false);
+});
+
+test("répare le lot textuel et son audit dans une transaction unique", async () => {
+  const pool = fakePool();
+  const repairs = [{
+    dataset: "access_assignments", recordId: "assignment-1", field: "reason",
+    value: "AccÃ¨s validÃ©", corrected: "Accès validé",
+  }];
+  const event = createAuditEvent({
+    action: "data.text_encoding_repaired", result: "success", source: "tests",
+    correlationId: "encoding-repair", actorId: "60a40cd7-f2a4-4393-8021-9f806b42b41a",
+    previousValue: { repair_count: 1 }, newValue: { repair_count: 1 },
+  });
+  const result = await new MariaDbRepository(pool).applyHistoricalTextRepairs(repairs, event);
+  assert.deepEqual(result, { changed: 1 });
+  const update = pool.calls.find((call) => typeof call === "object" &&
+    call.sql.includes("UPDATE access_assignments SET reason"));
+  assert.deepEqual(update.values, ["Accès validé", "assignment-1", "AccÃ¨s validÃ©"]);
+  assert.equal(pool.calls.filter((call) => typeof call === "object" &&
+    call.sql.includes("INSERT INTO audit_events")).length, 1);
+  assert.equal(pool.calls.at(-2), "commit");
+});

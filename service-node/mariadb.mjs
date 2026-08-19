@@ -11,6 +11,7 @@ import {
   ApplicationAccessCatalogError, applicationAccessCatalogHash, assertCompatibleCatalogEvolution,
 } from "./application-access-catalog.mjs";
 import { NotificationIngressError } from "./notification-ingress.mjs";
+import { HISTORICAL_TEXT_COLUMNS } from "./text-encoding-repair.mjs";
 
 function required(config, name) {
   const value = config[name];
@@ -1702,6 +1703,53 @@ export class MariaDbRepository {
       [asMariaDate(readAt), identityId, identityId],
     );
     return { changed: Number(result.affectedRows) };
+  }
+
+  async listHistoricalTextFields() {
+    const fields = [];
+    for (const definition of HISTORICAL_TEXT_COLUMNS) {
+      const [rows] = await this.pool.execute(
+        `SELECT ${definition.idColumn} AS record_id, ${definition.field} AS text_value
+         FROM ${definition.dataset}
+         WHERE ${definition.field} IS NOT NULL AND ${definition.field} <> ''`,
+      );
+      fields.push(...rows.map((row) => ({
+        dataset: definition.dataset,
+        recordId: String(row.record_id),
+        field: definition.field,
+        value: row.text_value,
+      })));
+    }
+    return fields;
+  }
+
+  async applyHistoricalTextRepairs(repairs, auditEvent) {
+    if (!Array.isArray(repairs) || !repairs.length) throw new Error("text encoding repairs are required");
+    const definitions = new Map(HISTORICAL_TEXT_COLUMNS.map((item) => [`${item.dataset}.${item.field}`, item]));
+    const seen = new Set();
+    for (const repair of repairs) {
+      const key = `${repair?.dataset}.${repair?.field}`;
+      const target = `${key}:${repair?.recordId}`;
+      if (!definitions.has(key) || seen.has(target) || typeof repair.recordId !== "string" || !repair.recordId ||
+          typeof repair.value !== "string" || typeof repair.corrected !== "string" ||
+          repair.value === repair.corrected) {
+        throw new Error("invalid text encoding repair target");
+      }
+      seen.add(target);
+    }
+    return this.#transaction(async (connection) => {
+      for (const repair of repairs) {
+        const definition = definitions.get(`${repair.dataset}.${repair.field}`);
+        const [result] = await connection.execute(
+          `UPDATE ${definition.dataset} SET ${definition.field} = ?
+           WHERE ${definition.idColumn} = ? AND ${definition.field} = ?`,
+          [repair.corrected, repair.recordId, repair.value],
+        );
+        if (result.affectedRows !== 1) throw new Error("text encoding repair conflict");
+      }
+      await this.#appendAudit(connection, auditEvent);
+      return { changed: repairs.length };
+    });
   }
 
   async verifyAuditChain() {

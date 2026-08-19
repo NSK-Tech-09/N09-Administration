@@ -1,0 +1,76 @@
+name: Nettoyer l’encodage historique en production
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: Prévisualiser ou appliquer le nettoyage
+        required: true
+        type: choice
+        options:
+          - preview
+          - apply
+      confirmation:
+        description: Saisir PREVIEW_NSK_TEXT_ENCODING ou CLEAN_NSK_TEXT_ENCODING
+        required: true
+        type: string
+      justification:
+        description: Justification explicite et auditée
+        required: true
+        type: string
+
+concurrency:
+  group: administration-production-governance
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  repair:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: production
+    steps:
+      - uses: actions/checkout@v7
+      - name: Vérifier la demande et la release publique
+        env:
+          MODE: ${{ inputs.mode }}
+          CONFIRMATION: ${{ inputs.confirmation }}
+          JUSTIFICATION: ${{ inputs.justification }}
+          HEALTH_URL: ${{ vars.PRODUCTION_HEALTH_URL }}
+        run: |
+          if [[ "$MODE" == "preview" ]]; then
+            [[ "$CONFIRMATION" == "PREVIEW_NSK_TEXT_ENCODING" ]]
+          else
+            [[ "$MODE" == "apply" ]]
+            [[ "$CONFIRMATION" == "CLEAN_NSK_TEXT_ENCODING" ]]
+          fi
+          [[ ${#JUSTIFICATION} -ge 30 && ${#JUSTIFICATION} -le 500 ]]
+          body=$(curl --fail --silent --show-error --connect-timeout 10 --max-time 20 "$HEALTH_URL")
+          jq -e --arg commit "$GITHUB_SHA" '.status == "ok" and .release.commit == $commit' <<<"$body" >/dev/null
+      - name: Inventorier ou réparer les textes historiques
+        env:
+          SSHPASS: ${{ secrets.INFOMANIAK_DEPLOY_PASSWORD }}
+          SSH_HOST: ${{ secrets.INFOMANIAK_DEPLOY_HOST }}
+          SSH_PORT: ${{ secrets.INFOMANIAK_DEPLOY_PORT }}
+          SSH_USER: ${{ secrets.INFOMANIAK_DEPLOY_USERNAME }}
+          SSH_HOST_KEY: ${{ secrets.INFOMANIAK_SSH_HOST_KEY }}
+          DEPLOY_ROOT: ${{ vars.INFOMANIAK_DEPLOY_ROOT }}
+          MODE: ${{ inputs.mode }}
+          CONFIRMATION: ${{ inputs.confirmation }}
+          JUSTIFICATION: ${{ inputs.justification }}
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$SSH_HOST_KEY" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+          askpass="$RUNNER_TEMP/ssh-askpass.sh"
+          printf '%s\n' '#!/usr/bin/env bash' 'printf "%s\\n" "$SSHPASS"' > "$askpass"
+          chmod 700 "$askpass"
+          export SSH_ASKPASS="$askpass" SSH_ASKPASS_REQUIRE=force DISPLAY=:0
+          justification_b64=$(printf '%s' "$JUSTIFICATION" | base64 -w0)
+          apply=false
+          [[ "$MODE" == "apply" ]] && apply=true
+          remote="set -e; set -a; . '$DEPLOY_ROOT/shared/.env'; set +a; export N09_APPLY_TEXT_ENCODING_REPAIR=$apply; export N09_ALLOW_TEXT_ENCODING_REPAIR=true; export N09_TEXT_ENCODING_REPAIR_CONFIRMATION='$CONFIRMATION'; export N09_TEXT_ENCODING_REPAIR_OPERATOR_EMAIL=f.travers@nsktech.fr; export N09_TEXT_ENCODING_REPAIR_JUSTIFICATION=\$(printf '%s' '$justification_b64' | base64 -d); cd '$DEPLOY_ROOT/current/service-node'; node text-encoding-repair-cli.mjs"
+          setsid -w ssh -o BatchMode=no -o ConnectTimeout=20 -o NumberOfPasswordPrompts=1 \
+            -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" "$remote" </dev/null
